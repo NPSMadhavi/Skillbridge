@@ -1,0 +1,71 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [pgvector(map: "vector")]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+model User {
+  id                String   @id @default(uuid())
+  fullName          String
+  finNumber         String   @unique
+  preferredLanguage String?
+  email             String   @unique
+  passwordHash      String?
+  country           String?
+  faceImage         String?  // Base64 thumbnail image
+  role              String   @default("STUDENT")
+  faceEmbedding     String?  // Encrypted 512-dim embedding string (Base64 AES payload)
+  status            String   @default("ACTIVE")
+  registeredAt      DateTime @default(now())
+}
+
+model Admin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model CourseProgress {
+  id                 String   @id @default(uuid())
+  userId             String
+  courseId           String
+  progress           Int      @default(0)
+  completed          Boolean  @default(false)
+  completedLessonIds Json?    // Array of completed lesson IDs e.g. [1, 2]
+  startedAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([userId, courseId])
+}
+
+model Course {
+  id           String        @id @default(uuid())
+  title        String
+  description  String        @db.Text
+  fileName     String
+  fileText     String        @db.Text
+  curriculum   Json          // Holds structured modules, lessons and quiz
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  chunks       CourseChunk[]
+}
+
+model CourseChunk {
+  id          String   @id @default(uuid())
+  courseId    String
+  chunkIndex  Int
+  chunkText   String   @db.Text
+  embedding   Unsupported("vector(768)")?
+  createdAt   DateTime @default(now())
+
+  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+}
+

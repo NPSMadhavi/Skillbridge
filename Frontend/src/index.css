@@ -1,0 +1,260 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,200..800;1,200..800&display=swap');
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
+  --font-body: 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
+  --color-ink: #f3f7fc;
+  --color-navy: #0e2f5c;
+  --color-navy-mid: #1f6feb;
+  --color-orange: #f06a00;
+  --color-orange-hot: #ff8a1f;
+  --color-sky: #0284c7;
+  --color-muted: #5b7190;
+  --color-ok: #059669;
+  --color-danger: #e11d48;
+  --color-fg: #0f1b2d;
+  --color-panel: #ffffff;
+  --color-line: #d7e2f0;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    margin: 0;
+    min-height: 100%;
+  }
+
+  body {
+    min-height: 100svh;
+    background: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-body);
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    color-scheme: light;
+  }
+
+  #root {
+    width: 100%;
+    min-height: 100svh;
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes logo-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes float-orb {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  50% {
+    transform: translate(18px, 22px);
+  }
+}
+
+@keyframes grid-drift {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(64px);
+  }
+}
+
+@keyframes ring-pulse {
+  0% {
+    transform: scale(0.92);
+    opacity: 0.85;
+  }
+  70% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+}
+
+@keyframes bracket-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+@keyframes soft-pulse {
+  0%,
+  100% {
+    opacity: 0.75;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes scan-move {
+  0% {
+    top: 28px;
+  }
+  50% {
+    top: calc(100% - 30px);
+  }
+  100% {
+    top: 28px;
+  }
+}
+
+@keyframes sparkle-twinkle {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.9) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15) rotate(12deg);
+  }
+}
+
+@keyframes face-idle-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 140, 33, 0.28);
+  }
+  50% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 12px rgba(255, 140, 33, 0);
+  }
+}
+
+@keyframes face-glow {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-rise-in {
+  animation: rise-in 0.85s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@utility animate-rise-in-delay {
+  animation: rise-in 0.95s 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@utility animate-logo-in {
+  animation: logo-in 1s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@utility animate-float-orb {
+  animation: float-orb 12s ease-in-out infinite;
+}
+
+@utility animate-float-orb-slow {
+  animation: float-orb 15s ease-in-out infinite reverse;
+}
+
+@utility animate-grid-drift {
+  animation: grid-drift 28s linear infinite;
+}
+
+@utility animate-ring-pulse {
+  animation: ring-pulse 1.6s ease-out infinite;
+}
+
+@utility animate-bracket-breathe {
+  animation: bracket-breathe 1.4s ease-in-out infinite;
+}
+
+@utility animate-soft-pulse {
+  animation: soft-pulse 1.4s ease-in-out infinite;
+}
+
+@utility animate-scan-move {
+  animation: scan-move 1.8s ease-in-out infinite;
+}
+
+@utility animate-sparkle-twinkle {
+  animation: sparkle-twinkle 2.2s ease-in-out infinite;
+}
+
+@utility animate-face-idle-pulse {
+  animation: face-idle-pulse 2.4s ease-in-out infinite;
+}
+
+@utility animate-face-glow {
+  animation: face-glow 2.4s ease-in-out infinite;
+}
+
+@utility animate-panel-in {
+  animation: panel-in 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes aria-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@utility animate-aria-float {
+  animation: aria-float 3.5s ease-in-out infinite;
+}
+
+@utility text-glow-orange {
+  text-shadow: 0 0 12px rgba(245, 130, 32, 0.65), 0 0 4px rgba(245, 130, 32, 0.35);
+}
+
+@utility text-glow-blue {
+  text-shadow: 0 0 10px rgba(143, 163, 192, 0.55), 0 0 2px rgba(143, 163, 192, 0.25);
+}
+
+@utility shadow-glow-orange {
+  box-shadow: 0 0 26px rgba(245, 130, 32, 0.45), inset 0 0 14px rgba(245, 130, 32, 0.2);
+}
+

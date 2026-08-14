@@ -1,0 +1,12 @@
+fastapi==0.110.0
+uvicorn==0.28.0
+pydantic==2.6.4
+pydantic-settings==2.2.1
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+cryptography==42.0.5
+facenet-pytorch==2.6.0
+torch
+torchvision
+python-multipart
+faster-whisper

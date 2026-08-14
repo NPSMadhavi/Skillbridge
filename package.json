@@ -1,0 +1,19 @@
+{
+  "name": "skill-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SkillBridge LMS with Full AI Integration",
+  "scripts": {
+    "start": "npm run dev",
+    "dev": "concurrently -n \"BACKEND,FRONTEND,AI-SERVICE\" -c \"blue,green,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:ai\"",
+    "dev:all": "npm run dev",
+    "dev:backend": "npm run dev --prefix Backend",
+    "dev:frontend": "npm run dev --prefix Frontend",
+    "dev:ai": "cd ai-service && .venv\\Scripts\\python.exe main.py",
+    "install:all": "npm install && npm install --prefix Backend && npm install --prefix Frontend",
+    "build": "npm run build --prefix Frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
