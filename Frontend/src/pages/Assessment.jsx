@@ -181,7 +181,7 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
           const passThreshold = 3 // 60% passing mark
           if (score >= passThreshold) {
             if (course?.id) {
-              const allLessonIds = course.lessons ? course.lessons.map(l => l.id) : [1, 2, 3, 4, 5];
+              const allLessonIds = course.lessons ? course.lessons.map(l => String(l.id)) : ['1', '2', '3', '4', '5'];
               try {
                 localStorage.setItem(`skillbridge_progress_${userId}_${course.id}`, JSON.stringify(allLessonIds));
               } catch (e) { }

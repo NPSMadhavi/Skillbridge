@@ -10,10 +10,11 @@ const PythonLogo = ({ className = "h-6 w-6" }) => (
 )
 
 const DonutProgress = ({ percentage = 0 }) => {
+  const cleanPct = Math.min(100, Math.max(0, Math.round(percentage) || 0));
   const radius = 48
   const strokeWidth = 5.5
   const circumference = 2 * Math.PI * radius
-  const strokeDashoffset = circumference - (percentage / 100) * circumference
+  const strokeDashoffset = circumference - (cleanPct / 100) * circumference
 
   return (
     <div className="relative flex items-center justify-center h-36 w-36 flex-shrink-0">
@@ -41,7 +42,7 @@ const DonutProgress = ({ percentage = 0 }) => {
       </svg>
       <div className="absolute flex flex-col items-center justify-center text-center pointer-events-none">
         <span className="font-display font-bold text-lg text-[#1e2e4a] leading-none tracking-tight">
-          {percentage}%
+          {cleanPct}%
         </span>
         <span className="text-[10px] font-normal text-slate-400 mt-0.5">Completed</span>
       </div>
@@ -99,7 +100,7 @@ const getCompletedLessonIdsForCourse = (courseId, userId) => {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          return Array.from(new Set(parsed.filter(id => id !== null && id !== undefined).map(String)));
         }
       }
     } catch (e) { }
@@ -176,16 +177,6 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
       const localCompleted = getCompletedLessonIdsForCourse(c.id, userId);
       if (localCompleted.length > 0) {
         initialMap[c.id] = localCompleted;
-        if (c.id) {
-          const lessonsCount = c.lessons?.length || 5;
-          const calcPct = Math.round((localCompleted.length / lessonsCount) * 100);
-          const isDone = localCompleted.length >= lessonsCount;
-          api.saveCourseProgress(c.id, {
-            completedLessonIds: localCompleted,
-            progress: calcPct,
-            completed: isDone
-          }).catch(() => { });
-        }
       }
     });
     setUserProgressMap(initialMap);
@@ -195,11 +186,16 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
       if (c.id) {
         api.getCourseProgress(c.id)
           .then(res => {
-            if (res.completedLessonIds && Array.isArray(res.completedLessonIds) && res.completedLessonIds.length > 0) {
-              setUserProgressMap(prev => ({
-                ...prev,
-                [c.id]: res.completedLessonIds
-              }));
+            if (res.completedLessonIds && Array.isArray(res.completedLessonIds)) {
+              const uniqueDbLessons = Array.from(new Set(res.completedLessonIds.filter(id => id !== null && id !== undefined).map(String)));
+              setUserProgressMap(prev => {
+                const existing = prev[c.id] || [];
+                const merged = Array.from(new Set([...existing.map(String), ...uniqueDbLessons]));
+                return {
+                  ...prev,
+                  [c.id]: merged
+                };
+              });
             }
           })
           .catch(() => { });
@@ -215,20 +211,46 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
     let inProgressCourses = 0;
 
     allAvailableCourses.forEach(c => {
-      const lessonsCount = c.lessons?.length || 5;
+      const courseLessons = (Array.isArray(c.lessons) && c.lessons.length > 0)
+        ? c.lessons
+        : (Array.isArray(c.curriculum) && c.curriculum.length > 0 ? c.curriculum : []);
+      const lessonsCount = courseLessons.length > 0 ? courseLessons.length : (c.modules || 5);
       totalModules += lessonsCount;
 
-      const completedForCourse = userProgressMap[c.id] || [];
-      completedModulesCount += completedForCourse.length;
+      const rawCompleted = userProgressMap[c.id] || [];
+      const uniqueCompletedIds = new Set(
+        (Array.isArray(rawCompleted) ? rawCompleted : [])
+          .filter(id => id !== null && id !== undefined && String(id).trim() !== '')
+          .map(String)
+      );
 
-      if (completedForCourse.length >= lessonsCount) {
+      let courseDoneCount = 0;
+      if (courseLessons.length > 0) {
+        courseDoneCount = courseLessons.filter(l =>
+          uniqueCompletedIds.has(String(l.id)) ||
+          (l.title && uniqueCompletedIds.has(String(l.title)))
+        ).length;
+        if (courseDoneCount === 0 && uniqueCompletedIds.size > 0) {
+          courseDoneCount = Math.min(uniqueCompletedIds.size, lessonsCount);
+        }
+      } else {
+        courseDoneCount = Math.min(uniqueCompletedIds.size, lessonsCount);
+      }
+
+      // Safeguard: courseDoneCount cannot exceed total lessons for this course
+      courseDoneCount = Math.min(courseDoneCount, lessonsCount);
+      completedModulesCount += courseDoneCount;
+
+      if (courseDoneCount >= lessonsCount && lessonsCount > 0) {
         completedCourses += 1;
-      } else if (completedForCourse.length > 0) {
+      } else if (courseDoneCount > 0) {
         inProgressCourses += 1;
       }
     });
 
-    const overallProgress = totalModules > 0 ? Math.round((completedModulesCount / totalModules) * 100) : 0;
+    const overallProgress = totalModules > 0
+      ? Math.min(100, Math.max(0, Math.round((completedModulesCount / totalModules) * 100)))
+      : 0;
 
     return {
       totalModules,
@@ -264,10 +286,23 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
     return allAvailableCourses[0] || null;
   }, [selectedCourseId, allAvailableCourses, userProgressMap])
 
-  const activeCourseCompletedLessons = userProgressMap[activeCourseObj?.id] || [];
-  const activeCourseTotalLessons = activeCourseObj?.lessons?.length || 5;
+  const activeCourseRaw = userProgressMap[activeCourseObj?.id] || [];
+  const activeCourseLessons = activeCourseObj?.lessons || [];
+  const activeCourseTotalLessons = activeCourseLessons.length > 0
+    ? activeCourseLessons.length
+    : (activeCourseObj?.modules || 5);
+
+  const activeCourseCompletedCount = useMemo(() => {
+    const uniqueIds = new Set(activeCourseRaw.filter(id => id !== null && id !== undefined).map(String));
+    if (activeCourseLessons.length > 0) {
+      const matched = activeCourseLessons.filter(l => uniqueIds.has(String(l.id)) || (l.title && uniqueIds.has(String(l.title)))).length;
+      return matched > 0 ? matched : Math.min(uniqueIds.size, activeCourseTotalLessons);
+    }
+    return Math.min(uniqueIds.size, activeCourseTotalLessons);
+  }, [activeCourseRaw, activeCourseLessons, activeCourseTotalLessons]);
+
   const activeCourseProgressPct = activeCourseTotalLessons > 0
-    ? Math.round((activeCourseCompletedLessons.length / activeCourseTotalLessons) * 100)
+    ? Math.min(100, Math.round((activeCourseCompletedCount / activeCourseTotalLessons) * 100))
     : 0;
 
   const displayCourses = useMemo(() => {
@@ -309,7 +344,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                     {activeCourseObj?.title || 'Full-Stack Web Development'}
                   </h3>
                   <p className="text-[11px] text-blue-100/90 font-medium mt-0.5">
-                    Modules {activeCourseCompletedLessons.length} of {activeCourseTotalLessons}
+                    Modules {activeCourseCompletedCount} of {activeCourseTotalLessons}
                   </p>
                 </div>
 
@@ -330,7 +365,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   onClick={() => onPlayCourse?.(activeCourseObj)}
                   className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-xs font-extrabold text-slate-900 shadow-md hover:bg-slate-100 transition cursor-pointer border-0 w-fit"
                 >
-                  <span className="text-[10px] text-black">▶</span> {activeCourseCompletedLessons.length > 0 ? 'Resume Course' : 'Start Course'}
+                  <span className="text-[10px] text-black">▶</span> {activeCourseCompletedCount > 0 ? 'Resume Course' : 'Start Course'}
                 </button>
               </div>
 

@@ -152,7 +152,9 @@ export const api = {
       headers: getHeaders(false),
       body: JSON.stringify({
         message: chatData.message || chatData.text,
-        lessonTitle: chatData.lessonTitle
+        lessonTitle: chatData.lessonTitle,
+        currentConcept: chatData.currentConcept,
+        language: chatData.language,
       }),
     });
     if (!res.ok) {
@@ -160,7 +162,7 @@ export const api = {
       throw new Error(err.error || 'Failed to send message to AI Tutor.');
     }
     const data = await res.json();
-    return { text: data.reply || data.text };
+    return { text: data.reply || data.text, reply: data.reply || data.text };
   },
 
   updateCourseProgressDetails: async (courseId, details) => {
@@ -274,18 +276,6 @@ export const api = {
     return res.json();
   },
 
-  chatWithTutor: async (id, data) => {
-    const res = await fetch(`${API_BASE_URL}/courses/${id}/chat`, {
-      method: 'POST',
-      headers: getHeaders(false),
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to communicate with AI Tutor.');
-    }
-    return res.json();
-  },
 
   getCourseProgress: async (id) => {
     const res = await fetch(`${API_BASE_URL}/courses/${id}/progress`, {

@@ -112,8 +112,8 @@ export const getUsers = async (req, res) => {
     // Return users list format matching the frontend requirements
     const formatted = users.map(user => {
       const userProgs = allProgress.filter(p => p.userId === user.id || p.userId === user.email || p.userId === user.finNumber);
-      const completedCount = userProgs.filter(p => p.completed).length;
-      const inProgressCount = userProgs.filter(p => !p.completed && p.progress > 0).length;
+      const completedCount = userProgs.filter(p => p.completed || p.progress >= 100).length;
+      const inProgressCount = userProgs.filter(p => !p.completed && p.progress > 0 && p.progress < 100).length;
 
       return {
         id: user.id,
@@ -305,11 +305,17 @@ export const getUserProgress = async (req, res) => {
       );
       let lessonIds = [];
       if (rec?.completedLessonIds) {
-        lessonIds = typeof rec.completedLessonIds === 'string'
-          ? JSON.parse(rec.completedLessonIds)
-          : rec.completedLessonIds;
+        try {
+          const parsed = typeof rec.completedLessonIds === 'string'
+            ? JSON.parse(rec.completedLessonIds)
+            : rec.completedLessonIds;
+          if (Array.isArray(parsed)) {
+            lessonIds = Array.from(new Set(parsed.filter(id => id !== null && id !== undefined).map(String)));
+          }
+        } catch (e) {
+          lessonIds = [];
+        }
       }
-      if (!Array.isArray(lessonIds)) lessonIds = [];
 
       const totalLessons = Array.isArray(c.curriculum?.lessons) && c.curriculum.lessons.length > 0
         ? c.curriculum.lessons.length
@@ -319,9 +325,9 @@ export const getUserProgress = async (req, res) => {
         id: c.id,
         title: c.title,
         description: c.description,
-        progress: rec ? rec.progress : 0,
-        completed: rec ? rec.completed : false,
-        completedCount: lessonIds.length,
+        progress: rec ? Math.min(100, Math.max(0, rec.progress)) : 0,
+        completed: rec ? (rec.completed || rec.progress >= 100) : false,
+        completedCount: Math.min(lessonIds.length, totalLessons),
         totalLessons,
         updatedAt: rec?.updatedAt || null
       };
@@ -332,11 +338,17 @@ export const getUserProgress = async (req, res) => {
       if (!coursesList.some(cp => String(cp.id).toLowerCase() === String(rec.courseId).toLowerCase() || String(cp.title).toLowerCase() === String(rec.courseId).toLowerCase())) {
         let lessonIds = [];
         if (rec.completedLessonIds) {
-          lessonIds = typeof rec.completedLessonIds === 'string'
-            ? JSON.parse(rec.completedLessonIds)
-            : rec.completedLessonIds;
+          try {
+            const parsed = typeof rec.completedLessonIds === 'string'
+              ? JSON.parse(rec.completedLessonIds)
+              : rec.completedLessonIds;
+            if (Array.isArray(parsed)) {
+              lessonIds = Array.from(new Set(parsed.filter(id => id !== null && id !== undefined).map(String)));
+            }
+          } catch (e) {
+            lessonIds = [];
+          }
         }
-        if (!Array.isArray(lessonIds)) lessonIds = [];
 
         const formattedTitle = COURSE_TITLES_MAP[rec.courseId] || (rec.courseId.charAt(0).toUpperCase() + rec.courseId.slice(1).replace(/-/g, ' '));
 
@@ -344,9 +356,9 @@ export const getUserProgress = async (req, res) => {
           id: rec.courseId,
           title: formattedTitle,
           description: 'Course Progress Record',
-          progress: rec.progress,
-          completed: rec.completed,
-          completedCount: lessonIds.length,
+          progress: Math.min(100, Math.max(0, rec.progress)),
+          completed: rec.completed || rec.progress >= 100,
+          completedCount: Math.min(lessonIds.length, 5),
           totalLessons: 5,
           updatedAt: rec.updatedAt
         });

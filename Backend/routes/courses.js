@@ -332,10 +332,13 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
     }
     if (!Array.isArray(lessonIds)) lessonIds = [];
 
+    // Deduplicate and normalize to strings
+    const uniqueLessonIds = Array.from(new Set(lessonIds.filter(id => id !== null && id !== undefined).map(String)));
+
     res.json({
-      progress: progressRecord.progress,
+      progress: Math.min(100, Math.max(0, progressRecord.progress || 0)),
       completed: progressRecord.completed,
-      completedLessonIds: lessonIds
+      completedLessonIds: uniqueLessonIds
     });
   } catch (error) {
     console.error('Failed to fetch course progress:', error);
@@ -354,23 +357,51 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
       where: { userId, courseId }
     });
 
-    let currentCompleted = existing?.completedLessonIds
-      ? (typeof existing.completedLessonIds === 'string' ? JSON.parse(existing.completedLessonIds) : existing.completedLessonIds)
-      : [];
-    if (!Array.isArray(currentCompleted)) currentCompleted = [];
+    let currentCompleted = [];
+    if (existing?.completedLessonIds) {
+      try {
+        const parsed = typeof existing.completedLessonIds === 'string'
+          ? JSON.parse(existing.completedLessonIds)
+          : existing.completedLessonIds;
+        if (Array.isArray(parsed)) {
+          currentCompleted = parsed.filter(id => id !== null && id !== undefined).map(String);
+        }
+      } catch (e) {
+        currentCompleted = [];
+      }
+    }
 
-    if (completedLessonId !== undefined && completedLessonId !== null && !currentCompleted.includes(completedLessonId)) {
-      currentCompleted.push(completedLessonId);
+    const completedSet = new Set(currentCompleted);
+    if (completedLessonId !== undefined && completedLessonId !== null) {
+      completedSet.add(String(completedLessonId));
     }
     if (Array.isArray(completedLessonIds)) {
       completedLessonIds.forEach(id => {
-        if (!currentCompleted.includes(id)) currentCompleted.push(id);
+        if (id !== null && id !== undefined) {
+          completedSet.add(String(id));
+        }
       });
     }
 
-    const calcProgress = progress !== undefined ? progress : Math.round((currentCompleted.length / 5) * 100);
-    const isCompleted = completed !== undefined ? completed : currentCompleted.length >= 5;
-    const jsonCompleted = JSON.stringify(currentCompleted);
+    const finalCompleted = Array.from(completedSet);
+
+    // Get total lessons count for this course to calculate accurate progress
+    let totalLessons = 5;
+    try {
+      const courseRecord = await prisma.course.findUnique({ where: { id: courseId } });
+      if (courseRecord && courseRecord.curriculum) {
+        const curr = typeof courseRecord.curriculum === 'string' ? JSON.parse(courseRecord.curriculum) : courseRecord.curriculum;
+        if (Array.isArray(curr.lessons) && curr.lessons.length > 0) {
+          totalLessons = curr.lessons.length;
+        } else if (Array.isArray(curr.curriculum) && curr.curriculum.length > 0) {
+          totalLessons = curr.curriculum.length;
+        }
+      }
+    } catch (e) { }
+
+    const calcProgress = Math.min(100, Math.max(0, progress !== undefined ? progress : Math.round((finalCompleted.length / totalLessons) * 100)));
+    const isCompleted = completed !== undefined ? completed : (calcProgress >= 100 || finalCompleted.length >= totalLessons);
+    const jsonCompleted = JSON.stringify(finalCompleted);
 
     let record;
     if (existing) {
@@ -398,7 +429,7 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
       message: 'Course progress saved successfully.',
       progress: record.progress,
       completed: record.completed,
-      completedLessonIds: currentCompleted
+      completedLessonIds: finalCompleted
     });
   } catch (error) {
     console.error('Failed to save course progress:', error);
@@ -417,7 +448,7 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Course not found.' });
     }
 
-    const { message, lessonTitle, language } = req.body;
+    const { message, lessonTitle, currentConcept, language } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'Message is required.' });
     }
@@ -433,7 +464,7 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
     };
 
     const targetLanguage = resolveLanguageName(language || req.user?.preferredLanguage);
-    console.log(`[RAG Chat Query] Target Language: "${targetLanguage}", Query: "${message}" (Course ID: ${course.id})`);
+    console.log(`[RAG Chat Query] Target Language: "${targetLanguage}", Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
 
     // Retrieve semantic context matching student query from PostgreSQL pgvector
     let chunks = [];
@@ -454,16 +485,17 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
 
     const systemPrompt = `You are ARIA, the intelligent AI Tutor for SkillBridge.
 The student is taking the course: "${course.title}" (Active Lesson: "${lessonTitle || 'Overview'}").
+${currentConcept ? `The student is currently listening to this lecture concept: "${currentConcept}".` : ''}
 Target Language: ${targetLanguage}.
 
 TEACHING & RESPONSE GUIDELINES:
 1. Provide clear, helpful, educational, and conversational answers in ${targetLanguage}.
-2. Use the provided document context to give tailored, accurate answers grounded in the uploaded course materials.
+2. Use the provided document context and current lesson concept to give tailored, accurate answers grounded in the uploaded course materials.
 3. If the student asks a general question, historical question, or topic that extends beyond the document context, use your full expert AI knowledge to answer comprehensively in ${targetLanguage}!
 4. Multilingual Tutoring: You fluently support English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), and Bangla (বাংলা). Always respond in ${targetLanguage}!
 5. NEVER refuse to answer or output disclaimer templates.`;
 
-    const userPrompt = `Document context:\n${contextText}\n\nStudent question: ${message}`;
+    const userPrompt = `${currentConcept ? `Current Lecture Concept Being Taught:\n${currentConcept}\n\n` : ''}Document context:\n${contextText}\n\nStudent question: ${message}`;
 
     console.log(`[LLM Chat Prompt] Final System Prompt:`);
     console.log(`--------------------------------------------------`);
