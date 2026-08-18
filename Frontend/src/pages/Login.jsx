@@ -133,11 +133,6 @@ const Login = ({ onSuccess }) => {
     event.preventDefault()
     setMessage(null)
 
-    if (!email.trim() || !password) {
-      setMessage({ type: 'error', text: 'Enter your email and password to continue.' })
-      return
-    }
-
     setLoading(true)
     try {
       const res = await api.studentLogin(email.trim(), password)

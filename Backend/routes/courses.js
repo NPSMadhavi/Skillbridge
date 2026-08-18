@@ -170,36 +170,92 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
   }
 });
 
-// 2. Get all published RAG courses (students list + admin view)
+// Helper to verify student course assignment access
+const checkCourseAccess = async (req, courseId) => {
+  if (req.user?.role === 'ADMIN') return true;
+  const userId = req.user?.id || req.user?.userId;
+  if (!userId) return false;
+
+  const assignment = await prisma.userCourseAssignment.findUnique({
+    where: {
+      userId_courseId: {
+        userId,
+        courseId,
+      },
+    },
+  });
+  return Boolean(assignment);
+};
+
+// 2. Get published RAG courses (Admin gets all with counts; Students get ONLY assigned courses)
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const courses = await prisma.course.findMany({
-      orderBy: { createdAt: 'desc' }
+    if (req.user?.role === 'ADMIN') {
+      const courses = await prisma.course.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+          _count: {
+            select: { assignments: true },
+          },
+        },
+      });
+      const formatted = courses.map((c) => ({
+        ...c,
+        assignedUsersCount: c._count?.assignments || 0,
+      }));
+      return res.json(formatted);
+    }
+
+    // For STUDENT role: return ONLY assigned courses
+    const userId = req.user?.id || req.user?.userId;
+    const assignments = await prisma.userCourseAssignment.findMany({
+      where: { userId },
+      select: { courseId: true },
     });
-    res.json(courses);
+    const assignedIds = assignments.map((a) => a.courseId);
+
+    const courses = await prisma.course.findMany({
+      where: { id: { in: assignedIds } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return res.json(courses);
   } catch (error) {
     console.error('Failed to retrieve RAG courses:', error);
     res.status(500).json({ error: 'Failed to retrieve courses catalog.' });
   }
 });
 
-// 3. Get specific course details
+// 3. Get specific course details (verifying assignment for students)
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const course = await prisma.course.findUnique({
-      where: { id: req.params.id }
+      where: { id: req.params.id },
+      include: {
+        _count: {
+          select: { assignments: true },
+        },
+      },
     });
 
     if (!course) {
       return res.status(404).json({ error: 'Course not found.' });
     }
 
-    res.json(course);
+    const hasAccess = await checkCourseAccess(req, course.id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
+    }
+
+    res.json({
+      ...course,
+      assignedUsersCount: course._count?.assignments || 0,
+    });
   } catch (error) {
     console.error('Failed to retrieve course details:', error);
     res.status(500).json({ error: 'Failed to retrieve course details.' });
   }
 });
+
 
 // 4. Generate AI concept explanation for a specific lesson/chapter using RAG Vector DB
 router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res) => {
@@ -210,6 +266,11 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
 
     if (!course) {
       return res.status(404).json({ error: 'Course not found.' });
+    }
+
+    const hasAccess = await checkCourseAccess(req, course.id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
     }
 
     const { lessonTitle, language } = req.body;
@@ -268,6 +329,11 @@ router.post('/:id/lessons/:lessonId/quiz', authenticateToken, async (req, res) =
       return res.status(404).json({ error: 'Course not found.' });
     }
 
+    const hasAccess = await checkCourseAccess(req, course.id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
+    }
+
     const { lessonTitle, language } = req.body;
     if (!lessonTitle) {
       return res.status(400).json({ error: 'Lesson title is required.' });
@@ -314,6 +380,11 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
     const userId = req.user.id || req.user.userId;
     const courseId = req.params.id;
 
+    const hasAccess = await checkCourseAccess(req, courseId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
+    }
+
     const progressRecord = await prisma.courseProgress.findFirst({
       where: { userId, courseId }
     });
@@ -351,6 +422,12 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user.userId;
     const courseId = req.params.id;
+
+    const hasAccess = await checkCourseAccess(req, courseId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
+    }
+
     const { completedLessonId, completedLessonIds, progress, completed } = req.body;
 
     const existing = await prisma.courseProgress.findFirst({
@@ -448,10 +525,16 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Course not found.' });
     }
 
+    const hasAccess = await checkCourseAccess(req, course.id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
+    }
+
     const { message, lessonTitle, currentConcept, language } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'Message is required.' });
     }
+
 
     const resolveLanguageName = (lang) => {
       if (!lang) return 'English';

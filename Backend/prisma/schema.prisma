@@ -10,18 +10,19 @@ generator client {
 }
 
 model User {
-  id                String   @id @default(uuid())
+  id                String                 @id @default(uuid())
   fullName          String
-  finNumber         String   @unique
+  finNumber         String                 @unique
   preferredLanguage String?
-  email             String   @unique
+  email             String                 @unique
   passwordHash      String?
   country           String?
-  faceImage         String?  // Base64 thumbnail image
-  role              String   @default("STUDENT")
-  faceEmbedding     String?  // Encrypted 512-dim embedding string (Base64 AES payload)
-  status            String   @default("ACTIVE")
-  registeredAt      DateTime @default(now())
+  faceImage         String?                // Base64 thumbnail image
+  role              String                 @default("STUDENT")
+  faceEmbedding     String?                // Encrypted 512-dim embedding string (Base64 AES payload)
+  status            String                 @default("ACTIVE")
+  registeredAt      DateTime               @default(now())
+  assignments       UserCourseAssignment[]
 }
 
 model Admin {
@@ -45,15 +46,16 @@ model CourseProgress {
 }
 
 model Course {
-  id           String        @id @default(uuid())
+  id           String                 @id @default(uuid())
   title        String
-  description  String        @db.Text
+  description  String                 @db.Text
   fileName     String
-  fileText     String        @db.Text
-  curriculum   Json          // Holds structured modules, lessons and quiz
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  fileText     String                 @db.Text
+  curriculum   Json                   // Holds structured modules, lessons and quiz
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
   chunks       CourseChunk[]
+  assignments  UserCourseAssignment[]
 }
 
 model CourseChunk {
@@ -66,6 +68,20 @@ model CourseChunk {
 
   course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
+  @@index([courseId])
+}
+
+model UserCourseAssignment {
+  id         String   @id @default(uuid())
+  userId     String
+  courseId   String
+  assignedAt DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course     Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+  @@index([userId])
   @@index([courseId])
 }
 

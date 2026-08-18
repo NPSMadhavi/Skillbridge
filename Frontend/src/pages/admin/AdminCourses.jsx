@@ -6,6 +6,13 @@ const AdminCourses = () => {
   const [coursesList, setCoursesList] = useState([])
   const [loading, setLoading] = useState(true)
   
+  // Users and assignment modal state
+  const [allUsers, setAllUsers] = useState([])
+  const [assignModalCourse, setAssignModalCourse] = useState(null)
+  const [assignedUserSelection, setAssignedUserSelection] = useState([])
+  const [savingLearners, setSavingLearners] = useState(false)
+  const [loadingCourseUsers, setLoadingCourseUsers] = useState(false)
+
   // Creation modal state
   const [showModal, setShowModal] = useState(false)
   const [createMode, setCreateMode] = useState('pdf') // 'pdf' | 'manual'
@@ -33,8 +40,12 @@ const AdminCourses = () => {
   const fetchCourses = async () => {
     try {
       setLoading(true)
-      const data = await api.getCourses()
-      setCoursesList(data || [])
+      const [coursesData, usersData] = await Promise.all([
+        api.getCourses(),
+        api.getUsers().catch(() => []),
+      ])
+      setCoursesList(coursesData || [])
+      setAllUsers(usersData || [])
     } catch (err) {
       console.error('Failed to load courses:', err)
     } finally {
@@ -45,6 +56,48 @@ const AdminCourses = () => {
   useEffect(() => {
     fetchCourses()
   }, [])
+
+  const handleOpenAssignLearners = async (course) => {
+    setAssignModalCourse(course)
+    setLoadingCourseUsers(true)
+    try {
+      const res = await api.getCourseAssignments(course.id)
+      const assignedIds = (res.assignedUsers || []).map((u) => u.id)
+      setAssignedUserSelection(assignedIds)
+    } catch (err) {
+      console.error('Failed to fetch course assignments:', err)
+      // Fallback: match from allUsers
+      const matched = allUsers
+        .filter((u) => (u.assignedCourseIds || []).includes(course.id))
+        .map((u) => u.id)
+      setAssignedUserSelection(matched)
+    } finally {
+      setLoadingCourseUsers(false)
+    }
+  }
+
+  const toggleUserSelection = (userId) => {
+    setAssignedUserSelection((prev) =>
+      prev.includes(userId)
+        ? prev.filter((id) => id !== userId)
+        : [...prev, userId]
+    )
+  }
+
+  const handleSaveCourseLearners = async () => {
+    if (!assignModalCourse) return
+    setSavingLearners(true)
+    try {
+      await api.assignCourseUsers(assignModalCourse.id, assignedUserSelection)
+      setAssignModalCourse(null)
+      fetchCourses()
+    } catch (err) {
+      alert(err.message || 'Failed to save course assignments.')
+    } finally {
+      setSavingLearners(false)
+    }
+  }
+
 
   const handleFileChange = (e) => {
     const file = e.target.files[0]
@@ -225,6 +278,7 @@ const AdminCourses = () => {
               : (course.curriculum || {})
             const lessons = curriculumData.lessons || []
             const lessonCount = lessons.length || (curriculumData.curriculum?.length ? curriculumData.curriculum.length * 4 : 5)
+            const assignedCount = course.assignedUsersCount || 0
 
             return (
               <article
@@ -232,9 +286,14 @@ const AdminCourses = () => {
                 className="flex flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-sm transition hover:shadow-md"
               >
                 <div className="h-32 bg-gradient-to-br from-navy to-sky relative p-5 flex flex-col justify-end text-white">
-                  <span className="absolute top-4 right-4 rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
-                    {lessonCount} Lessons
-                  </span>
+                  <div className="absolute top-4 right-4 flex items-center gap-1.5">
+                    <span className="rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
+                      {lessonCount} Lessons
+                    </span>
+                    <span className="rounded-full bg-orange/90 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
+                      👥 {assignedCount}
+                    </span>
+                  </div>
                   <span className="absolute top-4 left-4 rounded-full bg-orange/80 backdrop-blur-md px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider">
                     {course.fileName === 'Manual Entry' ? 'Manual' : 'RAG PDF'}
                   </span>
@@ -245,10 +304,18 @@ const AdminCourses = () => {
                     {course.description}
                   </p>
                   <div className="mt-4 border-t border-line pt-4 flex items-center justify-between text-xs">
-                    <span className="text-muted truncate max-w-[130px]" title={course.fileName}>
+                    <span className="text-muted truncate max-w-[110px]" title={course.fileName}>
                       📄 {course.fileName}
                     </span>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenAssignLearners(course)}
+                        className="cursor-pointer rounded-lg bg-orange/10 text-orange hover:bg-orange/20 px-2.5 py-1 text-xs font-semibold border border-orange/30 transition"
+                        title="Assign learners to this course"
+                      >
+                        Assign
+                      </button>
                       <button
                         type="button"
                         onClick={() => setViewingCourse(course)}
@@ -281,6 +348,7 @@ const AdminCourses = () => {
           })}
         </div>
       )}
+
 
       {/* Creation Modal */}
       {showModal && createPortal(
@@ -585,8 +653,155 @@ const AdminCourses = () => {
         </div>,
         document.body
       )}
+
+      {/* Assign Learners Modal */}
+      {assignModalCourse && createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assign-learners-modal-title"
+        >
+          <div className="relative w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in max-h-[85vh] flex flex-col justify-between overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-line pb-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-orange/10 border border-orange/20 text-orange grid place-items-center font-bold text-lg">
+                  👥
+                </div>
+                <div>
+                  <h2 id="assign-learners-modal-title" className="font-display text-lg sm:text-xl font-semibold text-fg">
+                    Assign Learners
+                  </h2>
+                  <p className="text-xs text-muted truncate max-w-xs sm:max-w-sm">
+                    {assignModalCourse.title}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAssignModalCourse(null)}
+                className="grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-line bg-ink text-muted hover:text-fg transition"
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Quick action bar */}
+            <div className="flex items-center justify-between py-2 border-b border-line/40 shrink-0 text-xs">
+              <span className="text-muted font-medium">
+                {assignedUserSelection.length} of {allUsers.length} learner{allUsers.length === 1 ? '' : 's'} assigned
+              </span>
+              {allUsers.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssignedUserSelection(allUsers.map((u) => u.id))}
+                    className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-semibold"
+                  >
+                    Select all
+                  </button>
+                  <span className="text-muted">•</span>
+                  <button
+                    type="button"
+                    onClick={() => setAssignedUserSelection([])}
+                    className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Learners Checklist */}
+            <div className="flex-1 min-h-0 overflow-y-auto my-3 space-y-2 pr-1">
+              {loadingCourseUsers ? (
+                <div className="py-10 text-center text-xs text-muted">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-sky border-t-transparent mx-auto mb-2" />
+                  Loading assigned learners...
+                </div>
+              ) : allUsers.length === 0 ? (
+                <div className="py-10 text-center text-xs text-muted">
+                  No learners registered in the system yet.
+                </div>
+              ) : (
+                allUsers.map((u) => {
+                  const isChecked = assignedUserSelection.includes(u.id);
+                  return (
+                    <div
+                      key={u.id}
+                      onClick={() => toggleUserSelection(u.id)}
+                      className={`flex items-center gap-3 p-3 rounded-2xl border transition cursor-pointer select-none ${
+                        isChecked
+                          ? 'border-sky/60 bg-sky/5 shadow-sm'
+                          : 'border-line bg-ink/40 hover:border-line/90'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {}}
+                        className="h-4 w-4 rounded text-sky focus:ring-sky/40 border-line"
+                      />
+                      {u.faceIdData && u.faceIdData.startsWith('data:image/') ? (
+                        <img src={u.faceIdData} alt="" className="h-9 w-9 rounded-xl object-cover shrink-0" />
+                      ) : (
+                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-ink font-semibold text-muted text-xs">
+                          {u.fullName.slice(0, 1)}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`text-xs font-semibold truncate ${isChecked ? 'text-sky' : 'text-fg'}`}>
+                            {u.fullName}
+                          </p>
+                          <span className="text-[10px] text-muted shrink-0">
+                            {u.finNumber}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-muted truncate">
+                          {u.email} • {u.country || 'Region'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-line flex items-center justify-between shrink-0">
+              <span className="text-[11px] text-muted">
+                {assignedUserSelection.length === 0
+                  ? '⚠️ No learners assigned to this course'
+                  : `${assignedUserSelection.length} learner(s) can play this course`}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAssignModalCourse(null)}
+                  className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-xs font-semibold text-fg hover:border-sky/40 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingLearners}
+                  onClick={handleSaveCourseLearners}
+                  className="cursor-pointer rounded-xl border-0 bg-orange px-5 py-2.5 text-xs font-bold text-white shadow-md hover:brightness-105 transition disabled:opacity-60"
+                >
+                  {savingLearners ? 'Saving...' : 'Save Learners'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
 
 export default AdminCourses
+

@@ -17,11 +17,6 @@ const AdminLogin = () => {
     event.preventDefault()
     setError('')
 
-    if (!email.trim() || !password) {
-      setError('Enter admin email and password to continue.')
-      return
-    }
-
     setLoading(true)
     try {
       const data = await api.adminLogin(email.trim(), password)

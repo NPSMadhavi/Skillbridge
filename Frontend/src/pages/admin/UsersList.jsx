@@ -18,12 +18,63 @@ const UsersList = () => {
   const [query, setQuery] = useState('')
   const [selectedUser, setSelectedUser] = useState(null)
   const [editingUser, setEditingUser] = useState(null)
-  const [editForm, setEditForm] = useState({ fullName: '', finNumber: '', email: '', preferLanguage: 'en', country: '', password: '' })
+  const [editForm, setEditForm] = useState({
+    fullName: '',
+    finNumber: '',
+    email: '',
+    preferLanguage: 'en',
+    country: '',
+    password: '',
+    assignedCourseIds: []
+  })
   const [editErrors, setEditErrors] = useState({})
   const [updating, setUpdating] = useState(false)
   const [progressUser, setProgressUser] = useState(null)
   const [userProgressData, setUserProgressData] = useState(null)
   const [loadingProgress, setLoadingProgress] = useState(false)
+
+  // Course assignment state
+  const [allCourses, setAllCourses] = useState([])
+  const [assignModalUser, setAssignModalUser] = useState(null)
+  const [assignedCourseSelection, setAssignedCourseSelection] = useState([])
+  const [savingAssignments, setSavingAssignments] = useState(false)
+
+  const handleOpenAssign = (user) => {
+    setAssignModalUser(user)
+    setAssignedCourseSelection(user.assignedCourseIds || [])
+  }
+
+  const toggleCourseSelection = (courseId) => {
+    setAssignedCourseSelection((prev) =>
+      prev.includes(courseId)
+        ? prev.filter((id) => id !== courseId)
+        : [...prev, courseId]
+    )
+  }
+
+  const handleSaveAssignments = async () => {
+    if (!assignModalUser) return
+    setSavingAssignments(true)
+    try {
+      const res = await api.assignUserCourses(assignModalUser.id, assignedCourseSelection)
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === assignModalUser.id
+            ? {
+                ...u,
+                assignedCourseIds: res.assignedCourseIds,
+                assignedCourses: res.assignedCourses,
+              }
+            : u
+        )
+      )
+      setAssignModalUser(null)
+    } catch (err) {
+      alert(err.message || 'Failed to save course assignments.')
+    } finally {
+      setSavingAssignments(false)
+    }
+  }
 
   const handleOpenProgress = async (user) => {
     setProgressUser(user)
@@ -123,6 +174,7 @@ const UsersList = () => {
       country: user.country,
       password: '',
       faceIdData: user.faceIdData || '',
+      assignedCourseIds: user.assignedCourseIds || [],
     })
     setEditErrors({})
   }
@@ -133,7 +185,11 @@ const UsersList = () => {
 
     const errors = {}
     if (!editForm.fullName.trim()) errors.fullName = 'Full name is required.'
-    if (!editForm.finNumber.trim()) errors.finNumber = 'FIN is required.'
+    if (!editForm.finNumber.trim()) {
+      errors.finNumber = 'FIN is required.'
+    } else if (!/^[STFGMstfgm]\d{7}[A-Za-z]$/.test(editForm.finNumber.trim())) {
+      errors.finNumber = 'FIN must be 9 characters (e.g. S1234567A).'
+    }
     if (!editForm.email.trim()) errors.email = 'Email is required.'
     if (!editForm.country.trim()) errors.country = 'Country is required.'
 
@@ -150,6 +206,7 @@ const UsersList = () => {
         preferLanguage: editForm.preferLanguage,
         email: editForm.email.trim().toLowerCase(),
         country: editForm.country.trim(),
+        assignedCourseIds: editForm.assignedCourseIds,
       }
       if (editForm.password) {
         payload.password = editForm.password
@@ -171,18 +228,23 @@ const UsersList = () => {
   }
 
   useEffect(() => {
-    const fetchUsers = async () => {
+    const fetchData = async () => {
       try {
-        const data = await api.getUsers()
-        setUsers(data)
+        const [usersData, coursesData] = await Promise.all([
+          api.getUsers(),
+          api.getCourses().catch(() => []),
+        ])
+        setUsers(usersData || [])
+        setAllCourses(coursesData || [])
       } catch (err) {
         setError(err.message || 'Failed to load users.')
       } finally {
         setLoading(false)
       }
     }
-    fetchUsers()
+    fetchData()
   }, [])
+
 
   const filtered = useMemo(() => {
     return users.filter((user) => {
@@ -249,122 +311,153 @@ const UsersList = () => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[960px] text-left text-sm">
+            <table className="w-full min-w-[1020px] text-left text-sm">
               <thead className="bg-ink/70">
                 <tr className="border-b border-line text-xs tracking-[0.08em] text-muted uppercase">
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[240px]">User</th>
-                  <th className="px-4 py-3 font-semibold min-w-[130px]">FIN</th>
-                  <th className="px-4 py-3 font-semibold min-w-[110px]">Language</th>
-                  <th className="px-4 py-3 font-semibold min-w-[120px]">Country</th>
+                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[220px]">User</th>
+                  <th className="px-4 py-3 font-semibold min-w-[120px]">FIN</th>
+                  <th className="px-4 py-3 font-semibold min-w-[100px]">Language</th>
+                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[160px] whitespace-nowrap">Assigned Courses</th>
                   <th className="px-4 py-3 font-semibold min-w-[100px]">Status</th>
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[110px]">Face ID</th>
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[170px] whitespace-nowrap">Course Progress</th>
-                  <th className="px-4 py-3 font-semibold text-right sm:px-5 min-w-[130px] whitespace-nowrap">Actions</th>
+                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[100px]">Face ID</th>
+                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[160px] whitespace-nowrap">Course Progress</th>
+                  <th className="px-4 py-3 font-semibold text-right sm:px-5 min-w-[150px] whitespace-nowrap">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((user) => (
-                  <tr key={user.id} className="border-b border-line/70 last:border-0 hover:bg-ink/40">
-                    <td className="px-4 py-4 sm:px-5 min-w-[240px]">
-                      <div className="flex items-center gap-3">
-                        {user.faceIdData && user.faceIdData.startsWith('data:image/') ? (
-                          <img src={user.faceIdData} alt="" className="h-11 w-11 rounded-xl object-cover shrink-0" />
-                        ) : (
-                          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-ink font-semibold text-muted">
-                            {user.fullName.slice(0, 1)}
-                          </span>
-                        )}
-                        <div className="min-w-0">
-                          <p className="font-semibold text-fg truncate">{user.fullName}</p>
-                          <p className="text-xs text-muted truncate">{user.email}</p>
+                {filtered.map((user) => {
+                  const assignedCount = user.assignedCourseIds?.length || user.assignedCourses?.length || 0;
+                  return (
+                    <tr key={user.id} className="border-b border-line/70 last:border-0 hover:bg-ink/40">
+                      <td className="px-4 py-4 sm:px-5 min-w-[220px]">
+                        <div className="flex items-center gap-3">
+                          {user.faceIdData && user.faceIdData.startsWith('data:image/') ? (
+                            <img src={user.faceIdData} alt="" className="h-11 w-11 rounded-xl object-cover shrink-0" />
+                          ) : (
+                            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-ink font-semibold text-muted">
+                              {user.fullName.slice(0, 1)}
+                            </span>
+                          )}
+                          <div className="min-w-0">
+                            <p className="font-semibold text-fg truncate">{user.fullName}</p>
+                            <p className="text-xs text-muted truncate">{user.email}</p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-4 font-medium text-fg whitespace-nowrap">{user.finNumber}</td>
-                    <td className="px-4 py-4 text-muted uppercase whitespace-nowrap">{user.preferLanguage}</td>
-                    <td className="px-4 py-4 text-muted whitespace-nowrap">{user.country}</td>
-                    <td className="px-4 py-4 whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => handleToggleStatus(user.id)}
-                        className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-[0.68rem] font-bold uppercase transition hover:brightness-105 cursor-pointer ${
-                          user.status === 'ACTIVE'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                        }`}
-                        title="Click to toggle status"
-                      >
-                        {user.status === 'ACTIVE' ? 'Active' : 'Inactive'}
-                      </button>
-                    </td>
-                    <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-[0.7rem] font-bold uppercase ${
-                          user.faceIdData ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'
-                        }`}
-                      >
-                        {user.faceIdData ? 'Enrolled' : 'Missing'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenProgress(user)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-ink px-2.5 py-1 text-xs font-semibold text-sky hover:border-sky/40 transition cursor-pointer"
-                        title="View course progress"
-                      >
-                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 012-2h2a2 2 0 012 2v6m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14" />
-                        </svg>
-                        <span>
-                          {user.progressSummary && user.progressSummary.completedCourses > 0
-                            ? `✓ ${user.progressSummary.completedCourses} Completed`
-                            : user.progressSummary && user.progressSummary.inProgressCourses > 0
-                            ? `⚙ ${user.progressSummary.inProgressCourses} In Progress`
-                            : 'View Progress'}
+                      </td>
+                      <td className="px-4 py-4 font-medium text-fg whitespace-nowrap">{user.finNumber}</td>
+                      <td className="px-4 py-4 text-muted uppercase whitespace-nowrap">{user.preferLanguage}</td>
+                      
+                      {/* Assigned Courses Column */}
+                      <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAssign(user)}
+                          className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-semibold transition cursor-pointer ${
+                            assignedCount > 0
+                              ? 'border-sky/30 bg-sky/10 text-sky hover:bg-sky/20'
+                              : 'border-dashed border-orange/40 bg-orange/5 text-orange hover:bg-orange/10'
+                          }`}
+                          title="Click to assign or manage courses for this learner"
+                        >
+                          <span>📚</span>
+                          <span>{assignedCount > 0 ? `${assignedCount} Assigned` : '+ Assign'}</span>
+                        </button>
+                      </td>
+
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(user.id)}
+                          className={`inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-[0.68rem] font-bold uppercase transition hover:brightness-105 cursor-pointer ${
+                            user.status === 'ACTIVE'
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                              : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                          }`}
+                          title="Click to toggle status"
+                        >
+                          {user.status === 'ACTIVE' ? 'Active' : 'Inactive'}
+                        </button>
+                      </td>
+                      <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[0.7rem] font-bold uppercase ${
+                            user.faceIdData ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'
+                          }`}
+                        >
+                          {user.faceIdData ? 'Enrolled' : 'Missing'}
                         </span>
-                      </button>
-                    </td>
-                    <td className="px-4 py-4 text-right sm:px-5 whitespace-nowrap">
-                      <div className="inline-flex items-center justify-end gap-1.5">
+                      </td>
+                      <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => handleOpenProgress(user)}
-                          className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-sky hover:bg-sky/10 hover:border-sky/40 transition"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-ink px-2.5 py-1 text-xs font-semibold text-sky hover:border-sky/40 transition cursor-pointer"
                           title="View course progress"
                         >
-                          <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 012-2h2a2 2 0 012 2v6m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14" />
                           </svg>
+                          <span>
+                            {user.progressSummary && user.progressSummary.completedCourses > 0
+                              ? `✓ ${user.progressSummary.completedCourses} Done`
+                              : user.progressSummary && user.progressSummary.inProgressCourses > 0
+                              ? `⚙ ${user.progressSummary.inProgressCourses} Active`
+                              : 'Progress'}
+                          </span>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedUser(user)}
-                          className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-muted hover:border-sky/40 hover:text-sky transition"
-                          title="View details"
-                        >
-                          <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                            <circle cx="12" cy="12" r="3" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => startEdit(user)}
-                          className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-muted hover:border-sky/40 hover:text-sky transition"
-                          title="Edit user"
-                        >
-                          <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                            <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                          </svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-4 py-4 text-right sm:px-5 whitespace-nowrap">
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenAssign(user)}
+                            className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-orange hover:bg-orange/10 hover:border-orange/40 transition"
+                            title="Assign Courses"
+                          >
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenProgress(user)}
+                            className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-sky hover:bg-sky/10 hover:border-sky/40 transition"
+                            title="View course progress"
+                          >
+                            <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedUser(user)}
+                            className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-muted hover:border-sky/40 hover:text-sky transition"
+                            title="View details"
+                          >
+                            <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                              <circle cx="12" cy="12" r="3" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => startEdit(user)}
+                            className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-muted hover:border-sky/40 hover:text-sky transition"
+                            title="Edit user"
+                          >
+                            <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+
           </div>
         )}
       </section>
@@ -429,6 +522,39 @@ const UsersList = () => {
                     </span>
                   </p>
                 </div>
+                <div className="col-span-2 border-t border-line/40 pt-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-[0.7rem] font-semibold tracking-wider text-muted uppercase">
+                      Assigned Courses ({selectedUser.assignedCourses?.length || 0})
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const u = selectedUser;
+                        setSelectedUser(null);
+                        handleOpenAssign(u);
+                      }}
+                      className="text-xs text-sky hover:underline cursor-pointer border-0 bg-transparent font-medium"
+                    >
+                      Manage Assignments
+                    </button>
+                  </div>
+                  {selectedUser.assignedCourses && selectedUser.assignedCourses.length > 0 ? (
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {selectedUser.assignedCourses.map((c) => (
+                        <span
+                          key={c.id}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-sky/10 text-sky border border-sky/20"
+                        >
+                          <span>📚</span>
+                          <span>{c.title}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted italic">No courses assigned to this user yet.</p>
+                  )}
+                </div>
                 <div className="col-span-2">
                   <p className="text-[0.7rem] font-semibold tracking-wider text-muted uppercase">Registered At</p>
                   <p className="mt-0.5 font-semibold text-fg">
@@ -459,7 +585,7 @@ const UsersList = () => {
           aria-modal="true"
           aria-labelledby="edit-modal-title"
         >
-          <div className="relative w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in">
+          <div className="relative w-full max-w-lg max-h-[85vh] overflow-y-auto rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in">
             <div className="flex items-center justify-between border-b border-line pb-4">
               <h2 id="edit-modal-title" className="font-display text-xl font-semibold text-fg">
                 Edit User
@@ -553,6 +679,66 @@ const UsersList = () => {
                 />
               </div>
 
+              {/* Assigned Courses Section in Edit User */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                    Assigned Courses ({editForm.assignedCourseIds?.length || 0})
+                  </label>
+                  {allCourses.length > 0 && (
+                    <div className="flex gap-2 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setEditForm(p => ({ ...p, assignedCourseIds: allCourses.map(c => c.id) }))}
+                        className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-medium"
+                      >
+                        Select all
+                      </button>
+                      <span className="text-muted">•</span>
+                      <button
+                        type="button"
+                        onClick={() => setEditForm(p => ({ ...p, assignedCourseIds: [] }))}
+                        className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <div className="grid gap-2 max-h-36 overflow-y-auto pr-1 border border-line rounded-xl p-2 bg-ink/30">
+                  {allCourses.length === 0 ? (
+                    <p className="text-xs text-muted p-2 text-center">No courses available.</p>
+                  ) : (
+                    allCourses.map(c => {
+                      const isChecked = (editForm.assignedCourseIds || []).includes(c.id);
+                      return (
+                        <label
+                          key={c.id}
+                          onClick={() => {
+                            setEditForm(p => {
+                              const curr = p.assignedCourseIds || [];
+                              const next = curr.includes(c.id) ? curr.filter(id => id !== c.id) : [...curr, c.id];
+                              return { ...p, assignedCourseIds: next };
+                            });
+                          }}
+                          className={`flex items-center gap-2.5 p-2 rounded-lg border text-xs cursor-pointer select-none transition ${
+                            isChecked ? 'border-sky/50 bg-sky/5 text-sky font-semibold' : 'border-line bg-ink/40 text-fg'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {}}
+                            className="h-3.5 w-3.5 rounded text-sky focus:ring-sky/40 border-line"
+                          />
+                          <span className="truncate flex-1">{c.title}</span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
               <div className="flex flex-col gap-1.5">
                 <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
                   Face ID Biometrics
@@ -604,6 +790,7 @@ const UsersList = () => {
         </div>,
         document.body
       )}
+
 
       {cameraOpen && createPortal(
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 sm:p-6 bg-navy/70 backdrop-blur-md">
@@ -794,8 +981,151 @@ const UsersList = () => {
         </div>,
         document.body
       )}
+
+      {/* Assign Courses Modal */}
+      {assignModalUser && createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assign-modal-title"
+        >
+          <div className="relative w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in max-h-[85vh] flex flex-col justify-between overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-line pb-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-orange/10 border border-orange/20 text-orange grid place-items-center font-bold text-lg">
+                  📚
+                </div>
+                <div>
+                  <h2 id="assign-modal-title" className="font-display text-lg sm:text-xl font-semibold text-fg">
+                    Assign Courses
+                  </h2>
+                  <p className="text-xs text-muted">
+                    {assignModalUser.fullName} ({assignModalUser.email}) • FIN: {assignModalUser.finNumber}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAssignModalUser(null)}
+                className="grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-line bg-ink text-muted hover:text-fg transition"
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Quick action bar */}
+            <div className="flex items-center justify-between py-2 border-b border-line/40 shrink-0 text-xs">
+              <span className="text-muted font-medium">
+                {assignedCourseSelection.length} of {allCourses.length} course{allCourses.length === 1 ? '' : 's'} assigned
+              </span>
+              {allCourses.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssignedCourseSelection(allCourses.map((c) => c.id))}
+                    className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-semibold"
+                  >
+                    Select all
+                  </button>
+                  <span className="text-muted">•</span>
+                  <button
+                    type="button"
+                    onClick={() => setAssignedCourseSelection([])}
+                    className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Course Checklist List */}
+            <div className="flex-1 min-h-0 overflow-y-auto my-3 space-y-2 pr-1">
+              {allCourses.length === 0 ? (
+                <div className="py-10 text-center text-xs text-muted">
+                  No courses published in catalog. Create a course first from Course Manager.
+                </div>
+              ) : (
+                allCourses.map((c) => {
+                  const isChecked = assignedCourseSelection.includes(c.id);
+                  const curriculumData = typeof c.curriculum === 'string' ? JSON.parse(c.curriculum) : (c.curriculum || {});
+                  const totalLessons = curriculumData.lessons?.length || 5;
+
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => toggleCourseSelection(c.id)}
+                      className={`flex items-start gap-3 p-3.5 rounded-2xl border transition cursor-pointer select-none ${
+                        isChecked
+                          ? 'border-sky/60 bg-sky/5 shadow-sm'
+                          : 'border-line bg-ink/40 hover:border-line/90'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {}}
+                        className="mt-0.5 h-4 w-4 rounded text-sky focus:ring-sky/40 border-line"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className={`text-xs font-bold leading-snug truncate ${isChecked ? 'text-sky' : 'text-fg'}`}>
+                            {c.title}
+                          </h4>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-ink border border-line text-muted uppercase font-bold shrink-0">
+                            {c.fileName === 'Manual Entry' ? 'Manual' : 'RAG PDF'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted line-clamp-1 mt-0.5">
+                          {c.description || 'AI tutor course module'}
+                        </p>
+                        <div className="flex items-center gap-3 text-[10px] text-muted mt-1.5 font-medium">
+                          <span>📖 {totalLessons} Lessons</span>
+                          <span>•</span>
+                          <span>{isChecked ? '✓ Assigned to learner' : 'Not assigned'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="pt-3 border-t border-line flex items-center justify-between shrink-0">
+              <span className="text-[11px] text-muted">
+                {assignedCourseSelection.length === 0
+                  ? '⚠️ No courses assigned (learner will see empty dashboard)'
+                  : 'Learner can play only selected courses'}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAssignModalUser(null)}
+                  className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-xs font-semibold text-fg hover:border-sky/40 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingAssignments}
+                  onClick={handleSaveAssignments}
+                  className="cursor-pointer rounded-xl border-0 bg-orange px-5 py-2.5 text-xs font-bold text-white shadow-md hover:brightness-105 transition disabled:opacity-60"
+                >
+                  {savingAssignments ? 'Saving...' : 'Save Assignments'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   )
 }
 
 export default UsersList;
+

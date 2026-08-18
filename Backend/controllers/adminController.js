@@ -37,7 +37,7 @@ export const login = async (req, res) => {
 };
 
 export const registerUser = async (req, res) => {
-  const { fullName, finNumber, preferLanguage, email, password, faceIdData, country } = req.body;
+  const { fullName, finNumber, preferLanguage, email, password, faceIdData, country, assignedCourseIds } = req.body;
 
   if (!fullName || !finNumber || !preferLanguage || !email || !password || !country) {
     return res.status(400).json({ error: 'All fields are required.' });
@@ -81,6 +81,23 @@ export const registerUser = async (req, res) => {
       },
     });
 
+    // Create course assignments if provided
+    if (Array.isArray(assignedCourseIds) && assignedCourseIds.length > 0) {
+      await prisma.userCourseAssignment.createMany({
+        data: assignedCourseIds.map((courseId) => ({
+          userId: newUser.id,
+          courseId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    // Fetch assigned courses info
+    const assignments = await prisma.userCourseAssignment.findMany({
+      where: { userId: newUser.id },
+      include: { course: { select: { id: true, title: true } } },
+    });
+
     res.status(201).json({
       message: 'User registered successfully.',
       user: {
@@ -93,6 +110,8 @@ export const registerUser = async (req, res) => {
         status: newUser.status,
         hasFaceId: !!newUser.faceEmbedding,
         registeredAt: newUser.registeredAt,
+        assignedCourseIds: assignments.map((a) => a.courseId),
+        assignedCourses: assignments.map((a) => ({ id: a.courseId, title: a.course?.title || a.courseId })),
       },
     });
   } catch (error) {
@@ -105,6 +124,13 @@ export const getUsers = async (req, res) => {
   try {
     const users = await prisma.user.findMany({
       orderBy: { registeredAt: 'desc' },
+      include: {
+        assignments: {
+          include: {
+            course: { select: { id: true, title: true } },
+          },
+        },
+      },
     });
 
     const allProgress = await prisma.courseProgress.findMany();
@@ -114,6 +140,12 @@ export const getUsers = async (req, res) => {
       const userProgs = allProgress.filter(p => p.userId === user.id || p.userId === user.email || p.userId === user.finNumber);
       const completedCount = userProgs.filter(p => p.completed || p.progress >= 100).length;
       const inProgressCount = userProgs.filter(p => !p.completed && p.progress > 0 && p.progress < 100).length;
+
+      const assignedCourses = (user.assignments || []).map(a => ({
+        id: a.courseId,
+        title: a.course?.title || a.courseId,
+      }));
+      const assignedCourseIds = (user.assignments || []).map(a => a.courseId);
 
       return {
         id: user.id,
@@ -125,6 +157,8 @@ export const getUsers = async (req, res) => {
         status: user.status,
         faceIdData: user.faceImage, // raw base64 image data
         registeredAt: user.registeredAt,
+        assignedCourses,
+        assignedCourseIds,
         progressSummary: {
           completedCourses: completedCount,
           inProgressCourses: inProgressCount,
@@ -149,12 +183,14 @@ export const getStats = async (req, res) => {
     const uniqueCountries = await prisma.user.groupBy({
       by: ['country'],
     });
+    const totalAssignments = await prisma.userCourseAssignment.count();
 
     res.json({
       totalUsers,
       faceEnrolled,
       regionsCovered: uniqueCountries.length,
       pendingFaceId: totalUsers - faceEnrolled,
+      totalAssignments,
     });
   } catch (error) {
     console.error('Get stats error:', error);
@@ -164,7 +200,7 @@ export const getStats = async (req, res) => {
 
 export const updateUser = async (req, res) => {
   const { id } = req.params;
-  const { fullName, finNumber, preferLanguage, email, password, country, status, faceIdData } = req.body;
+  const { fullName, finNumber, preferLanguage, email, password, country, status, faceIdData, assignedCourseIds } = req.body;
 
   try {
     const user = await prisma.user.findUnique({ where: { id } });
@@ -215,6 +251,22 @@ export const updateUser = async (req, res) => {
       data: updateData,
     });
 
+    // Update course assignments if provided
+    if (Array.isArray(assignedCourseIds)) {
+      await prisma.userCourseAssignment.deleteMany({ where: { userId: id } });
+      if (assignedCourseIds.length > 0) {
+        await prisma.userCourseAssignment.createMany({
+          data: assignedCourseIds.map(cId => ({ userId: id, courseId: cId })),
+          skipDuplicates: true,
+        });
+      }
+    }
+
+    const assignments = await prisma.userCourseAssignment.findMany({
+      where: { userId: id },
+      include: { course: { select: { id: true, title: true } } },
+    });
+
     res.json({
       message: 'User updated successfully.',
       user: {
@@ -226,11 +278,123 @@ export const updateUser = async (req, res) => {
         country: updated.country,
         status: updated.status,
         faceIdData: updated.faceImage,
+        assignedCourseIds: assignments.map(a => a.courseId),
+        assignedCourses: assignments.map(a => ({ id: a.courseId, title: a.course?.title || a.courseId })),
       }
     });
   } catch (error) {
     console.error('Update user error:', error);
     res.status(500).json({ error: 'An error occurred while updating user.' });
+  }
+};
+
+export const assignCoursesToUser = async (req, res) => {
+  const { id } = req.params;
+  const { courseIds } = req.body;
+
+  if (!Array.isArray(courseIds)) {
+    return res.status(400).json({ error: 'courseIds must be an array of course IDs.' });
+  }
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Delete existing and set new assignments
+    await prisma.userCourseAssignment.deleteMany({ where: { userId: id } });
+    if (courseIds.length > 0) {
+      await prisma.userCourseAssignment.createMany({
+        data: courseIds.map(courseId => ({
+          userId: id,
+          courseId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const assignments = await prisma.userCourseAssignment.findMany({
+      where: { userId: id },
+      include: { course: { select: { id: true, title: true } } },
+    });
+
+    res.json({
+      message: 'Course assignments updated successfully.',
+      userId: id,
+      assignedCourseIds: assignments.map(a => a.courseId),
+      assignedCourses: assignments.map(a => ({ id: a.courseId, title: a.course?.title || a.courseId })),
+    });
+  } catch (error) {
+    console.error('Assign courses to user error:', error);
+    res.status(500).json({ error: 'Failed to update course assignments.' });
+  }
+};
+
+export const assignUsersToCourse = async (req, res) => {
+  const { id } = req.params; // courseId
+  const { userIds } = req.body;
+
+  if (!Array.isArray(userIds)) {
+    return res.status(400).json({ error: 'userIds must be an array of user IDs.' });
+  }
+
+  try {
+    const course = await prisma.course.findUnique({ where: { id } });
+    if (!course) {
+      return res.status(404).json({ error: 'Course not found.' });
+    }
+
+    // Replace assignments for this course
+    await prisma.userCourseAssignment.deleteMany({ where: { courseId: id } });
+    if (userIds.length > 0) {
+      await prisma.userCourseAssignment.createMany({
+        data: userIds.map(userId => ({
+          userId,
+          courseId: id,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    const assignments = await prisma.userCourseAssignment.findMany({
+      where: { courseId: id },
+      include: { user: { select: { id: true, fullName: true, email: true, finNumber: true } } },
+    });
+
+    res.json({
+      message: 'Course learners assigned successfully.',
+      courseId: id,
+      assignedUserIds: assignments.map(a => a.userId),
+      assignedUsers: assignments.map(a => a.user),
+    });
+  } catch (error) {
+    console.error('Assign users to course error:', error);
+    res.status(500).json({ error: 'Failed to assign learners to course.' });
+  }
+};
+
+export const getCourseAssignments = async (req, res) => {
+  const { id } = req.params; // courseId
+
+  try {
+    const assignments = await prisma.userCourseAssignment.findMany({
+      where: { courseId: id },
+      include: {
+        user: {
+          select: { id: true, fullName: true, email: true, finNumber: true, country: true, status: true }
+        }
+      },
+    });
+
+    res.json({
+      courseId: id,
+      totalAssigned: assignments.length,
+      assignedUsers: assignments.map(a => a.user),
+    });
+  } catch (error) {
+    console.error('Get course assignments error:', error);
+    res.status(500).json({ error: 'Failed to fetch course assignments.' });
   }
 };
 
@@ -262,6 +426,7 @@ export const toggleUserStatus = async (req, res) => {
     res.status(500).json({ error: 'An error occurred while changing user status.' });
   }
 };
+
 
 export const getUserProgress = async (req, res) => {
   const { id } = req.params;

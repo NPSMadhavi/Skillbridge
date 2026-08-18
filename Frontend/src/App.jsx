@@ -9,6 +9,7 @@ import CoursePlayer from './pages/CoursePlayer'
 import RegisterUser from './pages/admin/RegisterUser'
 import UsersList from './pages/admin/UsersList'
 import AdminCourses from './pages/admin/AdminCourses'
+import CourseAssignments from './pages/admin/CourseAssignments'
 import Home from './pages/Home'
 import Language from './pages/Language'
 import Login from './pages/Login'
@@ -100,34 +101,52 @@ const CoursePlayerRoute = () => {
   const location = useLocation()
   const [course, setCourse] = useState(location.state?.course || null)
   const [loading, setLoading] = useState(!course)
+  const [accessError, setAccessError] = useState('')
 
   useEffect(() => {
-    if (!course && id) {
+    if (id) {
       setLoading(true)
-      // Check static default courses first
-      const staticFound = defaultCourses.find(c => c.id === id)
-      if (staticFound) {
-        setCourse(staticFound)
-        setLoading(false)
-        return
-      }
-      // Otherwise fetch from database API
+      setAccessError('')
       api.getCourseDetail(id)
         .then(res => {
           setCourse(mapRagCourse(res))
         })
         .catch(err => {
           console.error("Failed to load course details for player:", err)
+          setAccessError(err.message || 'Access denied. You are not assigned to this course.')
         })
         .finally(() => setLoading(false))
     }
-  }, [id, course])
+  }, [id])
 
   if (loading) {
     return (
       <div className="min-h-svh bg-[#0b0e14] flex flex-col items-center justify-center text-white">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-orange/20 border-t-orange mb-4" />
         <p className="text-sm font-semibold text-slate-300">Loading AI Tutor Player...</p>
+      </div>
+    )
+  }
+
+  if (accessError || !course) {
+    return (
+      <div className="min-h-svh bg-[#0b0e14] flex flex-col items-center justify-center text-white p-6 text-center">
+        <div className="h-14 w-14 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-400 grid place-items-center text-2xl mb-4">
+          🔒
+        </div>
+        <h2 className="font-display text-xl font-bold text-white mb-2">
+          Course Access Restricted
+        </h2>
+        <p className="text-sm text-slate-400 max-w-md mb-6 leading-relaxed">
+          {accessError || 'You do not have access to play this course. Only courses assigned to your account by an administrator can be accessed.'}
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="cursor-pointer rounded-xl bg-orange hover:bg-orange/90 px-6 py-2.5 text-sm font-bold text-white shadow-lg transition border-0"
+        >
+          Return to My Dashboard
+        </button>
       </div>
     )
   }
@@ -154,6 +173,7 @@ const AssessmentRoute = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const [course, setCourse] = useState(location.state?.course || null)
+  const [accessDenied, setAccessDenied] = useState(false)
 
   const activeLesson = location.state?.activeLesson
   const quizQuestions = location.state?.quizQuestions
@@ -161,16 +181,32 @@ const AssessmentRoute = () => {
 
   useEffect(() => {
     if (!course && id) {
-      const staticFound = defaultCourses.find(c => c.id === id)
-      if (staticFound) {
-        setCourse(staticFound)
-        return
-      }
       api.getCourseDetail(id)
         .then(res => setCourse(mapRagCourse(res)))
-        .catch(console.error)
+        .catch(err => {
+          console.error(err)
+          setAccessDenied(true)
+        })
     }
   }, [id, course])
+
+  if (accessDenied) {
+    return (
+      <div className="min-h-svh bg-[#0b0e14] flex flex-col items-center justify-center text-white p-6 text-center">
+        <span className="text-3xl mb-3">🔒</span>
+        <h2 className="text-lg font-bold mb-2">Access Denied</h2>
+        <p className="text-xs text-slate-400 mb-4">You are not assigned to this course assessment.</p>
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="rounded-xl bg-orange px-4 py-2 text-xs font-bold text-white border-0"
+        >
+          Back to Dashboard
+        </button>
+      </div>
+    )
+  }
+
 
   const isFinalAssessment = !nextLessonId || (course?.lessons && activeLesson?.id === course.lessons[course.lessons.length - 1]?.id)
 
@@ -295,6 +331,7 @@ function App() {
           <Route path="/admin/register" element={<RegisterUser />} />
           <Route path="/admin/users" element={<UsersList />} />
           <Route path="/admin/courses" element={<AdminCourses />} />
+          <Route path="/admin/assignments" element={<CourseAssignments />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

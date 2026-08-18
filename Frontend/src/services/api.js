@@ -117,6 +117,47 @@ export const api = {
     return res.json();
   },
 
+  // Admin Assign Courses to User
+  assignUserCourses: async (userId, courseIds) => {
+    const res = await fetch(`${API_BASE_URL}/admin/users/${userId}/assignments`, {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify({ courseIds }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to assign courses to user.');
+    }
+    return res.json();
+  },
+
+  // Admin Assign Users to Course
+  assignCourseUsers: async (courseId, userIds) => {
+    const res = await fetch(`${API_BASE_URL}/admin/courses/${courseId}/assign-users`, {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify({ userIds }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to assign learners to course.');
+    }
+    return res.json();
+  },
+
+  // Admin Get Course Assignments
+  getCourseAssignments: async (courseId) => {
+    const res = await fetch(`${API_BASE_URL}/admin/courses/${courseId}/assignments`, {
+      method: 'GET',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch course assignments.');
+    }
+    return res.json();
+  },
+
   // Student Auth
   studentLogin: async (email, password) => {
     const res = await fetch(`${API_BASE_URL}/auth/login`, {

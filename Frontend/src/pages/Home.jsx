@@ -341,10 +341,12 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 <span className="text-[11px] font-semibold text-blue-100">Continue Learning</span>
                 <div className="my-1">
                   <h3 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white leading-snug line-clamp-2">
-                    {activeCourseObj?.title || 'Full-Stack Web Development'}
+                    {activeCourseObj ? activeCourseObj.title : 'No Courses Assigned'}
                   </h3>
                   <p className="text-[11px] text-blue-100/90 font-medium mt-0.5">
-                    Modules {activeCourseCompletedCount} of {activeCourseTotalLessons}
+                    {activeCourseObj
+                      ? `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
+                      : 'Please contact your administrator to assign courses'}
                   </p>
                 </div>
 
@@ -360,13 +362,19 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onPlayCourse?.(activeCourseObj)}
-                  className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-xs font-extrabold text-slate-900 shadow-md hover:bg-slate-100 transition cursor-pointer border-0 w-fit"
-                >
-                  <span className="text-[10px] text-black">▶</span> {activeCourseCompletedCount > 0 ? 'Resume Course' : 'Start Course'}
-                </button>
+                {activeCourseObj ? (
+                  <button
+                    type="button"
+                    onClick={() => onPlayCourse?.(activeCourseObj)}
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-xs font-extrabold text-slate-900 shadow-md hover:bg-slate-100 transition cursor-pointer border-0 w-fit"
+                  >
+                    <span className="text-[10px] text-black">▶</span> {activeCourseCompletedCount > 0 ? 'Resume Course' : 'Start Course'}
+                  </button>
+                ) : (
+                  <span className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white/20 px-3.5 py-1.5 text-xs font-semibold text-blue-100 w-fit">
+                    Awaiting Course Assignment
+                  </span>
+                )}
               </div>
 
               {/* 3D Engineer Avatar Illustration */}
@@ -380,7 +388,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
             </div>
 
             {/* BOTTOM WHITE CARD: Your learning progress */}
-            <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/70  flex flex-col justify-between flex-shrink-0">
+            <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/70 flex flex-col justify-between flex-shrink-0">
               <h3 className="font-display text-xs sm:text-sm font-semibold text-[#1e2e4a] tracking-tight mb-1.5">
                 Your learning progress
               </h3>
@@ -394,14 +402,18 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   {/* Top Motivation Text */}
                   <div>
                     <h4 className="font-display text-lg sm:text-xl font-bold text-[#1e2e4a] tracking-tight leading-snug">
-                      {stats.overallProgress > 0 ? "You're doing great!" : "Ready to learn!"}
+                      {stats.overallProgress > 0 ? "You're doing great!" : displayCourses.length > 0 ? "Ready to learn!" : "Welcome to SkillBridge"}
                     </h4>
                     <p className="text-xs text-slate-400 font-normal mt-0.5 leading-snug">
-                      {stats.overallProgress > 0 ? "Keep going and complete your courses" : "Start your lessons and track your progress"}
+                      {stats.overallProgress > 0
+                        ? "Keep going and complete your courses"
+                        : displayCourses.length > 0
+                        ? "Start your lessons and track your progress"
+                        : "Your assigned courses will appear here"}
                     </p>
                   </div>
 
-                  {/* Bottom: 3 Stats Badges (HORIZONTAL / INLINE ROW WITH VERTICAL DIVIDERS) */}
+                  {/* Bottom: 3 Stats Badges */}
                   <div className="flex items-center gap-3 sm:gap-4 pt-2 sm:pt-2.5">
                     {/* Total Modules */}
                     <div className="flex items-center gap-2">
@@ -455,18 +467,23 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
           </div>
 
           {/* RIGHT COLUMN: Full Height My Courses Card */}
-          <div className="lg:col-span-6 bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/70  flex flex-col justify-between flex-1 min-h-0 overflow-hidden">
-            <h3 className="font-display text-base font-bold text-[#1e2e4a] tracking-tight mb-2 flex-shrink-0">
-              My Courses
-            </h3>
+          <div className="lg:col-span-6 bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/70 flex flex-col justify-between flex-1 min-h-0 overflow-hidden">
+            <div className="flex items-center justify-between mb-2 flex-shrink-0">
+              <h3 className="font-display text-base font-bold text-[#1e2e4a] tracking-tight">
+                My Assigned Courses
+              </h3>
+              <span className="text-xs text-slate-400 font-medium">
+                {displayCourses.length} Course{displayCourses.length === 1 ? '' : 's'}
+              </span>
+            </div>
 
             <div className="flex-1 flex flex-col gap-1 divide-y divide-slate-100/80 overflow-y-auto pr-1">
               {displayCourses.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400 my-auto">
                   <span className="text-3xl mb-2">📚</span>
-                  <p className="text-xs font-semibold text-slate-600">No uploaded courses yet</p>
+                  <p className="text-xs font-semibold text-slate-600">No assigned courses yet</p>
                   <p className="text-[11px] text-slate-400 mt-1 max-w-xs">
-                    Upload a PDF document to generate your custom AI course!
+                    Your administrator has not assigned any courses to your account. Once assigned, your courses will appear here ready to learn!
                   </p>
                 </div>
               ) : (
@@ -474,7 +491,6 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   const bgColors = ['bg-[#22c55e]', 'bg-[#2563eb]', 'bg-[#9333ea]', 'bg-[#ea580c]', 'bg-[#0891b2]', 'bg-[#4f46e5]'];
                   const completedCount = (userProgressMap[c.id] || []).length;
                   const totalCount = c.lessons?.length || c.modules || (c.curriculum ? c.curriculum.length : 5);
-                  const durationText = c.duration || `${totalCount * 15} mins`;
 
                   return (
                     <div key={c.id} className="py-2.5 flex items-center justify-between group gap-3">
@@ -512,6 +528,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
           </div>
 
         </div>
+
 
       </div>
     </div>

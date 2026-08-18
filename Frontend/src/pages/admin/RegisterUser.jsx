@@ -11,8 +11,44 @@ const LANGUAGES = [
   { value: 'bn', label: 'Bangla (বাংলা)' },
 ]
 
-const fieldClass =
-  'w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky focus:bg-panel focus:shadow-[0_0_0_3px_rgba(2,132,199,0.14)]'
+const ExclamationCircleIcon = () => (
+  <svg className="h-3.5 w-3.5 shrink-0 text-rose-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+    <path
+      fillRule="evenodd"
+      d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
+      clipRule="evenodd"
+    />
+  </svg>
+)
+
+const EyeIcon = ({ open }) => (
+  <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    {open ? (
+      <>
+        <path
+          d="M2.8 12S6.2 6.2 12 6.2 21.2 12 21.2 12 17.8 17.8 12 17.8 2.8 12 2.8 12Z"
+          stroke="currentColor"
+          strokeWidth="1.7"
+        />
+        <circle cx="12" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.7" />
+      </>
+    ) : (
+      <path
+        d="M3.2 4.2 20.8 21.8M10 10.2A2.8 2.8 0 0 0 14 14M7.4 7.7C5.4 9 3.8 11.2 3.2 12c0 0 3.4 5.8 8.8 5.8 1.5 0 2.9-.4 4.1-1.1M14.5 6.6A8.4 8.4 0 0 0 12 6.2C6.6 6.2 3.2 12 3.2 12"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    )}
+  </svg>
+)
+
+const getFieldClass = (hasError) =>
+  `w-full rounded-xl border bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel ${
+    hasError
+      ? 'border-rose-400 focus:border-rose-500 focus:shadow-[0_0_0_3px_rgba(244,63,94,0.18)]'
+      : 'border-line hover:border-sky/40 focus:border-sky focus:shadow-[0_0_0_3px_rgba(2,132,199,0.14)]'
+  }`
 
 const emptyForm = {
   fullName: '',
@@ -24,28 +60,81 @@ const emptyForm = {
   faceIdData: '',
 }
 
-const validate = (form) => {
+const emptyTouched = {
+  fullName: false,
+  finNumber: false,
+  email: false,
+  preferLanguage: false,
+  password: false,
+  country: false,
+  faceIdData: false,
+}
+
+const validateField = (key, val) => {
+  switch (key) {
+    case 'fullName': {
+      const trimmed = (val || '').trim()
+      if (!trimmed) return 'Full name is required.'
+      if (trimmed.length < 2) return 'Full name must be at least 2 characters.'
+      return ''
+    }
+    case 'finNumber': {
+      const trimmed = (val || '').trim().toUpperCase()
+      if (!trimmed) return 'FIN number is required.'
+      if (trimmed.length !== 9) {
+        return 'FIN number must be exactly 9 characters (e.g. S1234567A).'
+      }
+      if (!/^[STFGMstfgm]\d{7}[A-Za-z]$/.test(trimmed)) {
+        return 'FIN must start with S, T, F, G, or M, followed by 7 digits and 1 letter (e.g. S1234567A).'
+      }
+      return ''
+    }
+    case 'email': {
+      const trimmed = (val || '').trim()
+      if (!trimmed) return 'Email address is required.'
+      if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(trimmed)) {
+        return 'Enter a valid email address.'
+      }
+      return ''
+    }
+    case 'preferLanguage': {
+      if (!val) return 'Select preferred language.'
+      return ''
+    }
+    case 'password': {
+      if (!val) return 'Password is required.'
+      if (val.length < 6) return 'Password must be at least 6 characters.'
+      return ''
+    }
+    case 'country': {
+      const trimmed = (val || '').trim()
+      if (!trimmed) return 'Country is required.'
+      return ''
+    }
+    case 'faceIdData': {
+      if (!val) return 'Capture Face ID data before registering.'
+      return ''
+    }
+    default:
+      return ''
+  }
+}
+
+const validateAll = (form) => {
   const errors = {}
-
-  if (!form.fullName.trim()) errors.fullName = 'Full name is required.'
-  if (!form.finNumber.trim()) errors.finNumber = 'FIN number is required.'
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
-    errors.email = 'Enter a valid email address.'
-  }
-  if (!form.preferLanguage) errors.preferLanguage = 'Select preferred language.'
-  if (!form.password || form.password.length < 6) {
-    errors.password = 'Password must be at least 6 characters.'
-  }
-  if (!form.country.trim()) errors.country = 'Country is required.'
-  if (!form.faceIdData) errors.faceIdData = 'Capture Face ID data before registering.'
-
+  Object.keys(emptyForm).forEach((key) => {
+    const err = validateField(key, form[key])
+    if (err) errors[key] = err
+  })
   return errors
 }
 
 const RegisterUser = () => {
   const navigate = useNavigate()
   const [form, setForm] = useState(emptyForm)
+  const [touched, setTouched] = useState(emptyTouched)
   const [errors, setErrors] = useState({})
+  const [showPassword, setShowPassword] = useState(false)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState(null)
   const [cameraOpen, setCameraOpen] = useState(false)
@@ -54,6 +143,11 @@ const RegisterUser = () => {
 
   const videoRef = useRef(null)
   const streamRef = useRef(null)
+  const fullNameRef = useRef(null)
+  const finNumberRef = useRef(null)
+  const emailRef = useRef(null)
+  const passwordRef = useRef(null)
+  const countryRef = useRef(null)
 
   const stopCamera = () => {
     streamRef.current?.getTracks().forEach((track) => track.stop())
@@ -66,8 +160,20 @@ const RegisterUser = () => {
   }, [])
 
   const updateField = (key, value) => {
-    setForm((prev) => ({ ...prev, [key]: value }))
-    setErrors((prev) => ({ ...prev, [key]: undefined }))
+    setForm((prev) => {
+      const next = { ...prev, [key]: value }
+      if (touched[key] || errors[key]) {
+        const err = validateField(key, value)
+        setErrors((prevErr) => ({ ...prevErr, [key]: err || undefined }))
+      }
+      return next
+    })
+  }
+
+  const handleBlur = (key) => {
+    setTouched((prev) => ({ ...prev, [key]: true }))
+    const err = validateField(key, form[key])
+    setErrors((prev) => ({ ...prev, [key]: err || undefined }))
   }
 
   const openCamera = async () => {
@@ -115,8 +221,12 @@ const RegisterUser = () => {
       capturedImages.push(canvas.toDataURL('image/jpeg', 0.86))
     }
 
-    updateField('faceIdData', capturedImages[0])
-    updateField('faceIdDataList', capturedImages)
+    setForm((prev) => ({
+      ...prev,
+      faceIdData: capturedImages[0],
+      faceIdDataList: capturedImages,
+    }))
+    setErrors((prev) => ({ ...prev, faceIdData: undefined }))
     setCapturing(false)
     closeCamera()
     setToast({ type: 'ok', text: 'Face ID data captured successfully.' })
@@ -126,9 +236,24 @@ const RegisterUser = () => {
     event.preventDefault()
     setToast(null)
 
-    const nextErrors = validate(form)
+    // Mark all touched
+    const allTouched = Object.keys(emptyTouched).reduce((acc, k) => {
+      acc[k] = true
+      return acc
+    }, {})
+    setTouched(allTouched)
+
+    const nextErrors = validateAll(form)
     setErrors(nextErrors)
-    if (Object.keys(nextErrors).length) return
+
+    if (Object.keys(nextErrors).length) {
+      if (nextErrors.fullName) fullNameRef.current?.focus()
+      else if (nextErrors.finNumber) finNumberRef.current?.focus()
+      else if (nextErrors.email) emailRef.current?.focus()
+      else if (nextErrors.password) passwordRef.current?.focus()
+      else if (nextErrors.country) countryRef.current?.focus()
+      return
+    }
 
     setSaving(true)
     try {
@@ -142,13 +267,17 @@ const RegisterUser = () => {
         faceIdData: form.faceIdDataList || form.faceIdData,
       })
       setForm(emptyForm)
-      setToast({ type: 'ok', text: `${res.user.fullName} registered successfully.` })
+      setTouched(emptyTouched)
+      setErrors({})
+      setToast({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
     } catch (err) {
       setToast({ type: 'error', text: err.message || 'Registration failed.' })
     } finally {
       setSaving(false)
     }
   }
+
+
 
   return (
     <div className="animate-rise-in mx-auto max-w-3xl space-y-6">
@@ -165,41 +294,63 @@ const RegisterUser = () => {
         <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit} noValidate>
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <label htmlFor="fullName" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Full name
+              Full name <span className="text-rose-500">*</span>
             </label>
             <input
+              ref={fullNameRef}
               id="fullName"
               value={form.fullName}
               onChange={(e) => updateField('fullName', e.target.value)}
+              onBlur={() => handleBlur('fullName')}
               placeholder="e.g. Prem Sai"
-              className={fieldClass}
+              aria-invalid={!!errors.fullName}
+              aria-describedby={errors.fullName ? 'fullName-error' : undefined}
+              className={getFieldClass(!!errors.fullName)}
             />
-            {errors.fullName && <p className="text-xs text-danger">{errors.fullName}</p>}
+            {errors.fullName && (
+              <p id="fullName-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.fullName}</span>
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="finNumber" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              FIN number
+              FIN number <span className="text-rose-500">*</span>
             </label>
             <input
+              ref={finNumberRef}
               id="finNumber"
+              maxLength={9}
               value={form.finNumber}
-              onChange={(e) => updateField('finNumber', e.target.value)}
+              onChange={(e) => updateField('finNumber', e.target.value.toUpperCase())}
+              onBlur={() => handleBlur('finNumber')}
               placeholder="e.g. S1234567A"
-              className={fieldClass}
+              aria-invalid={!!errors.finNumber}
+              aria-describedby={errors.finNumber ? 'finNumber-error' : undefined}
+              className={getFieldClass(!!errors.finNumber)}
             />
-            {errors.finNumber && <p className="text-xs text-danger">{errors.finNumber}</p>}
+            {errors.finNumber && (
+              <p id="finNumber-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.finNumber}</span>
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="preferLanguage" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Prefer language
+              Prefer language <span className="text-rose-500">*</span>
             </label>
             <select
               id="preferLanguage"
               value={form.preferLanguage}
               onChange={(e) => updateField('preferLanguage', e.target.value)}
-              className={fieldClass}
+              onBlur={() => handleBlur('preferLanguage')}
+              aria-invalid={!!errors.preferLanguage}
+              aria-describedby={errors.preferLanguage ? 'preferLanguage-error' : undefined}
+              className={getFieldClass(!!errors.preferLanguage)}
             >
               {LANGUAGES.map((lang) => (
                 <option key={lang.value} value={lang.value}>
@@ -207,56 +358,98 @@ const RegisterUser = () => {
                 </option>
               ))}
             </select>
-            {errors.preferLanguage && <p className="text-xs text-danger">{errors.preferLanguage}</p>}
+            {errors.preferLanguage && (
+              <p id="preferLanguage-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.preferLanguage}</span>
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="email" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Email
+              Email <span className="text-rose-500">*</span>
             </label>
             <input
+              ref={emailRef}
               id="email"
               type="email"
               value={form.email}
               onChange={(e) => updateField('email', e.target.value)}
+              onBlur={() => handleBlur('email')}
               placeholder="user@company.com"
-              className={fieldClass}
+              aria-invalid={!!errors.email}
+              aria-describedby={errors.email ? 'email-error' : undefined}
+              className={getFieldClass(!!errors.email)}
             />
-            {errors.email && <p className="text-xs text-danger">{errors.email}</p>}
+            {errors.email && (
+              <p id="email-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.email}</span>
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label htmlFor="password" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Password
+              Password <span className="text-rose-500">*</span>
             </label>
-            <input
-              id="password"
-              type="password"
-              value={form.password}
-              onChange={(e) => updateField('password', e.target.value)}
-              placeholder="Minimum 6 characters"
-              className={fieldClass}
-            />
-            {errors.password && <p className="text-xs text-danger">{errors.password}</p>}
+            <div className="relative">
+              <input
+                ref={passwordRef}
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={(e) => updateField('password', e.target.value)}
+                onBlur={() => handleBlur('password')}
+                placeholder="Minimum 6 characters"
+                aria-invalid={!!errors.password}
+                aria-describedby={errors.password ? 'password-error' : undefined}
+                className={`${getFieldClass(!!errors.password)} pr-11`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute top-1/2 right-3 -translate-y-1/2 cursor-pointer border-0 bg-transparent p-1 text-muted transition hover:text-fg"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <EyeIcon open={showPassword} />
+              </button>
+            </div>
+            {errors.password && (
+              <p id="password-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.password}</span>
+              </p>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <label htmlFor="country" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Country
+              Country <span className="text-rose-500">*</span>
             </label>
             <input
+              ref={countryRef}
               id="country"
               value={form.country}
               onChange={(e) => updateField('country', e.target.value)}
+              onBlur={() => handleBlur('country')}
               placeholder="e.g. Singapore"
-              className={fieldClass}
+              aria-invalid={!!errors.country}
+              aria-describedby={errors.country ? 'country-error' : undefined}
+              className={getFieldClass(!!errors.country)}
             />
-            {errors.country && <p className="text-xs text-danger">{errors.country}</p>}
+            {errors.country && (
+              <p id="country-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.country}</span>
+              </p>
+            )}
           </div>
 
           <div className="sm:col-span-2">
             <p className="mb-2 text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Face ID data
+              Face ID data <span className="text-rose-500">*</span>
             </p>
 
             {form.faceIdData ? (
@@ -293,9 +486,15 @@ const RegisterUser = () => {
               <button
                 type="button"
                 onClick={openCamera}
-                className="flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-sky/40 bg-sky/5 px-4 py-8 text-center transition hover:bg-sky/10"
+                className={`flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition ${
+                  errors.faceIdData
+                    ? 'border-rose-400 bg-rose-500/5 hover:bg-rose-500/10'
+                    : 'border-sky/40 bg-sky/5 hover:bg-sky/10'
+                }`}
               >
-                <span className="grid h-12 w-12 place-items-center rounded-full bg-sky/15 text-sky">
+                <span className={`grid h-12 w-12 place-items-center rounded-full ${
+                  errors.faceIdData ? 'bg-rose-500/15 text-rose-500' : 'bg-sky/15 text-sky'
+                }`}>
                   <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path
                       d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M8 21H6a3 3 0 0 1-3-3v-2M16 21h2a3 3 0 0 0 3-3v-2"
@@ -312,7 +511,12 @@ const RegisterUser = () => {
                 <span className="text-sm text-muted">Use the camera to enroll biometric data</span>
               </button>
             )}
-            {errors.faceIdData && <p className="mt-2 text-xs text-danger">{errors.faceIdData}</p>}
+            {errors.faceIdData && (
+              <p role="alert" className="mt-2 flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.faceIdData}</span>
+              </p>
+            )}
           </div>
 
           {toast && (
@@ -327,6 +531,8 @@ const RegisterUser = () => {
               {toast.text}
             </p>
           )}
+
+
 
           <div className="sm:col-span-2 flex flex-col gap-3 sm:flex-row">
             <button
