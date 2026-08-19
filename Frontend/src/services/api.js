@@ -196,6 +196,7 @@ export const api = {
         lessonTitle: chatData.lessonTitle,
         currentConcept: chatData.currentConcept,
         language: chatData.language,
+        conversationHistory: chatData.conversationHistory || [],
       }),
     });
     if (!res.ok) {
@@ -203,7 +204,7 @@ export const api = {
       throw new Error(err.error || 'Failed to send message to AI Tutor.');
     }
     const data = await res.json();
-    return { text: data.reply || data.text, reply: data.reply || data.text };
+    return { text: data.reply || data.text, reply: data.reply || data.text, language: data.language };
   },
 
   updateCourseProgressDetails: async (courseId, details) => {
@@ -355,9 +356,12 @@ export const api = {
     return res.json();
   },
 
-  transcribeSpeech: async (audioBlob) => {
+  transcribeSpeech: async (audioBlob, language) => {
     const formData = new FormData();
     formData.append('file', audioBlob, 'voice.webm');
+    if (language) {
+      formData.append('language', language);
+    }
 
     const headers = getHeaders(false);
     delete headers['Content-Type'];

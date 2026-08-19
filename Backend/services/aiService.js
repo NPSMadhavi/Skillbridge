@@ -5,9 +5,9 @@ dotenv.config();
 
 class AIService {
   /**
-   * Helper to make ChatCompletion calls
+   * Helper to make ChatCompletion calls with multi-turn conversation support
    */
-  async _callLLM(systemPrompt, userPrompt, jsonMode = false) {
+  async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
     dotenv.config();
 
     const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
@@ -25,12 +25,29 @@ class AIService {
         'Authorization': `Bearer ${apiKey}`
       };
 
+      const messages = [
+        { role: 'system', content: systemPrompt }
+      ];
+
+      // Append multi-turn conversation history if provided
+      if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+        const recentHistory = conversationHistory.slice(-8);
+        for (const item of recentHistory) {
+          const role = (item.role === 'user' || item.sender === 'user') ? 'user' : 'assistant';
+          const content = item.content || item.text || '';
+          if (content && typeof content === 'string' && content.trim()) {
+            messages.push({ role, content: content.trim() });
+          }
+        }
+      }
+
+      if (userPrompt && typeof userPrompt === 'string' && userPrompt.trim()) {
+        messages.push({ role: 'user', content: userPrompt.trim() });
+      }
+
       const payload = {
         model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
+        messages,
         temperature: 0.4
       };
 
@@ -273,30 +290,32 @@ CRITICAL QUIZ GENERATION RULES:
    * Grounded strictly in the retrieved text chunks.
    */
   async explainLesson(courseTitle, lessonTitle, contextText, language = 'English') {
-    const systemPrompt = `You are ARIA, the intelligent AI Tutor for SkillBridge.
+    const systemPrompt = `You are ARIA, the expert AI Tutor for SkillBridge.
 Your student is learning the course: "${courseTitle}".
-They have selected the lesson: "${lessonTitle}".
-Target Teaching Language: ${language}.
+Current Lesson: "${lessonTitle}".
+Active Teaching Language: ${language}.
 
-CRITICAL TEACHING INSTRUCTIONS:
-1. Target Teaching Language: You MUST deliver the ENTIRE lesson explanation, headings, analogies, and concepts fluently in ${language} (e.g. Tamil தமிழ், Chinese 中文, Malay Bahasa Melayu, Bangla বাংলা, or English).
-2. DO NOT recite or copy sentences word-by-word verbatim from the uploaded document. The student does NOT want a raw textbook reading.
-3. Teach the topic **conceptually**: break down complex ideas into simple, intuitive explanations using your own pedagogical words in ${language}, drawing upon the provided document context and your expert AI knowledge.
-4. Structure your response into clear, engaging sections:
-   - ### 💡 Overview & Core Idea (1-2 sentences explaining what this concept is and why it matters)
-   - #### 🎯 Key Principles (Bullet points highlighting the main rules or components)
-   - #### 🌐 Real-World Analogy (An easy-to-understand analogy or practical scenario explaining how it works)
+CRITICAL MULTILINGUAL TEACHING INSTRUCTIONS:
+1. Target Teaching Language: You MUST deliver the ENTIRE lesson explanation, headings, concepts, and analogies fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
+2. Explain like an expert human tutor: Break down concepts into simple, intuitive explanations using your own pedagogical words in ${language}. DO NOT recite or copy sentences word-for-word verbatim from the uploaded document, and NEVER mention that you are translating the document.
+3. Grounding: Use the provided document context as the source of truth for the lesson's topics and core principles.
+4. Technical Terminology: Keep important technical terms (e.g. React, API, Database, State, Function, Loop, Props, Component) in their commonly used English/universal form alongside the explanation in ${language} so the student learns industry-standard terminology.
+5. Consistency: Never switch away to English unless citing a commonly recognized technical keyword.
+6. Structure your response into clear, engaging sections:
+   - ### 💡 Overview & Core Idea (1-2 clear, intuitive sentences explaining what this concept is and why it matters)
+   - #### 🎯 Key Principles (3-4 bullet points breaking down the essential rules or components)
+   - #### 🌐 Real-World Analogy (A vivid real-world analogy or practical scenario explaining how it works)
    - #### 📌 Summary Takeaways (2 concise bullet points to remember)
-   - #### ⚡ Practice Reflection (1 short question to help the student test their understanding)
-5. Always provide a rich, encouraging, and complete teaching breakdown in ${language}. NEVER refuse to answer.`;
+   - #### ⚡ Practice Reflection (1 short reflective question for the student to test their understanding)
+7. Always provide an encouraging, thorough, and highly pedagogical teaching breakdown in ${language}.`;
 
-    const userPrompt = `Document context:\n${contextText}\n\nLesson to explain: ${lessonTitle}\nLanguage: ${language}`;
+    const userPrompt = `Retrieved Course Context:\n${contextText}\n\nLesson to teach: "${lessonTitle}"\nSelected Teaching Language: ${language}`;
 
     try {
       return await this._callLLM(systemPrompt, userPrompt, false);
     } catch (e) {
       console.warn('Fallback triggered for explainLesson:', e.message);
-      return this._getMockExplanation(lessonTitle);
+      return this._getMockExplanation(lessonTitle, language);
     }
   }
 
@@ -431,34 +450,105 @@ CRITICAL TEACHING INSTRUCTIONS:
   /**
    * Fallback: Generates explanation when LLM is offline
    */
-  _getMockExplanation(lessonTitle) {
-    return `### 🤖 ARIA AI Tutor Guide: ${lessonTitle}
+  _getMockExplanation(lessonTitle, language = 'English') {
+    const l = String(language).toLowerCase();
+    if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
+      return `### 💡 核心概念与概述
+本课重点讲解 **${lessonTitle}** 的关键基础与应用原理。
 
-Hello! I am **ARIA**, your personal learning companion. I have reviewed the chapter content regarding **${lessonTitle}**, and I am excited to explain it in my own words to help you master these concepts.
+#### 🎯 核心原则
+- 掌握 ${lessonTitle} 的基本工作机制与核心逻辑。
+- 在实际项目中遵循最佳实践与规范设计。
+- 确保系统组件之间的数据流与交互清晰可靠。
 
----
+#### 🌐 现实生活类比
+想象一下制作一套积木系统，每个模块（Component）各司其职，组合起来构建完整的应用体系。
 
-#### 🌟 Key Concepts Explained
+#### 📌 关键要点
+- 理解概念结构比死记硬背更重要。
+- 始终通过实际代码练习巩固所学知识。
 
-1. **Core Subject Matter**
-   Rather than repeating the document directly, let's focus on the key ideas present in your uploaded guide for **${lessonTitle}**.
+#### ⚡ 实践思考
+尝试用自己的话概括 ${lessonTitle} 的核心用途。`;
+    }
 
-2. **Concept Synthesis**
-   Every major topic in this chapter builds upon raw technical definitions. We map these parameters to establish solid, predictable behaviors.
+    if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
+      return `### 💡 Gambaran Keseluruhan & Idea Teras
+Pelajaran ini memberi tumpuan kepada konsep asas dan aplikasi praktikal **${lessonTitle}**.
 
-3. **Practical Application**
-   We apply these principles to create active, responsive implementations. Understanding this lesson is about knowing how to apply it in real-world scenarios.
+#### 🎯 Prinsip Utama
+- Memahami mekanisme operasi dan logik utama ${lessonTitle}.
+- Menggunakan amalan terbaik dalam mereka bentuk struktur aplikasi.
+- Memastikan aliran data dan komponen berfungsi secara optimum.
 
----
+#### 🌐 Analogi Dunia Nyata
+Bayangkan sebuah orkestra muzik di mana setiap instrumen mempunyai fungsi tersendiri untuk menghasilkan melodi yang harmoni.
 
-#### 📌 Key Takeaways
-- **Aria's Tip:** Conceptual learning is always superior to rote memorization.
-- Focus on the mechanics of the system rather than just the definitions.
+#### 📌 Pengambilan Penting
+- Pembelajaran konsep adalah lebih berkesan daripada menghafal fakta semata-mata.
+- Uji pemahaman anda dengan latihan amali secara konsisten.
 
----
+#### ⚡ Refleksi Latihan
+Bolehkah anda menerangkan fungsi utama ${lessonTitle} dalam satu ayat mudah?`;
+    }
 
-#### ⚡ Practice Challenge
-*Try to summarize the relationship between structured parameters and open-ended definitions in a single sentence. Ask me if you want me to critique your answer!*`;
+    if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
+      return `### 💡 மேலோட்டம் மற்றும் அடிப்படைக் கருத்து
+இந்த பாடம் **${lessonTitle}** பற்றிய முக்கியமான அடிப்படைகள் மற்றும் நடைமுறை பயன்பாடுகளை விளக்குகிறது.
+
+#### 🎯 முக்கிய கோட்பாடுகள்
+- ${lessonTitle} இன் செயல்பாட்டு முறை மற்றும் மைய தர்க்கத்தை புரிந்து கொள்ளுதல்.
+- திட்டங்களில் சிறந்த நடைமுறைகள் மற்றும் தரநிலைகளைப் பின்பற்றுதல்.
+- கணினி பாகங்களுக்கு இடையேயான தொடர்புகளை சீராக நிர்வகித்தல்.
+
+#### 🌐 நிஜ உலக உதாரணம்
+ஒரு பெரிய கட்டடத்தை உருவாக்கும் போது அடித்தள செங்கற்கள் எவ்வாறு வலிமை சேர்க்கிறதோ, அதே போல இந்த கருத்துக்கள் பயன்பாட்டுக்கு வலு சேர்க்கின்றன.
+
+#### 📌 நினைவில் கொள்ள வேண்டியவை
+- வெறும் மனப்பாடம் செய்வதை விட அடிப்படைக் கருத்துக்களைப் புரிந்து கொள்வது சிறந்தது.
+- தொடர்ந்து பயிற்சி செய்வதன் மூலம் அறிவை உறுதிப்படுத்துங்கள்.
+
+#### ⚡ சிந்தனைக்கான கேள்வி
+${lessonTitle} இன் முக்கிய பயனை உங்கள் சொந்த வார்த்தைகளில் விவரிக்க முடியுமா?`;
+    }
+
+    if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
+      return `### 💡 সংক্ষিপ্ত বিবরণ এবং মূল ধারণা
+এই পাঠটি **${lessonTitle}** এর মৌলিক ধারণা এবং বাস্তব প্রয়োগ সম্পর্কে বিস্তারিত আলোচনা করে।
+
+#### 🎯 মূল নীতিসমূহ
+- ${lessonTitle} এর অন্তর্নিহিত কর্মপদ্ধতি ও লজিক আয়ত্ত করা।
+- সিস্টেম ডিজাইনে সঠিক নিয়ম ও সর্বোত্তম অনুশীলন অনুসরণ করা।
+- উপাদানের মধ্যে ডেটা প্রবাহ ও কাঠামোগত সম্পর্ক বজায় রাখা।
+
+#### 🌐 বাস্তব জীবনের উপমা
+যেমন একটি ভবনের প্রতিটি ইট মিলে একটি মজবুত কাঠামো তৈরি করে, তেমনি এই ধারণাগুলি অ্যাপ্লিকেশনের ভিত্তি তৈরি করে।
+
+#### 📌 মূল শিক্ষণীয় বিষয়
+- মুখস্থ করার চেয়ে ধারণাগত বোঝাপড়া অনেক বেশি কার্যকর।
+- নিয়মিত অনুশীলনের মাধ্যমে দক্ষতা বৃদ্ধি করুন।
+
+#### ⚡ অনুশীলনের প্রশ্ন
+আপনি কি ${lessonTitle} এর প্রধান কাজটি সহজ কথায় ব্যাখ্যা করতে পারেন?`;
+    }
+
+    return `### 💡 Overview & Core Idea
+This lesson focuses on the foundational principles and practical applications of **${lessonTitle}**.
+
+#### 🎯 Key Principles
+- Understand the underlying mechanics and core logic of ${lessonTitle}.
+- Apply standard architectural best practices when implementing solutions.
+- Ensure modular separation and predictable component behavior.
+
+#### 🌐 Real-World Analogy
+Think of building a modular structure where each component has a dedicated responsibility, working together seamlessly.
+
+#### 📌 Summary Takeaways
+- Conceptual understanding is far more durable than rote memorization.
+- Focus on practical implementation patterns and verified code flows.
+
+#### ⚡ Practice Reflection
+*How would you summarize the primary purpose of ${lessonTitle} in a single sentence?*`;
   }
 }
 

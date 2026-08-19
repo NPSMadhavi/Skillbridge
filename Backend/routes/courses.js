@@ -278,18 +278,27 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
       return res.status(400).json({ error: 'Lesson title is required.' });
     }
 
-    const resolveLanguageName = (lang) => {
-      if (!lang) return 'English';
-      const l = String(lang).toLowerCase();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) return 'Chinese (中文)';
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) return 'Malay (Bahasa Melayu)';
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'Tamil (தமிழ்)';
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'Bangla (বাংলা)';
-      return 'English';
+    const resolveLanguageInfo = (lang) => {
+      if (!lang) return { code: 'en', name: 'English', speechCode: 'en-US' };
+      const l = String(lang).toLowerCase().trim();
+      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
+        return { code: 'zh', name: 'Chinese (中文)', speechCode: 'zh-CN' };
+      }
+      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
+        return { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' };
+      }
+      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
+        return { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' };
+      }
+      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
+        return { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' };
+      }
+      return { code: 'en', name: 'English', speechCode: 'en-US' };
     };
 
-    const targetLanguage = resolveLanguageName(language || req.user?.preferredLanguage);
-    console.log(`[RAG Explain Query] Target Language: "${targetLanguage}", Query: "${lessonTitle}" (Course ID: ${course.id})`);
+    const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
+    const targetLanguage = targetLangInfo.name;
+    console.log(`[RAG Explain Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${lessonTitle}" (Course ID: ${course.id})`);
 
     // Retrieve semantically relevant context chunks from PostgreSQL pgvector
     let chunks = [];
@@ -311,7 +320,7 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
 
     // Call the LLM to explain based on retrieved context in preferred language
     const explanation = await aiService.explainLesson(course.title, lessonTitle, contextText, targetLanguage);
-    res.json({ explanation });
+    res.json({ explanation, language: targetLangInfo });
   } catch (error) {
     console.error('Failed to generate dynamic lesson guide:', error);
     res.status(500).json({ error: 'Failed to generate custom lesson guide.' });
@@ -339,18 +348,27 @@ router.post('/:id/lessons/:lessonId/quiz', authenticateToken, async (req, res) =
       return res.status(400).json({ error: 'Lesson title is required.' });
     }
 
-    const resolveLanguageName = (lang) => {
-      if (!lang) return 'English';
-      const l = String(lang).toLowerCase();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) return 'Chinese (中文)';
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) return 'Malay (Bahasa Melayu)';
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'Tamil (தமிழ்)';
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'Bangla (বাংলা)';
-      return 'English';
+    const resolveLanguageInfo = (lang) => {
+      if (!lang) return { code: 'en', name: 'English', speechCode: 'en-US' };
+      const l = String(lang).toLowerCase().trim();
+      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
+        return { code: 'zh', name: 'Chinese (中文)', speechCode: 'zh-CN' };
+      }
+      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
+        return { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' };
+      }
+      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
+        return { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' };
+      }
+      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
+        return { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' };
+      }
+      return { code: 'en', name: 'English', speechCode: 'en-US' };
     };
 
-    const targetLanguage = resolveLanguageName(language || req.user?.preferredLanguage);
-    console.log(`[RAG Quiz Query] Target Language: "${targetLanguage}", Lesson: "${lessonTitle}" (Course ID: ${course.id})`);
+    const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
+    const targetLanguage = targetLangInfo.name;
+    console.log(`[RAG Quiz Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Lesson: "${lessonTitle}" (Course ID: ${course.id})`);
 
     // Retrieve semantically relevant context chunks from PostgreSQL pgvector for this specific chapter
     let chunks = [];
@@ -367,7 +385,7 @@ router.post('/:id/lessons/:lessonId/quiz', authenticateToken, async (req, res) =
 
     // Call AI Service to generate multiple-choice questions for this chapter in preferred language
     const quiz = await aiService.generateLessonQuiz(course.title, lessonTitle, contextText, targetLanguage);
-    res.json({ quiz });
+    res.json({ quiz, language: targetLangInfo });
   } catch (error) {
     console.error('Failed to generate chapter assessment quiz:', error);
     res.status(500).json({ error: 'Failed to generate chapter assessment quiz.' });
@@ -530,24 +548,32 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
     }
 
-    const { message, lessonTitle, currentConcept, language } = req.body;
+    const { message, lessonTitle, currentConcept, language, conversationHistory } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'Message is required.' });
     }
 
-
-    const resolveLanguageName = (lang) => {
-      if (!lang) return 'English';
-      const l = String(lang).toLowerCase();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) return 'Chinese (中文)';
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) return 'Malay (Bahasa Melayu)';
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'Tamil (தமிழ்)';
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'Bangla (বাংলা)';
-      return 'English';
+    const resolveLanguageInfo = (lang) => {
+      if (!lang) return { code: 'en', name: 'English', speechCode: 'en-US' };
+      const l = String(lang).toLowerCase().trim();
+      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
+        return { code: 'zh', name: 'Chinese (中文)', speechCode: 'zh-CN' };
+      }
+      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
+        return { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' };
+      }
+      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
+        return { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' };
+      }
+      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
+        return { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' };
+      }
+      return { code: 'en', name: 'English', speechCode: 'en-US' };
     };
 
-    const targetLanguage = resolveLanguageName(language || req.user?.preferredLanguage);
-    console.log(`[RAG Chat Query] Target Language: "${targetLanguage}", Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
+    const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
+    const targetLanguage = targetLangInfo.name;
+    console.log(`[RAG Chat Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
 
     // Retrieve semantic context matching student query from PostgreSQL pgvector
     let chunks = [];
@@ -567,37 +593,43 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       : course.fileText.slice(0, 15000);
 
     const systemPrompt = `You are ARIA, the intelligent AI Tutor for SkillBridge.
-The student is taking the course: "${course.title}" (Active Lesson: "${lessonTitle || 'Overview'}").
-${currentConcept ? `The student is currently listening to this lecture concept: "${currentConcept}".` : ''}
-Target Language: ${targetLanguage}.
+You are actively teaching the course: "${course.title}" (Current Lesson: "${lessonTitle || 'Overview'}").
+${currentConcept ? `The student is currently viewing / listening to this lesson concept: "${currentConcept}".` : ''}
+Selected Teaching Language: ${targetLanguage}.
 
-TEACHING & RESPONSE GUIDELINES:
-1. Provide clear, helpful, educational, and conversational answers in ${targetLanguage}.
-2. Use the provided document context and current lesson concept to give tailored, accurate answers grounded in the uploaded course materials.
-3. If the student asks a general question, historical question, or topic that extends beyond the document context, use your full expert AI knowledge to answer comprehensively in ${targetLanguage}!
-4. Multilingual Tutoring: You fluently support English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), and Bangla (বাংলা). Always respond in ${targetLanguage}!
-5. NEVER refuse to answer or output disclaimer templates.`;
+CRITICAL MULTILINGUAL TUTORING RULES:
+1. Target Teaching Language: You MUST generate your ENTIRE tutoring response in ${targetLanguage} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
+2. Explain like an expert human tutor: Provide simple, intuitive, and conversational explanations with real-world examples. DO NOT read or translate the course material word-for-word, and NEVER state or mention that you are translating the document.
+3. Grounding: Use the provided course context and active lecture concept as the source of truth for all lesson concepts.
+4. Cross-Lingual Understanding: The student may speak or type their question in English (e.g. "What is a loop?") or in ${targetLanguage}. Regardless of what language the question was asked in, understand the query completely and ALWAYS answer fluently in ${targetLanguage}!
+5. Technical Terminology: Keep important technical terms (e.g., React, API, Database, State, Function, Loop, Component) in their commonly used English/universal form alongside the explanation in ${targetLanguage}.
+6. Context Retention: Answer follow-up questions conversationally and maintain continuity across the discussion.
+7. Consistency: Never switch away to English unless ${targetLanguage} is English or for industry-standard technical keywords.
+8. NEVER refuse to answer and NEVER output disclaimer or translation templates.`;
 
-    const userPrompt = `${currentConcept ? `Current Lecture Concept Being Taught:\n${currentConcept}\n\n` : ''}Document context:\n${contextText}\n\nStudent question: ${message}`;
+    const userPrompt = `Retrieved Course Context:\n${contextText}\n\n${currentConcept ? `Active Lesson Concept:\n${currentConcept}\n\n` : ''}Student Question:\n${message}\n\nSelected Response Language:\n${targetLanguage}`;
 
-    console.log(`[LLM Chat Prompt] Final System Prompt:`);
-    console.log(`--------------------------------------------------`);
-    console.log(systemPrompt);
-    console.log(`--------------------------------------------------`);
-    console.log(`[LLM Chat Prompt] Final User Prompt:`);
-    console.log(`--------------------------------------------------`);
-    console.log(userPrompt);
-    console.log(`--------------------------------------------------`);
+    console.log(`[LLM Chat Prompt] Target Language: ${targetLanguage}, History Length: ${Array.isArray(conversationHistory) ? conversationHistory.length : 0}`);
 
     let reply;
     try {
-      reply = await aiService._callLLM(systemPrompt, userPrompt, false);
+      reply = await aiService._callLLM(systemPrompt, userPrompt, false, conversationHistory || []);
     } catch (e) {
       console.warn('AI call in chat failed:', e.message);
-      reply = `Great question! In ${course.title}, understanding this concept builds strong core foundations. Feel free to ask more details!`;
+      if (targetLangInfo.code === 'zh') {
+        reply = `非常好的一点！在 ${course.title} 中，理解这个概念对于掌握核心技能非常重要。如果您有更多疑问，欢迎随时提问！`;
+      } else if (targetLangInfo.code === 'ms') {
+        reply = `Soalan yang bagus! Dalam ${course.title}, memahami konsep ini membina asas yang kukuh. Sila tanya jika anda perlukan penjelasan lanjut!`;
+      } else if (targetLangInfo.code === 'ta') {
+        reply = `அருமையான கேள்வி! ${course.title} பாடத்தில், இந்தக் கருத்தைப் புரிந்து கொள்வது உங்கள் அறிவை வலுவாக்கும். கூடுதல் விவரங்கள் தேவைப்பட்டால் தாராளமாக கேளுங்கள்!`;
+      } else if (targetLangInfo.code === 'bn') {
+        reply = `চমৎকার প্রশ্ন! ${course.title} কোর্সে এই ধারণাটি বোঝা অত্যন্ত জরুরি। আপনার আর কোনো প্রশ্ন থাকলে নির্দ্বিধায় জিজ্ঞাসা করুন!`;
+      } else {
+        reply = `Great question! In ${course.title}, understanding this concept builds strong core foundations. Feel free to ask more details!`;
+      }
     }
 
-    res.json({ reply });
+    res.json({ reply, text: reply, language: targetLangInfo });
   } catch (error) {
     console.error('Tutoring chat failure:', error);
     res.status(500).json({ error: 'Failed to process tutoring chat.' });
@@ -678,9 +710,23 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
       return res.status(400).json({ error: 'Audio file is required for transcription.' });
     }
 
+    const requestedLang = req.body.language || req.query.language || '';
+    const resolveLanguageCode = (lang) => {
+      if (!lang) return null;
+      const l = String(lang).toLowerCase().trim();
+      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) return 'zh';
+      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) return 'ms';
+      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'ta';
+      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'bn';
+      if (l === 'en' || l.includes('english')) return 'en';
+      return null;
+    };
+
+    const targetLangCode = resolveLanguageCode(requestedLang);
+
     const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
     const WHISPER_SERVER_URL = process.env.WHISPER_SERVER_URL || 'http://localhost:9000';
-    console.log(`[Whisper Flow] Transcribing audio file: ${req.file.originalname || 'voice.webm'} (${req.file.size} bytes)...`);
+    console.log(`[Whisper Flow] Transcribing audio file: ${req.file.originalname || 'voice.webm'} (${req.file.size} bytes, targetLang: ${targetLangCode || 'auto'})...`);
 
     // 1. Try Python AI Microservice (faster-whisper on port 8000)
     try {
@@ -689,6 +735,9 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
         filename: req.file.originalname || 'voice.webm',
         contentType: req.file.mimetype || 'audio/webm'
       });
+      if (targetLangCode) {
+        form.append('language', targetLangCode);
+      }
 
       const pyResponse = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/transcribe`, form, {
         headers: form.getHeaders(),
@@ -697,8 +746,9 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
 
       if (pyResponse.data && pyResponse.data.text) {
         const text = pyResponse.data.text.trim();
-        console.log(`[Whisper Flow Python AI Service Result]: "${text}"`);
-        return res.json({ text });
+        const detectedLanguage = pyResponse.data.detected_language || targetLangCode || 'en';
+        console.log(`[Whisper Flow Python AI Service Result]: "${text}" (detected: ${detectedLanguage})`);
+        return res.json({ text, detectedLanguage });
       }
     } catch (pyErr) {
       console.warn(`[Whisper Flow] Python AI Service at ${PYTHON_SERVICE_URL} offline or unreachable: ${pyErr.message}. Trying Docker container...`);
@@ -712,7 +762,8 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
         contentType: req.file.mimetype || 'audio/webm'
       });
 
-      const dockerResponse = await axios.post(`${WHISPER_SERVER_URL}/asr?output=json`, form, {
+      const langQuery = targetLangCode ? `&language=${targetLangCode}` : '';
+      const dockerResponse = await axios.post(`${WHISPER_SERVER_URL}/asr?output=json${langQuery}`, form, {
         headers: form.getHeaders(),
         timeout: 30000
       });
@@ -726,7 +777,7 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
 
       if (transcriptionText) {
         console.log(`[Whisper Flow Docker Result]: "${transcriptionText}"`);
-        return res.json({ text: transcriptionText });
+        return res.json({ text: transcriptionText, detectedLanguage: targetLangCode || 'en' });
       }
     } catch (dockerErr) {
       console.warn(`[Whisper Flow] Docker container at ${WHISPER_SERVER_URL} offline or unreachable: ${dockerErr.message}. Trying primary LLM server...`);
@@ -742,6 +793,9 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
       contentType: req.file.mimetype || 'audio/webm'
     });
     form.append('model', 'whisper-1');
+    if (targetLangCode) {
+      form.append('language', targetLangCode);
+    }
 
     const response = await axios.post(`${OPENAI_BASE_URL}/audio/transcriptions`, form, {
       headers: {
@@ -755,11 +809,12 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
 
     const transcriptionText = response.data?.text || '';
     console.log(`[Whisper Flow OpenAI Result]: "${transcriptionText}"`);
-    res.json({ text: transcriptionText });
+    res.json({ text: transcriptionText, detectedLanguage: targetLangCode || 'en' });
   } catch (error) {
     console.warn('Whisper transcription warning: All Whisper providers unavailable:', error.message);
     res.json({
       text: '',
+      detectedLanguage: 'en',
       error: 'Whisper service is currently unavailable. Please type your message.'
     });
   }

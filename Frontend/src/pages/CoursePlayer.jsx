@@ -9,6 +9,30 @@ const PythonLogo = ({ className = "h-5 w-5" }) => (
   </svg>
 )
 
+const LANGUAGES = [
+  { value: 'en', label: 'English', code: 'EN', native: 'English' },
+  { value: 'zh', label: 'Chinese (中文)', code: 'ZH', native: '中文' },
+  { value: 'ms', label: 'Malay (Bahasa Melayu)', code: 'MS', native: 'Bahasa Melayu' },
+  { value: 'ta', label: 'Tamil (தமிழ்)', code: 'TA', native: 'தமிழ்' },
+  { value: 'bn', label: 'Bangla (বাংলা)', code: 'BN', native: 'বাংলা' },
+];
+
+const SPEECH_LANGUAGES = {
+  en: 'en-US',
+  zh: 'zh-CN',
+  ms: 'ms-MY',
+  ta: 'ta-IN',
+  bn: 'bn-BD',
+};
+
+const GREETINGS = {
+  en: "Hello! I am ARIA, your personal AI tutor. Ask me any question about this lesson and I will explain it for you!",
+  zh: "你好！我是 ARIA，你的个人 AI 导师。你可以问我关于本课的任何问题，我会为你解答！",
+  ms: "Hai! Saya ARIA, tutor AI peribadi anda. Tanya saya sebarang soalan tentang pelajaran ini dan saya akan menerangkannya untuk anda!",
+  ta: "வணக்கம்! நான் ARIA, உங்கள் தனிப்பட்ட AI ஆசிரியர். இந்த பாடம் குறித்த எந்த கேள்வியையும் என்னிடம் கேளுங்கள், நான் உங்களுக்கு விளக்குகிறேன்!",
+  bn: "হ্যালো! আমি ARIA, আপনার ব্যক্তিগত AI টিউটর। এই পাঠ সম্পর্কে যে কোনো প্রশ্ন আমাকে জিজ্ঞাসা করুন, আমি আপনাকে বুঝিয়ে দেব!",
+};
+
 const CoursePlayer = ({
   course,
   initialCompletedLessonId,
@@ -39,6 +63,79 @@ const CoursePlayer = ({
       return { fullName: 'James Lee', email: 'user@skillbridge.com' }
     }
   }, [])
+
+  // Selected teaching language state & persistence
+  const [selectedLanguageCode, setSelectedLanguageCode] = useState(() => {
+    try {
+      const raw = sessionStorage.getItem('skillbridge_language') || localStorage.getItem('skillbridge_language')
+      if (raw) {
+        let code = ''
+        try {
+          const parsed = JSON.parse(raw)
+          code = (parsed?.value || parsed?.code || '').toLowerCase()
+          if (parsed?.name) {
+            const n = parsed.name.toLowerCase()
+            if (n.includes('chinese') || n.includes('中文')) return 'zh'
+            if (n.includes('malay') || n.includes('melayu')) return 'ms'
+            if (n.includes('tamil') || n.includes('தமிழ்')) return 'ta'
+            if (n.includes('bangla') || n.includes('বাংলা') || n.includes('bengali')) return 'bn'
+            if (n.includes('english')) return 'en'
+          }
+        } catch {
+          code = String(raw).toLowerCase()
+        }
+        if (code === 'zh' || code === 'cn') return 'zh'
+        if (code === 'ms' || code === 'my') return 'ms'
+        if (code === 'ta' || code === 'in') return 'ta'
+        if (code === 'bn' || code === 'bd') return 'bn'
+        if (code === 'en') return 'en'
+      }
+      const userRaw = sessionStorage.getItem('skillbridge_user')
+      if (userRaw) {
+        const u = JSON.parse(userRaw)?.user
+        const lang = (u?.preferredLanguage || '').toLowerCase()
+        if (lang === 'zh') return 'zh'
+        if (lang === 'ms') return 'ms'
+        if (lang === 'ta') return 'ta'
+        if (lang === 'bn') return 'bn'
+        if (lang === 'en') return 'en'
+      }
+    } catch (e) { }
+    return 'en'
+  })
+
+  const currentLangObj = useMemo(() => {
+    return LANGUAGES.find(l => l.value === selectedLanguageCode) || LANGUAGES[0]
+  }, [selectedLanguageCode])
+
+  const preferredLanguage = currentLangObj.label
+  const preferredVoiceLangCode = currentLangObj.value
+  const speechRecognitionLang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US'
+
+  const handleLanguageChange = (newLangCode) => {
+    const langObj = LANGUAGES.find(l => l.value === newLangCode) || LANGUAGES[0]
+    setSelectedLanguageCode(langObj.value)
+    try {
+      sessionStorage.setItem('skillbridge_language', JSON.stringify({
+        code: langObj.code,
+        name: langObj.label,
+        value: langObj.value,
+        native: langObj.native
+      }))
+      localStorage.setItem('skillbridge_language', langObj.value)
+    } catch (e) { }
+
+    window.speechSynthesis.cancel()
+    setCurrentSentenceIdx(0)
+    setElapsedSeconds(0)
+
+    setChatMessages((prev) => {
+      if (prev.length <= 1) {
+        return [{ sender: 'aria', text: GREETINGS[langObj.value] || GREETINGS.en }]
+      }
+      return prev
+    })
+  }
 
   // Save last played course ID
   useEffect(() => {
@@ -222,9 +319,9 @@ const CoursePlayer = ({
   // Teaching slide states
   const [currentSentenceIdx, setCurrentSentenceIdx] = useState(0)
 
-  // Chat states (English initial message)
-  const [chatMessages, setChatMessages] = useState([
-    { sender: 'aria', text: "Hello! I am ARIA, your personal AI tutor. Ask me any question about this lesson and I will explain it for you!" }
+  // Chat states initialized with localized greeting
+  const [chatMessages, setChatMessages] = useState(() => [
+    { sender: 'aria', text: GREETINGS[selectedLanguageCode] || GREETINGS.en }
   ])
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
@@ -278,6 +375,8 @@ const CoursePlayer = ({
   const manualRecordingRef = useRef(false)
   const activeLessonRef = useRef(null)
   const sentencesRef = useRef([])
+  const isTranscribingRef = useRef(false)
+  const lastTranscriptionTimeRef = useRef(0)
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -307,48 +406,28 @@ const CoursePlayer = ({
     }
   }, [initialCompletedLessonId, initialAutoPlayNext, initialNextLessonId])
 
-  const preferredLanguage = useMemo(() => {
-    try {
-      const raw = sessionStorage.getItem('skillbridge_language')
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        const code = (parsed?.code || '').toUpperCase()
-        if (code === 'ZH') return 'Chinese (中文)'
-        if (code === 'MS') return 'Malay (Bahasa Melayu)'
-        if (code === 'TA') return 'Tamil (தமிழ்)'
-        if (code === 'BN') return 'Bangla (বাংলা)'
-        if (code === 'EN') return 'English'
-        if (parsed?.name) return parsed.name
-      }
-      const userRaw = sessionStorage.getItem('skillbridge_user')
-      if (userRaw) {
-        const u = JSON.parse(userRaw)?.user
-        const lang = (u?.preferredLanguage || '').toLowerCase()
-        if (lang === 'zh') return 'Chinese (中文)'
-        if (lang === 'ms') return 'Malay (Bahasa Melayu)'
-        if (lang === 'ta') return 'Tamil (தமிழ்)'
-        if (lang === 'bn') return 'Bangla (বাংলা)'
-        if (lang === 'en') return 'English'
-      }
-    } catch (e) { }
-    return 'English'
-  }, [])
-
-  const preferredVoiceLangCode = useMemo(() => {
-    const l = preferredLanguage.toLowerCase()
-    if (l.includes('chinese') || l.includes('zh') || l.includes('中文')) return 'zh'
-    if (l.includes('malay') || l.includes('ms') || l.includes('melayu')) return 'ms'
-    if (l.includes('tamil') || l.includes('ta') || l.includes('தமிழ்')) return 'ta'
-    if (l.includes('bangla') || l.includes('bn') || l.includes('বাংলা') || l.includes('bengali')) return 'bn'
-    return 'en'
-  }, [preferredLanguage])
-
-  const selectVoiceForLanguage = (voices, langPrefix) => {
+  const selectVoiceForLanguage = (voices, langCode) => {
     if (!voices || voices.length === 0) return null
-    let match = voices.find(v => v.lang.toLowerCase().startsWith(langPrefix))
-    if (!match && langPrefix === 'ms') {
-      match = voices.find(v => v.lang.toLowerCase().startsWith('id'))
+    const l = (langCode || 'en').toLowerCase()
+
+    if (l === 'zh') {
+      const v = voices.find(v => v.lang.toLowerCase().startsWith('zh') || v.lang.toLowerCase().includes('chinese') || v.lang.toLowerCase().includes('cmn'))
+      if (v) return v
+    } else if (l === 'ms') {
+      const v = voices.find(v => v.lang.toLowerCase().startsWith('ms') || v.lang.toLowerCase().startsWith('id'))
+      if (v) return v
+    } else if (l === 'ta') {
+      const v = voices.find(v => v.lang.toLowerCase().startsWith('ta') || v.lang.toLowerCase().includes('tamil'))
+      if (v) return v
+    } else if (l === 'bn') {
+      const v = voices.find(v => v.lang.toLowerCase().startsWith('bn') || v.lang.toLowerCase().includes('bengali') || v.lang.toLowerCase().includes('bangla'))
+      if (v) return v
+    } else if (l === 'en') {
+      const v = voices.find(v => v.lang.toLowerCase().startsWith('en'))
+      if (v) return v
     }
+
+    const match = voices.find(v => v.lang.toLowerCase().startsWith(l))
     return match || voices.find(v => v.lang.startsWith('en')) || voices[0]
   }
 
@@ -388,7 +467,7 @@ const CoursePlayer = ({
       window.speechSynthesis.cancel()
       setIsAriaSpeaking(true)
       isAriaSpeakingRef.current = true
-      console.log('[LiveTutor] TTS start: ARIA is speaking response...')
+      console.log(`[LiveTutor] TTS start in ${preferredLanguage}: ARIA is speaking response...`)
       const cleanText = text
         .replace(/###/g, '')
         .replace(/####/g, '')
@@ -396,6 +475,7 @@ const CoursePlayer = ({
         .replace(/- /g, '')
         .replace(/---/g, '')
       const utterance = new SpeechSynthesisUtterance(cleanText)
+      utterance.lang = speechRecognitionLang
       const voices = window.speechSynthesis.getVoices()
       const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode)
       if (matchedVoice) utterance.voice = matchedVoice
@@ -421,17 +501,26 @@ const CoursePlayer = ({
     }
   }
 
-  // Wake-word recognition patterns and helper functions
+  // Wake-word recognition patterns and helper functions supporting 5 languages
   const WAKE_WORDS = [
+    // English
     'hey aria', 'hi aria', 'hello aria', 'ok aria', 'okay aria', 'ask aria', 'aria',
     'hey arya', 'hi arya', 'hello arya', 'ok arya', 'okay arya', 'arya',
-    'hey area', 'hi area', 'area', 'hey ariya', 'hi ariya', 'ariya'
+    'hey area', 'hi area', 'area', 'hey ariya', 'hi ariya', 'ariya',
+    // Chinese
+    '你好 aria', '你好aria', '嗨 aria', '嗨aria', 'aria 你好',
+    // Malay
+    'hai aria', 'halo aria', 'helo aria',
+    // Tamil
+    'வணக்கம் aria', 'ஹாய் aria', 'வணக்கம் ஆரியா', 'ஆரியா',
+    // Bangla
+    'হ্যালো aria', 'নমস্কার aria', 'আরিয়া'
   ]
 
   const containsWakeWord = (text) => {
     if (!text) return false
     const lower = text.trim().toLowerCase()
-    return WAKE_WORDS.some(w => lower.includes(w)) || /\b(hey|hi|hello|ok|okay|ask)?\s*(aria|arya|area|ariya)\b/i.test(text)
+    return WAKE_WORDS.some(w => lower.includes(w)) || /\b(hey|hi|hello|ok|okay|ask|வணக்கம்|ஹாய்|你好|嗨|hai|halo|হ্যালো)?\s*(aria|arya|area|ariya|ஆரியா|আরিয়া)\b/i.test(text)
   }
 
   const extractQuestionFromWakeWord = (text) => {
@@ -573,7 +662,8 @@ const CoursePlayer = ({
         message: finalQuestion,
         lessonTitle: activeLessonRef.current?.title,
         currentConcept: currentConceptText,
-        language: preferredLanguage
+        language: preferredLanguage,
+        conversationHistory: chatMessages.slice(-8)
       })
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
       setChatMessages((prev) => [...prev, { sender: 'aria', text: ariaAnswer }])
@@ -703,19 +793,23 @@ const CoursePlayer = ({
           return
         }
 
+        if (isTranscribingRef.current) return
+        isTranscribingRef.current = true
         vadStateRef.current = 'PROCESSING'
-        setVoiceStatusText('🤖 Transcribing speech via Whisper...')
-        console.log('[LiveTutor] Whisper start: Transcribing audio recording...')
+        setVoiceStatusText(`🤖 Transcribing speech (${currentLangObj.label})...`)
+        console.log(`[LiveTutor] Whisper start: Transcribing audio in ${selectedLanguageCode}...`)
 
         try {
-          const res = await api.transcribeSpeech(audioBlob)
+          const res = await api.transcribeSpeech(audioBlob, selectedLanguageCode)
           const transcription = (res?.text || '').trim()
+          const now = Date.now()
           console.log(`[LiveTutor] Whisper transcription received: "${transcription}"`)
 
-          if (transcription && !isNoiseOrHallucination(transcription)) {
+          if (transcription && (now - lastTranscriptionTimeRef.current > 1200) && !isNoiseOrHallucination(transcription)) {
+            lastTranscriptionTimeRef.current = now
             handleVoiceQuestion(transcription, inConversationModeRef.current)
           } else {
-            console.log('[LiveTutor] No valid speech in Whisper result.')
+            console.log('[LiveTutor] No valid speech in Whisper result or duplicate ignored.')
             vadStateRef.current = isAwakeRef.current ? 'AWAKE' : 'IDLE'
             isAnsweringRef.current = false
           }
@@ -723,6 +817,8 @@ const CoursePlayer = ({
           console.error('[LiveTutor] Whisper transcription failed:', err)
           vadStateRef.current = isAwakeRef.current ? 'AWAKE' : 'IDLE'
           isAnsweringRef.current = false
+        } finally {
+          isTranscribingRef.current = false
         }
       }
 
@@ -749,8 +845,8 @@ const CoursePlayer = ({
     }
 
     let isMounted = true
-    console.log('[LiveTutor] Initializing Always-On background live tutor assistant...')
-    setVoiceStatusText('🎙️ Always-On Mic Active — Say "Hey ARIA" anytime!')
+    console.log(`[LiveTutor] Initializing Always-On assistant in ${preferredLanguage} (${speechRecognitionLang})...`)
+    setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
     setTimeout(() => {
       if (isMounted && vadStateRef.current === 'IDLE' && !isAwakeRef.current && !isAnsweringRef.current) {
         setVoiceStatusText('')
@@ -764,7 +860,7 @@ const CoursePlayer = ({
         const rec = new SpeechRecognition()
         rec.continuous = true
         rec.interimResults = true
-        rec.lang = 'en-US'
+        rec.lang = speechRecognitionLang
 
         rec.onresult = (event) => {
           if (!handsFreeVoiceRef.current) return
@@ -828,7 +924,7 @@ const CoursePlayer = ({
 
         rec.start()
         recognitionRef.current = rec
-        console.log('[LiveTutor] Real-time SpeechRecognition wake-word detector initialized.')
+        console.log(`[LiveTutor] Real-time SpeechRecognition initialized for ${speechRecognitionLang}.`)
       } catch (err) {
         console.warn('[LiveTutor] SpeechRecognition init notice (fallback to VAD + Whisper):', err)
       }
@@ -915,7 +1011,7 @@ const CoursePlayer = ({
                   setPlaying(false)
                 }
 
-                setVoiceStatusText('🎙️ Listening... Speak your question to ARIA')
+                setVoiceStatusText(`🎙️ Listening (${currentLangObj.native})... Speak your question to ARIA`)
                 startRecordingStream(micStreamRef.current)
               }
             } else {
@@ -957,7 +1053,7 @@ const CoursePlayer = ({
       isMounted = false
       cleanupAudioPipeline()
     }
-  }, [handsFreeVoice])
+  }, [handsFreeVoice, speechRecognitionLang])
 
   // Manual Microphone Button Handler (Optional manual trigger)
   const toggleRecording = async () => {
@@ -1382,7 +1478,8 @@ const CoursePlayer = ({
       message: userMsg,
       lessonTitle: activeLessonRef.current?.title,
       currentConcept: currentConceptText,
-      language: preferredLanguage
+      language: preferredLanguage,
+      conversationHistory: chatMessages.slice(-8)
     })
       .then(res => {
         const ariaAnswer = res.text || res.reply || "I'm ready to help with your course questions!"
@@ -1414,50 +1511,8 @@ const CoursePlayer = ({
 
   return (
     <div className="h-screen max-h-screen overflow-hidden bg-[#f4f7fc] text-[#0f172a] select-none flex flex-col font-sans">
-      {/* Top Navbar Header (Commented out as requested)
-      <header className="shrink-0 z-40 w-full border-b border-[#e5eaf2] bg-white px-6 py-2.5 shadow-xs">
-        <div className="flex h-12 w-full items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={onExit}
-              className="flex items-center border-0 bg-transparent p-0 transition hover:opacity-90 cursor-pointer"
-            >
-              <img src={logo} alt="SkillBridge" className="h-8 w-auto object-contain" />
-            </button>
-          </div>
-
-          <div className="relative" ref={dropdownRef}>
-            <button
-              type="button"
-              onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex cursor-pointer items-center justify-center h-9 w-9 rounded-full bg-[#1b253b] text-white font-bold text-xs shadow-sm transition hover:brightness-110"
-            >
-              {userInitials}
-            </button>
-
-            {dropdownOpen && (
-              <div className="absolute right-0 mt-2 w-52 origin-top-right rounded-xl border border-slate-200 bg-white p-2 shadow-lg ring-1 ring-black/5 z-50">
-                <div className="px-3 py-2 border-b border-slate-100 text-xs text-slate-500">
-                  Signed in as <br />
-                  <strong className="text-slate-800 truncate block font-semibold">{user.email || user.fullName}</strong>
-                </div>
-                <button
-                  type="button"
-                  onClick={onExit}
-                  className="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-50 border-0 bg-transparent mt-1"
-                >
-                  Exit Course
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-      */}
-
-      {/* Sub-header Navigation */}
-      <div className="shrink-0 w-full px-4 pt-2 pb-1">
+      {/* Sub-header Navigation with Active Language Selector */}
+      <div className="shrink-0 w-full px-4 pt-2 pb-1 flex items-center justify-between">
         <button
           type="button"
           onClick={onExit}
@@ -1465,6 +1520,25 @@ const CoursePlayer = ({
         >
           <span className="text-base">←</span> Back
         </button>
+
+        {/* Multilingual Teaching Language Switcher */}
+        <div className="flex items-center gap-2">
+          <label className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+            <span>🌐</span>
+            <span className="hidden sm:inline">Teaching Language:</span>
+          </label>
+          <select
+            value={selectedLanguageCode}
+            onChange={(e) => handleLanguageChange(e.target.value)}
+            className="bg-white border border-slate-200/90 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-800 shadow-2xs hover:border-[#ff8c21] focus:outline-none focus:border-[#ff8c21] cursor-pointer transition"
+          >
+            {LANGUAGES.map((lang) => (
+              <option key={lang.value} value={lang.value}>
+                {lang.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Main 3-Column Grid Layout - Enlarged Center Player, Narrowed Left & Right */}

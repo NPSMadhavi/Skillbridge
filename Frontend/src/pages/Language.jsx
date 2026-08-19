@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 
 const languages = [
-  { code: 'EN', name: 'English', native: 'English' },
-  { code: 'ZH', name: 'Chinese', native: '中文' },
-  { code: 'MS', name: 'Malay', native: 'Bahasa Melayu' },
-  { code: 'TA', name: 'Tamil', native: 'தமிழ்' },
-  { code: 'BN', name: 'Bangla', native: 'বাংলা' },
+  { value: 'en', code: 'EN', name: 'English', native: 'English' },
+  { value: 'zh', code: 'ZH', name: 'Chinese (中文)', native: '中文' },
+  { value: 'ms', code: 'MS', name: 'Malay (Bahasa Melayu)', native: 'Bahasa Melayu' },
+  { value: 'ta', code: 'TA', name: 'Tamil (தமிழ்)', native: 'தமிழ்' },
+  { value: 'bn', code: 'BN', name: 'Bangla (বাংলা)', native: 'বাংলা' },
 ]
 
 const stars = [
