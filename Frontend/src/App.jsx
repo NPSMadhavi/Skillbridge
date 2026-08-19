@@ -104,7 +104,7 @@ const CoursePlayerRoute = () => {
   const [accessError, setAccessError] = useState('')
 
   useEffect(() => {
-    if (id) {
+    if (id && !course) {
       setLoading(true)
       setAccessError('')
       api.getCourseDetail(id)
@@ -117,7 +117,7 @@ const CoursePlayerRoute = () => {
         })
         .finally(() => setLoading(false))
     }
-  }, [id])
+  }, [id, course])
 
   if (loading) {
     return (
@@ -153,6 +153,7 @@ const CoursePlayerRoute = () => {
 
   return (
     <CoursePlayer
+      key={`${id}_${location.state?.nextLessonId || 'current'}`}
       course={course}
       initialCompletedLessonId={location.state?.completedLessonId}
       initialAutoPlayNext={location.state?.autoPlayNext}

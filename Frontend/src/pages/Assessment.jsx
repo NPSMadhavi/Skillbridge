@@ -282,10 +282,10 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
           {/* Header & Title Section */}
           <div className="shrink-0 text-center">
             <h1 className="text-xl sm:text-2xl font-bold text-[#1e2e4a] tracking-tight">
-              Course Assessment
+              {isFinalAssessment ? 'Final Course Assessment' : 'Chapter Assessment'}
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-              {course?.title || lessonTitle || 'Full Stack web development'}
+              {lessonTitle && course?.title ? `${course.title} • ${lessonTitle}` : (course?.title || lessonTitle || 'Course Assessment')}
             </p>
 
             {/* Segmented 5-Step Progress Bar */}
@@ -408,7 +408,7 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
                 {!isChecked
                   ? 'Check answer'
                   : index === activeQuestions.length - 1
-                    ? 'Finish Assessment >'
+                    ? (isFinalAssessment ? 'Finish Course Assessment >' : 'Next Chapter >')
                     : 'Next Question >'}
               </button>
             </div>

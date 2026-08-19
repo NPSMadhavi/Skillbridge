@@ -33,6 +33,17 @@ const GREETINGS = {
   bn: "হ্যালো! আমি ARIA, আপনার ব্যক্তিগত AI টিউটর। এই পাঠ সম্পর্কে যে কোনো প্রশ্ন আমাকে জিজ্ঞাসা করুন, আমি আপনাকে বুঝিয়ে দেব!",
 };
 
+const normalizeLanguageCode = (pref) => {
+  if (!pref) return null;
+  const l = String(pref).toLowerCase().trim();
+  if (l === 'zh' || l.includes('chinese') || l.includes('中文') || l === 'cn') return 'zh';
+  if (l === 'ms' || l.includes('malay') || l.includes('melayu') || l === 'my') return 'ms';
+  if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்') || l === 'in') return 'ta';
+  if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা') || l === 'bd') return 'bn';
+  if (l === 'en' || l.includes('english')) return 'en';
+  return null;
+};
+
 const CoursePlayer = ({
   course,
   initialCompletedLessonId,
@@ -64,45 +75,40 @@ const CoursePlayer = ({
     }
   }, [])
 
-  // Selected teaching language state & persistence
+  // Selected teaching language state & persistence - user's preferred language is default
   const [selectedLanguageCode, setSelectedLanguageCode] = useState(() => {
     try {
-      const raw = sessionStorage.getItem('skillbridge_language') || localStorage.getItem('skillbridge_language')
-      if (raw) {
-        let code = ''
-        try {
-          const parsed = JSON.parse(raw)
-          code = (parsed?.value || parsed?.code || '').toLowerCase()
-          if (parsed?.name) {
-            const n = parsed.name.toLowerCase()
-            if (n.includes('chinese') || n.includes('中文')) return 'zh'
-            if (n.includes('malay') || n.includes('melayu')) return 'ms'
-            if (n.includes('tamil') || n.includes('தமிழ்')) return 'ta'
-            if (n.includes('bangla') || n.includes('বাংলা') || n.includes('bengali')) return 'bn'
-            if (n.includes('english')) return 'en'
-          }
-        } catch {
-          code = String(raw).toLowerCase()
-        }
-        if (code === 'zh' || code === 'cn') return 'zh'
-        if (code === 'ms' || code === 'my') return 'ms'
-        if (code === 'ta' || code === 'in') return 'ta'
-        if (code === 'bn' || code === 'bd') return 'bn'
-        if (code === 'en') return 'en'
-      }
+      // 1. FIRST PRIORITY: Student's registered preferred language
       const userRaw = sessionStorage.getItem('skillbridge_user')
       if (userRaw) {
         const u = JSON.parse(userRaw)?.user
-        const lang = (u?.preferredLanguage || '').toLowerCase()
-        if (lang === 'zh') return 'zh'
-        if (lang === 'ms') return 'ms'
-        if (lang === 'ta') return 'ta'
-        if (lang === 'bn') return 'bn'
-        if (lang === 'en') return 'en'
+        const code = normalizeLanguageCode(u?.preferredLanguage || u?.preferLanguage)
+        if (code) return code
+      }
+
+      // 2. SECOND PRIORITY: Saved language from Language Selection page or storage
+      const raw = sessionStorage.getItem('skillbridge_language') || localStorage.getItem('skillbridge_language')
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw)
+          const code = normalizeLanguageCode(parsed?.value || parsed?.code || parsed?.name)
+          if (code) return code
+        } catch {
+          const code = normalizeLanguageCode(raw)
+          if (code) return code
+        }
       }
     } catch (e) { }
     return 'en'
   })
+
+  // Synchronize teaching language if user profile preferredLanguage is set or changes
+  useEffect(() => {
+    const code = normalizeLanguageCode(user?.preferredLanguage || user?.preferLanguage)
+    if (code && code !== selectedLanguageCode) {
+      setSelectedLanguageCode(code)
+    }
+  }, [user?.preferredLanguage, user?.preferLanguage])
 
   const currentLangObj = useMemo(() => {
     return LANGUAGES.find(l => l.value === selectedLanguageCode) || LANGUAGES[0]
@@ -1310,9 +1316,11 @@ const CoursePlayer = ({
     setCurrentSentenceIdx(0)
   }, [activeLessonId])
 
+  const handleTakeChapterAssessmentRef = useRef(null);
+
   // Speech TTS handler with clean speech text
   useEffect(() => {
-    if (playing && !muted && sentences.length > 0) {
+    if (playing && !muted && !loadingExplanation && sentences.length > 0) {
       let isCancelled = false;
 
       const speak = (idx) => {
@@ -1323,17 +1331,12 @@ const CoursePlayer = ({
           if (activeLesson?.id) {
             markLessonCompleted(activeLesson.id);
           }
-          const currentIdx = course?.lessons?.findIndex(l => l.id === activeLesson?.id) ?? -1;
-          const nextLesson = course?.lessons?.[currentIdx + 1];
-          if (nextLesson) {
-            console.log('[CoursePlayer] Auto-advancing to next lesson:', nextLesson.title);
-            setTimeout(() => {
-              setActiveLessonId(nextLesson.id);
-              setCurrentSentenceIdx(0);
-              setElapsedSeconds(0);
-              setPlaying(true);
-            }, 1000);
-          }
+          console.log('[CoursePlayer] Chapter lecture completed! Navigating to chapter assessment...');
+          setTimeout(() => {
+            if (handleTakeChapterAssessmentRef.current) {
+              handleTakeChapterAssessmentRef.current();
+            }
+          }, 800);
           return;
         }
 
@@ -1426,6 +1429,7 @@ const CoursePlayer = ({
   if (!course) return null
 
   const handleTakeChapterAssessment = async () => {
+    if (!activeLesson) return
     setLoadingQuiz(true)
     markLessonCompleted(activeLesson.id)
 
@@ -1443,6 +1447,8 @@ const CoursePlayer = ({
       onAssessment?.(course, activeLesson, null, nextLessonId)
     }
   }
+
+  handleTakeChapterAssessmentRef.current = handleTakeChapterAssessment
 
   const handleSendChat = (e) => {
     e.preventDefault()

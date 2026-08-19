@@ -46,6 +46,9 @@ export const passwordLogin = async (req, res) => {
         id: user.id,
         fullName: user.fullName,
         email: user.email,
+        finNumber: user.finNumber,
+        preferredLanguage: user.preferredLanguage,
+        country: user.country,
         role: user.role,
       },
     });
@@ -110,6 +113,9 @@ export const faceLogin = async (req, res) => {
         id: user.id,
         fullName: user.fullName,
         email: user.email,
+        finNumber: user.finNumber,
+        preferredLanguage: user.preferredLanguage,
+        country: user.country,
         role: user.role,
       },
     });

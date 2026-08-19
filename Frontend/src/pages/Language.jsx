@@ -78,18 +78,16 @@ const Language = ({ onContinue }) => {
                 key={language.code}
                 type="button"
                 onClick={() => setSelected(language.code)}
-                className={`group animate-rise-in flex min-h-[88px] cursor-pointer items-center gap-4 rounded-2xl border px-5 py-4 text-left transition duration-300 ${
-                  active
+                className={`group animate-rise-in flex min-h-[88px] cursor-pointer items-center gap-4 rounded-2xl border px-5 py-4 text-left transition duration-300 ${active
                     ? 'border-[#ff8c21]/70 bg-[rgba(255,140,33,0.12)] shadow-[0_0_0_1px_rgba(255,140,33,0.25),0_12px_30px_rgba(0,0,0,0.25)]'
                     : 'border-white/10 bg-[rgba(22,42,78,0.45)] hover:border-white/25 hover:bg-[rgba(30,54,96,0.55)]'
-                }`}
+                  }`}
                 style={{ animationDelay: `${Math.min(index, 11) * 0.04}s` }}
                 aria-pressed={active}
               >
                 <span
-                  className={`font-display text-[28px] font-bold tracking-wide transition ${
-                    active ? 'text-[#ff8c21]/80' : 'text-[#4d6488]'
-                  }`}
+                  className={`font-display text-[28px] font-bold tracking-wide transition ${active ? 'text-[#ff8c21]/80' : 'text-[#4d6488]'
+                    }`}
                 >
                   {language.code}
                 </span>
@@ -98,9 +96,8 @@ const Language = ({ onContinue }) => {
                     {language.name}
                   </span>
                   <span
-                    className={`truncate text-[14px] ${
-                      active ? 'text-[#ffb347]/90' : 'text-[#8fa3c0]'
-                    }`}
+                    className={`truncate text-[14px] ${active ? 'text-[#ffb347]/90' : 'text-[#8fa3c0]'
+                      }`}
                     dir="auto"
                   >
                     {language.native}
