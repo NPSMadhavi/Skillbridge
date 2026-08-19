@@ -33,11 +33,31 @@ const UsersList = () => {
   const [userProgressData, setUserProgressData] = useState(null)
   const [loadingProgress, setLoadingProgress] = useState(false)
 
+  const [deletingUser, setDeletingUser] = useState(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+
   // Course assignment state
   const [allCourses, setAllCourses] = useState([])
   const [assignModalUser, setAssignModalUser] = useState(null)
   const [assignedCourseSelection, setAssignedCourseSelection] = useState([])
   const [savingAssignments, setSavingAssignments] = useState(false)
+
+  const handleConfirmDelete = async () => {
+    if (!deletingUser) return
+    setIsDeleting(true)
+    try {
+      await api.deleteUser(deletingUser.id)
+      setUsers(prev => prev.filter(u => u.id !== deletingUser.id))
+      if (selectedUser?.id === deletingUser.id) {
+        setSelectedUser(null)
+      }
+      setDeletingUser(null)
+    } catch (err) {
+      alert(err.message || 'Failed to delete user.')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
 
   const handleOpenAssign = (user) => {
     setAssignModalUser(user)
@@ -450,6 +470,16 @@ const UsersList = () => {
                               <path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
                             </svg>
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingUser(user)}
+                            className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-muted hover:border-danger/40 hover:text-danger hover:bg-danger/10 transition"
+                            title="Delete user"
+                          >
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -564,13 +594,87 @@ const UsersList = () => {
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  const u = selectedUser;
+                  setSelectedUser(null);
+                  setDeletingUser(u);
+                }}
+                className="cursor-pointer rounded-xl border border-danger/40 bg-danger/10 px-4 py-2.5 text-xs sm:text-sm font-semibold text-danger hover:bg-danger/20 transition inline-flex items-center gap-1.5"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                Delete User
+              </button>
               <button
                 type="button"
                 onClick={() => setSelectedUser(null)}
                 className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-sm font-semibold text-fg hover:border-sky/40 transition"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {deletingUser && createPortal(
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-modal-title"
+        >
+          <div className="relative w-full max-w-md rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in">
+            <div className="flex items-center gap-3.5 border-b border-line pb-4">
+              <div className="h-10 w-10 rounded-2xl bg-danger/15 text-danger flex items-center justify-center shrink-0 border border-danger/30">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <div>
+                <h2 id="delete-modal-title" className="font-display text-lg font-bold text-fg">
+                  Delete User Account
+                </h2>
+                <p className="text-xs text-muted">This action is permanent and cannot be undone.</p>
+              </div>
+            </div>
+
+            <div className="mt-4 p-3.5 rounded-2xl bg-ink/60 border border-line/60 space-y-1.5 text-sm">
+              <p className="text-fg font-semibold">{deletingUser.fullName}</p>
+              <p className="text-xs text-muted font-mono">{deletingUser.email} • FIN: {deletingUser.finNumber}</p>
+              <p className="text-xs text-danger pt-1">
+                ⚠️ All course assignments and progress records for this student will also be removed.
+              </p>
+            </div>
+
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeletingUser(null)}
+                className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-xs sm:text-sm font-semibold text-fg hover:border-sky/40 transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="cursor-pointer rounded-xl bg-danger px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition hover:bg-danger/90 disabled:opacity-50 border-0 flex items-center gap-1.5"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Yes, Delete User'
+                )}
               </button>
             </div>
           </div>

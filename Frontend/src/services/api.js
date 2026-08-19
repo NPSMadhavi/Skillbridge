@@ -104,6 +104,19 @@ export const api = {
     return res.json();
   },
 
+  // Admin Delete User
+  deleteUser: async (id) => {
+    const res = await fetch(`${API_BASE_URL}/admin/users/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete user.');
+    }
+    return res.json();
+  },
+
   // Admin Toggle User Status
   toggleUserStatus: async (id) => {
     const res = await fetch(`${API_BASE_URL}/admin/users/${id}/status`, {

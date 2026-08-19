@@ -539,3 +539,30 @@ export const getUserProgress = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch user course progress.' });
   }
 };
+
+export const deleteUser = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const user = await prisma.user.findUnique({ where: { id } });
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Delete related records first
+    await prisma.userCourseAssignment.deleteMany({ where: { userId: id } });
+    await prisma.courseProgress.deleteMany({ where: { userId: id } });
+
+    // Delete user record
+    await prisma.user.delete({ where: { id } });
+
+    res.json({
+      message: 'User deleted successfully.',
+      userId: id,
+    });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ error: error.message || 'An error occurred while deleting user.' });
+  }
+};
+
