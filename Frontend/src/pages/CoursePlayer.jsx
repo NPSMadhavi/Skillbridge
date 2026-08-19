@@ -335,7 +335,7 @@ const CoursePlayer = ({
   // Video / Slide player controls states
   const playerRef = useRef(null)
   const [muted, setMuted] = useState(false)
-  const [playbackRate, setPlaybackRate] = useState(1.25)
+  const [playbackRate, setPlaybackRate] = useState(1)
   const [showCC, setShowCC] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
 
