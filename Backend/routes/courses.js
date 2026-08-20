@@ -427,7 +427,9 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
     res.json({
       progress: Math.min(100, Math.max(0, progressRecord.progress || 0)),
       completed: progressRecord.completed,
-      completedLessonIds: uniqueLessonIds
+      completedLessonIds: uniqueLessonIds,
+      updatedAt: progressRecord.updatedAt,
+      startedAt: progressRecord.startedAt
     });
   } catch (error) {
     console.error('Failed to fetch course progress:', error);

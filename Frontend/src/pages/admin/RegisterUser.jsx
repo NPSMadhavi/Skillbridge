@@ -170,10 +170,45 @@ const RegisterUser = () => {
     })
   }
 
-  const handleBlur = (key) => {
+  const handleBlur = async (key) => {
     setTouched((prev) => ({ ...prev, [key]: true }))
     const err = validateField(key, form[key])
-    setErrors((prev) => ({ ...prev, [key]: err || undefined }))
+    if (err) {
+      setErrors((prev) => ({ ...prev, [key]: err }))
+      return
+    }
+
+    if (key === 'finNumber' && form.finNumber && form.finNumber.trim().length === 9) {
+      try {
+        const check = await api.checkUserExists({ finNumber: form.finNumber.trim().toUpperCase() })
+        if (check.exists && check.field === 'finNumber') {
+          setErrors((prev) => ({
+            ...prev,
+            finNumber: check.message || 'User already exists with this FIN number.',
+          }))
+          return
+        }
+      } catch (e) {
+        console.warn('FIN existence check warning:', e)
+      }
+    }
+
+    if (key === 'email' && form.email && form.email.includes('@')) {
+      try {
+        const check = await api.checkUserExists({ email: form.email.trim().toLowerCase() })
+        if (check.exists && check.field === 'email') {
+          setErrors((prev) => ({
+            ...prev,
+            email: check.message || 'User already exists with this email address.',
+          }))
+          return
+        }
+      } catch (e) {
+        console.warn('Email existence check warning:', e)
+      }
+    }
+
+    setErrors((prev) => ({ ...prev, [key]: undefined }))
   }
 
   const openCamera = async () => {
@@ -209,27 +244,53 @@ const RegisterUser = () => {
     }
 
     setCapturing(true)
+    setCameraError('')
     const capturedImages = []
     
-    for (let i = 0; i < 3; i++) {
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      const canvas = document.createElement('canvas')
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      const ctx = canvas.getContext('2d')
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-      capturedImages.push(canvas.toDataURL('image/jpeg', 0.86))
-    }
+    try {
+      for (let i = 0; i < 3; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        const canvas = document.createElement('canvas')
+        canvas.width = video.videoWidth
+        canvas.height = video.videoHeight
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+        capturedImages.push(canvas.toDataURL('image/jpeg', 0.86))
+      }
 
-    setForm((prev) => ({
-      ...prev,
-      faceIdData: capturedImages[0],
-      faceIdDataList: capturedImages,
-    }))
-    setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-    setCapturing(false)
-    closeCamera()
-    setToast({ type: 'ok', text: 'Face ID data captured successfully.' })
+      // Check if face is already recognized and registered to an existing user
+      try {
+        const check = await api.checkUserExists({ faceIdData: capturedImages[0] })
+        if (check.exists && check.field === 'faceIdData') {
+          setCapturing(false)
+          setCameraError(`⚠️ ${check.message || 'User already exists with this Face ID.'}`)
+          setErrors((prev) => ({
+            ...prev,
+            faceIdData: check.message || 'User already exists with this Face ID.',
+          }))
+          setToast({
+            type: 'error',
+            text: check.message || 'User already exists with this Face ID.',
+          })
+          return
+        }
+      } catch (checkErr) {
+        console.warn('Face duplicate check warning:', checkErr)
+      }
+
+      setForm((prev) => ({
+        ...prev,
+        faceIdData: capturedImages[0],
+        faceIdDataList: capturedImages,
+      }))
+      setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+      setCapturing(false)
+      closeCamera()
+      setToast({ type: 'ok', text: 'Face ID verified and captured successfully.' })
+    } catch (err) {
+      setCapturing(false)
+      setCameraError('Failed to capture face biometric data. Please try again.')
+    }
   }
 
   const handleSubmit = async (event) => {
@@ -259,7 +320,7 @@ const RegisterUser = () => {
     try {
       const res = await api.registerUser({
         fullName: form.fullName.trim(),
-        finNumber: form.finNumber.trim(),
+        finNumber: form.finNumber.trim().toUpperCase(),
         preferLanguage: form.preferLanguage,
         email: form.email.trim().toLowerCase(),
         password: form.password,
@@ -271,7 +332,17 @@ const RegisterUser = () => {
       setErrors({})
       setToast({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
     } catch (err) {
-      setToast({ type: 'error', text: err.message || 'Registration failed.' })
+      const errorMsg = err.message || 'Registration failed.'
+      if (errorMsg.toLowerCase().includes('fin number')) {
+        setErrors((prev) => ({ ...prev, finNumber: errorMsg }))
+        finNumberRef.current?.focus()
+      } else if (errorMsg.toLowerCase().includes('face')) {
+        setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
+      } else if (errorMsg.toLowerCase().includes('email')) {
+        setErrors((prev) => ({ ...prev, email: errorMsg }))
+        emailRef.current?.focus()
+      }
+      setToast({ type: 'error', text: errorMsg })
     } finally {
       setSaving(false)
     }
@@ -600,10 +671,10 @@ const RegisterUser = () => {
               <button
                 type="button"
                 onClick={captureFace}
-                disabled={!!cameraError || capturing}
+                disabled={capturing}
                 className="flex-1 cursor-pointer rounded-xl border-0 bg-sky px-3 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {capturing ? 'Saving…' : 'Capture'}
+                {capturing ? 'Verifying & Saving…' : cameraError ? 'Try Again' : 'Capture'}
               </button>
             </div>
           </div>

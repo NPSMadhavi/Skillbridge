@@ -1,10 +1,10 @@
 import { useMemo, useState, useEffect } from 'react'
-import html2canvas from 'html2canvas'
-import { jsPDF } from 'jspdf'
 import logo from '../assets/SkillBridge_AI.png'
+import { downloadCertificateDirect } from '../utils/certificatePdf'
 
 const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = false }) => {
   const [downloading, setDownloading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState(null)
 
   // Retrieve user full name from sessionStorage
   const user = useMemo(() => {
@@ -16,64 +16,46 @@ const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = 
     }
   }, [])
 
-  const firstName = useMemo(() => {
-    if (user.fullName) {
-      return user.fullName.trim().split(' ')[0]
-    }
-    return user.firstName || 'James'
+  const fullName = useMemo(() => {
+    return user?.fullName || user?.name || (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'James Joseph')
   }, [user])
 
+  const firstName = useMemo(() => {
+    if (fullName) {
+      return fullName.trim().split(' ')[0]
+    }
+    return user.firstName || 'James'
+  }, [fullName, user])
+
   const formattedDate = useMemo(() => {
+    if (course?.date) return course.date
+    if (course?.updatedAt) {
+      const d = new Date(course.updatedAt)
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      }
+    }
     const today = new Date()
     return today.toLocaleDateString('en-US', {
       month: 'long',
       day: 'numeric',
       year: 'numeric'
     })
-  }, [])
+  }, [course?.date, course?.updatedAt])
 
   const handleDownloadPDF = async () => {
-    const element = document.getElementById('printable-certificate')
-    if (!element) return
-
     setDownloading(true)
+    setErrorMsg(null)
     try {
-      // Convert certificate DOM element to high-res canvas
-      const canvas = await html2canvas(element, {
-        scale: 3,
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#ffffff',
-        logging: false
+      await downloadCertificateDirect({
+        course: course || { title: 'SkillBridge Course' },
+        user,
+        scorePercentage,
+        formattedDate
       })
-
-      const imgData = canvas.toDataURL('image/png', 1.0)
-
-      // Create landscape A4 PDF document
-      const pdf = new jsPDF({
-        orientation: 'landscape',
-        unit: 'mm',
-        format: 'a4'
-      })
-
-      const pdfWidth = pdf.internal.pageSize.getWidth()   // ~297 mm
-      const pdfHeight = pdf.internal.pageSize.getHeight() // ~210 mm
-
-      const margin = 10 // 10mm margin
-      const contentWidth = pdfWidth - (margin * 2)
-      const contentHeight = (canvas.height * contentWidth) / canvas.width
-
-      const yOffset = Math.max(margin, (pdfHeight - contentHeight) / 2)
-
-      pdf.addImage(imgData, 'PNG', margin, yOffset, contentWidth, contentHeight)
-
-      const courseTitle = course?.title || 'SkillBridge_Course'
-      const fileName = `${courseTitle.replace(/[^a-zA-Z0-9]/g, '_')}_Certificate.pdf`
-
-      // Instantly save/download the PDF file directly to user's device!
-      pdf.save(fileName)
     } catch (err) {
       console.error('Direct PDF download error:', err)
+      setErrorMsg('Failed to download certificate PDF. Please try again.')
     } finally {
       setDownloading(false)
     }
@@ -120,7 +102,7 @@ const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = 
           Congratulations, {firstName} !
         </h1>
         <p className="text-xs text-slate-500 font-medium mt-0.5">
-          You&apos;ve successfully completed the course with a score of {scorePercentage}%
+          You&apos;ve successfully completed all course modules and requirements.
         </p>
       </div>
 
@@ -150,12 +132,12 @@ const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = 
 
         {/* Full Name */}
         <h2 className="text-xl sm:text-2xl font-bold text-[#1e2e4a] tracking-tight my-1">
-          {user.fullName || 'James Joseph'}
+          {fullName}
         </h2>
 
-        {/* Course Completion Subtext & Score */}
+        {/* Course Completion Subtext */}
         <p className="text-xs text-slate-500 font-medium mb-2">
-          Has successfully completed the course with a score of <span className="font-extrabold text-[#ff7a00] text-sm">{scorePercentage}%</span>
+          Has successfully completed the official course curriculum
         </p>
 
         {/* Course Name Pill */}

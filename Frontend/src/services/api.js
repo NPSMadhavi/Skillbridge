@@ -51,6 +51,20 @@ export const api = {
     return res.json();
   },
 
+  // Check if user already exists (by FIN, email, or Face)
+  checkUserExists: async ({ finNumber, email, faceIdData }) => {
+    const res = await fetch(`${API_BASE_URL}/admin/check-user`, {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify({ finNumber, email, faceIdData }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to check user existence.');
+    }
+    return res.json();
+  },
+
   // Admin User List
   getUsers: async () => {
     const res = await fetch(`${API_BASE_URL}/admin/users`, {

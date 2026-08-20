@@ -180,10 +180,18 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
         if (isLastLesson) {
           const passThreshold = 3 // 60% passing mark
           if (score >= passThreshold) {
+            const completedNow = new Date()
+            const formattedNow = completedNow.toLocaleDateString('en-US', {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric'
+            })
+
             if (course?.id) {
               const allLessonIds = course.lessons ? course.lessons.map(l => String(l.id)) : ['1', '2', '3', '4', '5'];
               try {
                 localStorage.setItem(`skillbridge_progress_${userId}_${course.id}`, JSON.stringify(allLessonIds));
+                localStorage.setItem(`skillbridge_completed_date_${userId}_${course.id}`, completedNow.toISOString());
               } catch (e) { }
               api.saveCourseProgress(course.id, {
                 completed: true,
@@ -213,9 +221,16 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
 
   // If user completed final assessment and passed, render official Certificate of Completion!
   if (showCertificate) {
+    const savedDateStr = course?.id
+      ? localStorage.getItem(`skillbridge_completed_date_${userId}_${course.id}`)
+      : null
+    const certDate = savedDateStr
+      ? new Date(savedDateStr).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+      : new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+
     return (
       <Certificate
-        course={course}
+        course={{ ...course, date: certDate }}
         scorePercentage={scorePercentage}
         onBackHome={() => {
           handleFinish()

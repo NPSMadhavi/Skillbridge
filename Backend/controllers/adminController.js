@@ -36,6 +36,68 @@ export const login = async (req, res) => {
   }
 };
 
+export const checkUserExists = async (req, res) => {
+  const { finNumber, email, faceIdData } = req.body;
+
+  try {
+    if (finNumber) {
+      const existingFin = await prisma.user.findUnique({
+        where: { finNumber: finNumber.trim().toUpperCase() },
+        select: { id: true, fullName: true, finNumber: true, email: true },
+      });
+      if (existingFin) {
+        return res.json({
+          exists: true,
+          field: 'finNumber',
+          message: `User already exists with this FIN number (${existingFin.fullName}).`,
+          user: existingFin,
+        });
+      }
+    }
+
+    if (email) {
+      const existingEmail = await prisma.user.findUnique({
+        where: { email: email.trim().toLowerCase() },
+        select: { id: true, fullName: true, finNumber: true, email: true },
+      });
+      if (existingEmail) {
+        return res.json({
+          exists: true,
+          field: 'email',
+          message: `User already exists with this email address (${existingEmail.fullName}).`,
+          user: existingEmail,
+        });
+      }
+    }
+
+    if (faceIdData) {
+      const candidates = await prisma.user.findMany({
+        where: { faceEmbedding: { not: null } },
+        select: { id: true, fullName: true, finNumber: true, faceEmbedding: true },
+      });
+
+      if (candidates.length > 0) {
+        const queryFace = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
+        const verifyResult = await pythonService.verifyFace(queryFace, candidates);
+        if (verifyResult && verifyResult.matched && verifyResult.id) {
+          const matchedUser = candidates.find((c) => c.id === verifyResult.id);
+          return res.json({
+            exists: true,
+            field: 'faceIdData',
+            message: `User already exists with this face (${matchedUser?.fullName || 'Registered User'} - FIN: ${matchedUser?.finNumber || 'N/A'}).`,
+            user: matchedUser,
+          });
+        }
+      }
+    }
+
+    return res.json({ exists: false });
+  } catch (error) {
+    console.error('Check user exists error:', error);
+    res.status(500).json({ error: 'Error checking user duplication.' });
+  }
+};
+
 export const registerUser = async (req, res) => {
   const { fullName, finNumber, preferLanguage, email, password, faceIdData, country, assignedCourseIds } = req.body;
 
@@ -45,21 +107,42 @@ export const registerUser = async (req, res) => {
 
   try {
     // Check if user already exists (by email or FIN)
-    const existingEmail = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    const existingEmail = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
     if (existingEmail) {
-      return res.status(400).json({ error: 'A user with this email is already registered.' });
+      return res.status(400).json({ error: 'User already exists with this email address.' });
     }
 
-    const existingFin = await prisma.user.findUnique({ where: { finNumber } });
+    const existingFin = await prisma.user.findUnique({ where: { finNumber: finNumber.trim().toUpperCase() } });
     if (existingFin) {
-      return res.status(400).json({ error: 'A user with this FIN number is already registered.' });
+      return res.status(400).json({ error: 'User already exists with this FIN number.' });
     }
 
     let faceEmbedding = null;
     if (faceIdData) {
       try {
+        // Check if face is already registered to any existing user
+        const candidates = await prisma.user.findMany({
+          where: { faceEmbedding: { not: null } },
+          select: { id: true, fullName: true, finNumber: true, faceEmbedding: true },
+        });
+
+        if (candidates.length > 0) {
+          const queryFace = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
+          const verifyResult = await pythonService.verifyFace(queryFace, candidates);
+          if (verifyResult && verifyResult.matched && verifyResult.id) {
+            const matchedUser = candidates.find((c) => c.id === verifyResult.id);
+            const matchedName = matchedUser?.fullName ? ` (${matchedUser.fullName} - FIN: ${matchedUser.finNumber})` : '';
+            return res.status(400).json({
+              error: `User already exists with this face${matchedName}.`
+            });
+          }
+        }
+
         faceEmbedding = await pythonService.registerFace(faceIdData);
       } catch (err) {
+        if (err.message && err.message.includes('already exists')) {
+          return res.status(400).json({ error: err.message });
+        }
         return res.status(422).json({ error: `Face biometric vector enrollment failed: ${err.message}` });
       }
     }

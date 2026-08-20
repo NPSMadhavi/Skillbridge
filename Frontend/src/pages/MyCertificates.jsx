@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { courses as defaultCourses } from '../data/courses'
 import { api } from '../services/api'
 import Certificate from './Certificate'
+import { downloadCertificateDirect } from '../utils/certificatePdf'
 
 const MyCertificates = () => {
   const navigate = useNavigate()
   const [selectedCourseForCert, setSelectedCourseForCert] = useState(null)
   const [userCourses, setUserCourses] = useState([])
   const [loading, setLoading] = useState(true)
+  const [downloadingCourseId, setDownloadingCourseId] = useState(null)
 
   // Retrieve logged-in user from sessionStorage
   const user = useMemo(() => {
@@ -19,6 +21,10 @@ const MyCertificates = () => {
       return { fullName: 'James Joseph', email: 'james@skillbridge.com' }
     }
   }, [])
+
+  const userDisplayName = useMemo(() => {
+    return user?.fullName || user?.name || (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'James Joseph')
+  }, [user])
 
   // Load ONLY actually completed courses and their verified progress
   useEffect(() => {
@@ -56,15 +62,23 @@ const MyCertificates = () => {
         for (const courseItem of allCourses) {
           let isCompleted = false
           let userScore = 80
-          const lessonsCount = courseItem.lessons?.length || 5
+          let completedAtDate = null
 
-          try {
-            const prog = await api.getCourseProgress(courseItem.id)
-            if (prog && (prog.completed || (prog.completedLessonIds && prog.completedLessonIds.length >= lessonsCount))) {
-              isCompleted = true
-              userScore = prog.progress || 80
-            }
-          } catch (err) { }
+          // Only query backend API for custom courses that the student was assigned to
+          if (courseItem.isCustom) {
+            try {
+              const prog = await api.getCourseProgress(courseItem.id)
+              if (prog && (prog.completed || (prog.completedLessonIds && prog.completedLessonIds.length >= lessonsCount))) {
+                isCompleted = true
+                userScore = prog.progress || 80
+                if (prog.updatedAt) {
+                  completedAtDate = new Date(prog.updatedAt)
+                } else if (prog.startedAt) {
+                  completedAtDate = new Date(prog.startedAt)
+                }
+              }
+            } catch (err) { }
+          }
 
           if (!isCompleted) {
             try {
@@ -74,17 +88,30 @@ const MyCertificates = () => {
                 const parsed = JSON.parse(saved)
                 if (Array.isArray(parsed) && parsed.length >= lessonsCount) {
                   isCompleted = true
+                  const storedDate = localStorage.getItem(`skillbridge_completed_date_${userId}_${courseItem.id}`) ||
+                    localStorage.getItem(`skillbridge_completed_date_${courseItem.id}`)
+                  if (storedDate) {
+                    completedAtDate = new Date(storedDate)
+                  }
                 }
               }
             } catch (e) { }
           }
 
           if (isCompleted) {
+            const finalDateObj = (completedAtDate && !isNaN(completedAtDate.getTime())) ? completedAtDate : new Date()
+            const formattedCompletedDate = finalDateObj.toLocaleDateString('en-US', {
+              month: 'long',
+              day: 'numeric',
+              year: 'numeric'
+            })
+
             completedList.push({
               ...courseItem,
               completed: true,
               score: userScore > 0 ? userScore : 80,
-              date: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+              date: formattedCompletedDate,
+              rawCompletedAt: finalDateObj.toISOString()
             })
           }
         }
@@ -106,7 +133,24 @@ const MyCertificates = () => {
     return () => { isMounted = false }
   }, [user])
 
-  const [autoDownload, setAutoDownload] = useState(false)
+  const handleDownloadDirect = async (courseItem) => {
+    if (downloadingCourseId) return
+    setDownloadingCourseId(courseItem.id)
+    try {
+      await downloadCertificateDirect({
+        course: courseItem,
+        user,
+        scorePercentage: courseItem.score || 80,
+        formattedDate: courseItem.date
+      })
+    } catch (err) {
+      console.error('Direct certificate download failed:', err)
+      // Fallback: open certificate view
+      setSelectedCourseForCert(courseItem)
+    } finally {
+      setDownloadingCourseId(null)
+    }
+  }
 
   if (selectedCourseForCert) {
     return (
@@ -115,9 +159,8 @@ const MyCertificates = () => {
         scorePercentage={selectedCourseForCert.score || 80}
         onBackHome={() => {
           setSelectedCourseForCert(null)
-          setAutoDownload(false)
         }}
-        autoDownload={autoDownload}
+        autoDownload={false}
       />
     )
   }
@@ -127,35 +170,37 @@ const MyCertificates = () => {
       <div className="max-w-6xl mx-auto">
 
         {/* Top Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 border-b border-slate-200/80 pb-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 pb-4 border-b border-slate-200">
           <div>
             <button
               type="button"
               onClick={() => navigate('/')}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 hover:text-[#ff7a00] cursor-pointer border-0 bg-transparent p-0 transition mb-1.5"
+              className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-500 hover:text-orange cursor-pointer border-0 bg-transparent p-0 transition mb-1"
             >
               <span>←</span> Back to Dashboard
             </button>
-            <h1 className="text-2xl sm:text-3xl font-bold text-[#1e2e4a] tracking-tight flex items-center gap-2.5">
-              <div className="h-9 w-9 rounded-xl bg-orange-50 text-[#ff7a00] flex items-center justify-center shrink-0 border border-orange-100">
-                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+              <div className="h-7 w-7 rounded-lg bg-orange-50 text-orange flex items-center justify-center shrink-0 border border-orange-100">
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
                 </svg>
               </div>
               My Certificates
             </h1>
-            <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
+            <p className="text-xs text-slate-500 font-medium mt-0.5">
               View and download your official SkillBridge AI course completion certificates anytime.
             </p>
           </div>
 
-          <div className="bg-white border border-slate-200/80 rounded-2xl px-4 py-2.5 flex items-center gap-3 shadow-2xs self-start sm:self-auto">
-            <div className="h-10 w-10 rounded-full bg-[#ff7a00] text-white font-extrabold text-sm grid place-items-center uppercase shadow-2xs">
-              {user.fullName ? user.fullName.charAt(0) : 'P'}
+          <div className="bg-white border border-slate-200 rounded-xl px-3 py-1.5 flex items-center gap-2.5 shadow-2xs self-start sm:self-auto">
+            <div className="h-7 w-7 rounded-full bg-orange text-white font-bold text-xs grid place-items-center uppercase shrink-0">
+              {userDisplayName ? userDisplayName.charAt(0) : 'S'}
             </div>
             <div>
-              <p className="text-xs font-bold text-[#1e2e4a]">{user.fullName || 'Praveen Patchipala'}</p>
-              <p className="text-[11px] text-slate-400 font-medium">{userCourses.length} Verified Certificates</p>
+              <p className="text-xs font-semibold text-slate-800 leading-tight">{userDisplayName}</p>
+              <p className="text-[10px] text-slate-400 font-medium">
+                {userCourses.length} {userCourses.length === 1 ? 'Verified Certificate' : 'Verified Certificates'}
+              </p>
             </div>
           </div>
         </div>
@@ -187,76 +232,68 @@ const MyCertificates = () => {
             </button>
           </div>
         ) : (
-          /* Certificates Cards Grid */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          /* Compact & Clean Certificates Grid */
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {userCourses.map((courseItem) => (
               <div
                 key={courseItem.id}
-                className="bg-white rounded-3xl border border-slate-200/80 p-5 sm:p-6 flex flex-col justify-between shadow-2xs hover:shadow-md transition duration-200 relative overflow-hidden group"
+                className="bg-white rounded-2xl border border-slate-200/80 p-4 flex flex-col justify-between shadow-[0_4px_16px_rgba(15,23,42,0.06)] hover:shadow-[0_10px_25px_rgba(15,23,42,0.1)] hover:border-slate-300 hover:-translate-y-0.5 transition-all duration-200 group"
               >
-                {/* Top Accent Ribbon */}
-                <div className="absolute top-0 right-0 bg-[#ff7a00] text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-wider">
-                  VERIFIED CERTIFICATE
-                </div>
-
                 <div>
-                  {/* Seal Badge Icon & Course Tag */}
-                  <div className="flex items-center gap-3.5 mb-4">
-                    <div className="h-12 w-12 rounded-2xl bg-orange-50/90 border border-orange-100 flex items-center justify-center shrink-0">
-                      <svg className="h-6 w-6 text-[#ff7a00]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4a5 5 0 005 5h4a5 5 0 005-5V3M5 3h14M5 3H3v4a3 3 0 003 3h.5M19 3h2v4a3 3 0 01-3 3h-.5M12 12v4m-4 4h8" />
+                  {/* Status & Date */}
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-md">
+                      <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
-                    </div>
-                    <div>
-                      <span className="text-[11px] font-bold text-[#15803d] bg-[#e6f4ea] border border-[#b7e4c7] px-2.5 py-0.5 rounded-lg inline-block">
-                        ✓ {courseItem.score}% Passed
-                      </span>
-                      <p className="text-xs text-slate-400 font-medium mt-1">
-                        Issued on {courseItem.date}
-                      </p>
-                    </div>
+                      Completed
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-medium truncate">
+                      {courseItem.date}
+                    </span>
                   </div>
 
                   {/* Course Title */}
-                  <h3 className="text-base font-bold text-[#1e2e4a] leading-snug line-clamp-2 group-hover:text-[#ff7a00] transition">
+                  <h3 className="text-xs sm:text-sm font-bold text-slate-800 leading-snug line-clamp-2 group-hover:text-orange transition">
                     {courseItem.title}
                   </h3>
-
-                  <p className="text-xs text-slate-400 font-medium mt-1">
-                    Instructor: {courseItem.instructor}
-                  </p>
                 </div>
 
-                {/* Bottom Action Buttons */}
-                <div className="flex items-center gap-2.5 pt-5 mt-4 border-t border-slate-100">
+                {/* Compact Actions */}
+                <div className="flex items-center gap-2 pt-3 mt-3 border-t border-slate-100">
                   <button
                     type="button"
                     onClick={() => {
-                      setAutoDownload(false)
                       setSelectedCourseForCert(courseItem)
                     }}
-                    className="flex-1 py-2.5 px-4 rounded-xl bg-[#ff7a00] hover:bg-[#ea6c00] text-white font-bold text-xs border-0 cursor-pointer transition shadow-2xs text-center flex items-center justify-center gap-2"
+                    className="flex-1 py-1.5 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium text-[11px] transition cursor-pointer flex items-center justify-center gap-1"
                   >
-                    <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                    <svg className="h-3 w-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                       <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                     </svg>
-                    <span>View Certificate</span>
+                    <span>View</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => {
-                      setAutoDownload(true)
-                      setSelectedCourseForCert(courseItem)
-                    }}
-                    className="py-2.5 px-4 rounded-xl bg-[#f1f5f9] hover:bg-slate-200 text-slate-700 font-bold text-xs border-0 cursor-pointer transition text-center flex items-center justify-center gap-2"
-                    title="Download PDF"
+                    disabled={downloadingCourseId === courseItem.id}
+                    onClick={() => handleDownloadDirect(courseItem)}
+                    className="flex-1 py-1.5 px-2.5 rounded-lg bg-orange hover:brightness-105 text-white font-medium text-[11px] border-0 transition cursor-pointer flex items-center justify-center gap-1 shadow-2xs disabled:opacity-60 disabled:cursor-wait"
                   >
-                    <svg className="h-4 w-4 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    <span>Download</span>
+                    {downloadingCourseId === courseItem.id ? (
+                      <>
+                        <div className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg className="h-3 w-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>Download</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>

@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../../services/api'
 
 const AdminCourses = () => {
   const [coursesList, setCoursesList] = useState([])
   const [loading, setLoading] = useState(true)
-  
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(6)
+
   // Users and assignment modal state
   const [allUsers, setAllUsers] = useState([])
   const [assignModalCourse, setAssignModalCourse] = useState(null)
@@ -21,7 +25,7 @@ const AdminCourses = () => {
   const [category, setCategory] = useState('Data Science')
   const [level, setLevel] = useState('Intermediate')
   const [selectedFile, setSelectedFile] = useState(null)
-  
+
   // Generation loader state
   const [isGenerating, setIsGenerating] = useState(false)
   const [stage, setStage] = useState('') // uploading | parsing | structuring | finalizing
@@ -36,6 +40,19 @@ const AdminCourses = () => {
 
   // View details modal state
   const [viewingCourse, setViewingCourse] = useState(null)
+
+  const totalPages = Math.max(1, Math.ceil(coursesList.length / pageSize))
+
+  const paginatedCourses = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return coursesList.slice(start, start + pageSize)
+  }, [coursesList, currentPage, pageSize])
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [totalPages, currentPage])
 
   const fetchCourses = async () => {
     try {
@@ -271,81 +288,146 @@ const AdminCourses = () => {
           </button>
         </div>
       ) : (
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {coursesList.map((course) => {
-            const curriculumData = typeof course.curriculum === 'string'
-              ? JSON.parse(course.curriculum)
-              : (course.curriculum || {})
-            const lessons = curriculumData.lessons || []
-            const lessonCount = lessons.length || (curriculumData.curriculum?.length ? curriculumData.curriculum.length * 4 : 5)
-            const assignedCount = course.assignedUsersCount || 0
+        <div className="space-y-6">
+          <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {paginatedCourses.map((course) => {
+              const curriculumData = typeof course.curriculum === 'string'
+                ? JSON.parse(course.curriculum)
+                : (course.curriculum || {})
+              const lessons = curriculumData.lessons || []
+              const lessonCount = lessons.length || (curriculumData.curriculum?.length ? curriculumData.curriculum.length * 4 : 5)
 
-            return (
-              <article
-                key={course.id}
-                className="flex flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-sm transition hover:shadow-md"
-              >
-                <div className="h-32 bg-gradient-to-br from-navy to-sky relative p-5 flex flex-col justify-end text-white">
-                  <div className="absolute top-4 right-4 flex items-center gap-1.5">
-                    <span className="rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
-                      {lessonCount} Lessons
-                    </span>
-                    <span className="rounded-full bg-orange/90 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
-                      👥 {assignedCount}
-                    </span>
+              return (
+                <article
+                  key={course.id}
+                  className="flex flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-sm transition hover:shadow-md"
+                >
+                  <div className="h-32 bg-gradient-to-br from-navy to-sky relative p-5 flex flex-col justify-end text-white">
+                    <div className="absolute top-4 right-4 flex items-center gap-1.5">
+                      <span className="rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
+                        {lessonCount} Modules
+                      </span>
+                    </div>
+                    <h3 className="font-display text-base font-bold truncate">{course.title}</h3>
                   </div>
-                  <span className="absolute top-4 left-4 rounded-full bg-orange/80 backdrop-blur-md px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider">
-                    {course.fileName === 'Manual Entry' ? 'Manual' : 'RAG PDF'}
-                  </span>
-                  <h3 className="font-display text-base font-bold truncate">{course.title}</h3>
-                </div>
-                <div className="p-5 flex flex-col flex-1">
-                  <p className="text-xs text-muted leading-relaxed flex-1 line-clamp-3">
-                    {course.description}
-                  </p>
-                  <div className="mt-4 border-t border-line pt-4 flex items-center justify-between text-xs">
-                    <span className="text-muted truncate max-w-[110px]" title={course.fileName}>
-                      📄 {course.fileName}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenAssignLearners(course)}
-                        className="cursor-pointer rounded-lg bg-orange/10 text-orange hover:bg-orange/20 px-2.5 py-1 text-xs font-semibold border border-orange/30 transition"
-                        title="Assign learners to this course"
-                      >
-                        Assign
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setViewingCourse(course)}
-                        className="cursor-pointer rounded-lg bg-ink px-2.5 py-1 text-xs font-semibold text-sky hover:border-sky/40 border border-line transition"
-                        title="View curriculum details"
-                      >
-                        View
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleOpenEdit(course)}
-                        className="cursor-pointer rounded-lg bg-ink px-2.5 py-1 text-xs font-semibold text-fg hover:border-sky/40 border border-line transition"
-                        title="Edit course title & description"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(course.id)}
-                        className="cursor-pointer font-bold text-danger hover:underline border-0 bg-transparent p-0 text-xs ml-1"
-                        title="Delete course"
-                      >
-                        Delete
-                      </button>
+                  <div className="p-5 flex flex-col flex-1">
+                    <p className="text-xs text-muted leading-relaxed flex-1 line-clamp-3">
+                      {course.description}
+                    </p>
+                    <div className="mt-4 border-t border-line pt-4 flex items-center justify-between text-xs">
+                      <span className="text-muted truncate max-w-[110px]" title={course.fileName}>
+                        📄 {course.fileName}
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAssignLearners(course)}
+                          className="cursor-pointer rounded-lg bg-orange/10 text-orange hover:bg-orange/20 px-2.5 py-1 text-xs font-semibold border border-orange/30 transition"
+                          title="Assign learners to this course"
+                        >
+                          Assign
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setViewingCourse(course)}
+                          className="cursor-pointer rounded-lg bg-ink px-2.5 py-1 text-xs font-semibold text-sky hover:border-sky/40 border border-line transition"
+                          title="View curriculum details"
+                        >
+                          View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(course)}
+                          className="cursor-pointer rounded-lg bg-ink px-2.5 py-1 text-xs font-semibold text-fg hover:border-sky/40 border border-line transition"
+                          title="Edit course title & description"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(course.id)}
+                          className="cursor-pointer font-bold text-danger hover:underline border-0 bg-transparent p-0 text-xs ml-1"
+                          title="Delete course"
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   </div>
+                </article>
+              )
+            })}
+          </div>
+
+          {coursesList.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-line bg-panel px-4 py-3 sm:px-5 text-xs text-muted shadow-xs">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span>Courses per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="rounded-lg border border-line bg-ink px-2 py-1 text-xs text-fg font-medium outline-none focus:border-sky cursor-pointer"
+                >
+                  <option value={6}>6</option>
+                  <option value={9}>9</option>
+                  <option value={12}>12</option>
+                  <option value={24}>24</option>
+                </select>
+                <span className="hidden sm:inline text-muted/60">|</span>
+                <span>
+                  Showing <span className="font-semibold text-fg">{coursesList.length > 0 ? (currentPage - 1) * pageSize + 1 : 0}</span> to{' '}
+                  <span className="font-semibold text-fg">{Math.min(currentPage * pageSize, coursesList.length)}</span> of{' '}
+                  <span className="font-semibold text-fg">{coursesList.length}</span> course{coursesList.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-line bg-ink text-xs font-semibold text-fg hover:border-sky/40 hover:text-sky transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  ← Prev
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                    .map((p, idx, arr) => {
+                      const prev = arr[idx - 1]
+                      const showEllipsis = prev && p - prev > 1
+
+                      return (
+                        <span key={p} className="flex items-center">
+                          {showEllipsis && <span className="px-1 text-muted">…</span>}
+                          <button
+                            type="button"
+                            onClick={() => setCurrentPage(p)}
+                            className={`h-7 min-w-7 px-2 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                              currentPage === p
+                                ? 'bg-sky text-white shadow-xs font-bold'
+                                : 'border border-line bg-ink text-muted hover:text-fg hover:border-sky/30'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        </span>
+                      )
+                    })}
                 </div>
-              </article>
-            )
-          })}
+
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-line bg-ink text-xs font-semibold text-fg hover:border-sky/40 hover:text-sky transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -372,18 +454,16 @@ const AdminCourses = () => {
                   <button
                     type="button"
                     onClick={() => setCreateMode('pdf')}
-                    className={`py-2 rounded-lg transition border-0 cursor-pointer ${
-                      createMode === 'pdf' ? 'bg-orange text-white shadow-sm' : 'text-muted hover:text-fg'
-                    }`}
+                    className={`py-2 rounded-lg transition border-0 cursor-pointer ${createMode === 'pdf' ? 'bg-orange text-white shadow-sm' : 'text-muted hover:text-fg'
+                      }`}
                   >
                     📄 PDF Upload (RAG)
                   </button>
                   <button
                     type="button"
                     onClick={() => setCreateMode('manual')}
-                    className={`py-2 rounded-lg transition border-0 cursor-pointer ${
-                      createMode === 'manual' ? 'bg-orange text-white shadow-sm' : 'text-muted hover:text-fg'
-                    }`}
+                    className={`py-2 rounded-lg transition border-0 cursor-pointer ${createMode === 'manual' ? 'bg-orange text-white shadow-sm' : 'text-muted hover:text-fg'
+                      }`}
                   >
                     ✏️ Manual Creation
                   </button>
@@ -732,16 +812,15 @@ const AdminCourses = () => {
                     <div
                       key={u.id}
                       onClick={() => toggleUserSelection(u.id)}
-                      className={`flex items-center gap-3 p-3 rounded-2xl border transition cursor-pointer select-none ${
-                        isChecked
+                      className={`flex items-center gap-3 p-3 rounded-2xl border transition cursor-pointer select-none ${isChecked
                           ? 'border-sky/60 bg-sky/5 shadow-sm'
                           : 'border-line bg-ink/40 hover:border-line/90'
-                      }`}
+                        }`}
                     >
                       <input
                         type="checkbox"
                         checked={isChecked}
-                        onChange={() => {}}
+                        onChange={() => { }}
                         className="h-4 w-4 rounded text-sky focus:ring-sky/40 border-line"
                       />
                       {u.faceIdData && u.faceIdData.startsWith('data:image/') ? (

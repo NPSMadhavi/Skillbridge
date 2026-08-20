@@ -266,6 +266,9 @@ const UsersList = () => {
   }, [])
 
 
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(10)
+
   const filtered = useMemo(() => {
     return users.filter((user) => {
       const q = query.trim().toLowerCase()
@@ -279,6 +282,24 @@ const UsersList = () => {
       )
     })
   }, [users, query])
+
+  // Reset to first page when search query or page size changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [query, pageSize])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+
+  const paginatedUsers = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return filtered.slice(start, start + pageSize)
+  }, [filtered, currentPage, pageSize])
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [totalPages, currentPage])
 
   return (
     <div className="animate-rise-in space-y-6">
@@ -330,22 +351,21 @@ const UsersList = () => {
             <p className="mt-1 text-sm text-muted">Try another search or register a new user.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[1020px] text-left text-sm">
-              <thead className="bg-ink/70">
-                <tr className="border-b border-line text-xs tracking-[0.08em] text-muted uppercase">
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[220px]">User</th>
-                  <th className="px-4 py-3 font-semibold min-w-[120px]">FIN</th>
-                  <th className="px-4 py-3 font-semibold min-w-[100px]">Language</th>
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[160px] whitespace-nowrap">Assigned Courses</th>
-                  <th className="px-4 py-3 font-semibold min-w-[100px]">Status</th>
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[100px]">Face ID</th>
-                  <th className="px-4 py-3 font-semibold sm:px-5 min-w-[160px] whitespace-nowrap">Course Progress</th>
-                  <th className="px-4 py-3 font-semibold text-right sm:px-5 min-w-[150px] whitespace-nowrap">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((user) => {
+          <div>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[1020px] text-left text-sm">
+                <thead className="bg-ink/70">
+                  <tr className="border-b border-line text-xs tracking-[0.08em] text-muted uppercase">
+                    <th className="px-4 py-3 font-semibold sm:px-5 min-w-[220px]">User</th>
+                    <th className="px-4 py-3 font-semibold min-w-[120px]">FIN</th>
+                    <th className="px-4 py-3 font-semibold min-w-[100px]">Language</th>
+                    <th className="px-4 py-3 font-semibold sm:px-5 min-w-[160px] whitespace-nowrap">Assigned Courses</th>
+                    <th className="px-4 py-3 font-semibold min-w-[100px]">Status</th>
+                    <th className="px-4 py-3 font-semibold text-right sm:px-5 min-w-[150px] whitespace-nowrap">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedUsers.map((user) => {
                   const assignedCount = user.assignedCourseIds?.length || user.assignedCourses?.length || 0;
                   return (
                     <tr key={user.id} className="border-b border-line/70 last:border-0 hover:bg-ink/40">
@@ -398,34 +418,6 @@ const UsersList = () => {
                           {user.status === 'ACTIVE' ? 'Active' : 'Inactive'}
                         </button>
                       </td>
-                      <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-[0.7rem] font-bold uppercase ${
-                            user.faceIdData ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'
-                          }`}
-                        >
-                          {user.faceIdData ? 'Enrolled' : 'Missing'}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4 sm:px-5 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenProgress(user)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-ink px-2.5 py-1 text-xs font-semibold text-sky hover:border-sky/40 transition cursor-pointer"
-                          title="View course progress"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 012-2h2a2 2 0 012 2v6m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14" />
-                          </svg>
-                          <span>
-                            {user.progressSummary && user.progressSummary.completedCourses > 0
-                              ? `✓ ${user.progressSummary.completedCourses} Done`
-                              : user.progressSummary && user.progressSummary.inProgressCourses > 0
-                              ? `⚙ ${user.progressSummary.inProgressCourses} Active`
-                              : 'Progress'}
-                          </span>
-                        </button>
-                      </td>
                       <td className="px-4 py-4 text-right sm:px-5 whitespace-nowrap">
                         <div className="inline-flex items-center justify-end gap-1.5">
                           <button
@@ -436,16 +428,6 @@ const UsersList = () => {
                           >
                             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                            </svg>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenProgress(user)}
-                            className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-sky hover:bg-sky/10 hover:border-sky/40 transition"
-                            title="View course progress"
-                          >
-                            <svg className="h-4.5 w-4.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                             </svg>
                           </button>
                           <button
@@ -487,10 +469,80 @@ const UsersList = () => {
                 })}
               </tbody>
             </table>
-
           </div>
-        )}
-      </section>
+
+          {filtered.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-line px-4 py-3 sm:px-5 text-xs text-muted">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span>Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value))}
+                  className="rounded-lg border border-line bg-ink px-2 py-1 text-xs text-fg font-medium outline-none focus:border-sky cursor-pointer"
+                >
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                  <option value={20}>20</option>
+                  <option value={50}>50</option>
+                </select>
+                <span className="hidden sm:inline text-muted/60">|</span>
+                <span>
+                  Showing <span className="font-semibold text-fg">{filtered.length > 0 ? (currentPage - 1) * pageSize + 1 : 0}</span> to{' '}
+                  <span className="font-semibold text-fg">{Math.min(currentPage * pageSize, filtered.length)}</span> of{' '}
+                  <span className="font-semibold text-fg">{filtered.length}</span> user{filtered.length === 1 ? '' : 's'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-line bg-ink text-xs font-semibold text-fg hover:border-sky/40 hover:text-sky transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  ← Prev
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                    .map((p, idx, arr) => {
+                      const prev = arr[idx - 1]
+                      const showEllipsis = prev && p - prev > 1
+
+                      return (
+                        <span key={p} className="flex items-center">
+                          {showEllipsis && <span className="px-1 text-muted">…</span>}
+                          <button
+                            type="button"
+                            onClick={() => setCurrentPage(p)}
+                            className={`h-7 min-w-7 px-2 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                              currentPage === p
+                                ? 'bg-sky text-white shadow-xs font-bold'
+                                : 'border border-line bg-ink text-muted hover:text-fg hover:border-sky/30'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        </span>
+                      )
+                    })}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-line bg-ink text-xs font-semibold text-fg hover:border-sky/40 hover:text-sky transition disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
 
       {selectedUser && createPortal(
         <div

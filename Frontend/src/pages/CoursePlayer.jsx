@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { api } from '../services/api'
 import logo from '../assets/SkillBridge_AI.png'
+import ariaAvatarImg from '../assets/avatar.png'
 
 const PythonLogo = ({ className = "h-5 w-5" }) => (
   <svg className={className} viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -368,6 +369,25 @@ const CoursePlayer = ({
   const handsFreeVoiceRef = useRef(true)
   const playingRef = useRef(false)
   const micStreamRef = useRef(null)
+
+  // Scroll references for transcripts / chalkboard notes
+  const activeSentenceRef = useRef(null)
+  const notesScrollRef = useRef(null)
+
+  // Auto-scroll transcripts smoothly as the teacher explains
+  useEffect(() => {
+    if (activeSentenceRef.current) {
+      activeSentenceRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest'
+      })
+    } else if (notesScrollRef.current) {
+      notesScrollRef.current.scrollTo({
+        top: notesScrollRef.current.scrollHeight,
+        behavior: 'smooth'
+      })
+    }
+  }, [currentSentenceIdx])
   const audioContextRef = useRef(null)
   const analyserRef = useRef(null)
   const mediaRecorderRef = useRef(null)
@@ -1126,25 +1146,30 @@ const CoursePlayer = ({
     }
   }, [course, activeLessonId, preferredLanguage])
 
+  // Complete Unicode regex matching all emojis
+  const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F000}-\u{1F02F}]|[\u{1F0A0}-\u{1F0FF}]|[\u{1F100}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{1FA70}-\u{1FAFF}]|[\u{2300}-\u{23FF}]|[\u{2B50}]|[\u{FE00}-\u{FE0F}]/gu
+
   // Helper to clean raw text for Speech TTS (removes hashtags, markdown symbols, and emojis that TTS speaks out loud)
   const cleanForSpeech = (text) => {
     if (!text) return ''
     return text
+      .replace(EMOJI_REGEX, '')
       .replace(/#+/g, '')
       .replace(/[\*_~`]+/g, '')
       .replace(/^[-\*•➔>+:\s]+/, '')
-      .replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '')
       .replace(/\s+/g, ' ')
       .trim()
   }
 
-  // Helper to clean raw text for Chalkboard Display (removes #, ###, markdown symbols)
+  // Helper to clean raw text for Chalkboard Display (removes emojis, #, ###, markdown symbols)
   const cleanForBoard = (text) => {
     if (!text) return ''
     return text
+      .replace(EMOJI_REGEX, '')
       .replace(/^[#*•➔>+-\s]+/, '')
       .replace(/#+/g, '')
       .replace(/[\*_~`]+/g, '')
+      .replace(/^[•\-\*\s]+/, '')
       .trim()
   }
 
@@ -1685,33 +1710,42 @@ const CoursePlayer = ({
                 <div className="md:col-span-7 bg-[#0b1329] rounded-2xl border-2 border-slate-700/80 p-4 sm:p-5 h-full flex flex-col justify-between overflow-hidden shadow-2xl relative">
                   {/* Blackboard Top Header */}
                   <div className="shrink-0 flex items-center justify-between border-b border-slate-700/80 pb-2 mb-2">
-                    <span className="text-[11px] font-bold text-[#ff8c21] tracking-wider uppercase flex items-center gap-1.5 truncate max-w-[70%]">
-                      <span>📌</span> {activeLesson?.title || 'Lecture Concepts'}
+                    <span className="text-[11px] font-bold text-[#ff8c21] tracking-wider uppercase flex items-center gap-2 truncate max-w-[70%]">
+                      <span className="h-2 w-2 rounded-full bg-[#ff8c21] shrink-0 animate-pulse" />
+                      <span className="truncate">{activeLesson?.title || 'Lecture Concepts'}</span>
                     </span>
                     <span className="text-[10px] font-bold text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
                       NOTE {currentSentenceIdx + 1} / {sentences.length}
                     </span>
                   </div>
 
-                  {/* Interactive Board Notes List (Teacher explaining concept by concept) */}
-                  <div className="flex-1 min-h-0 space-y-2.5 overflow-y-auto pr-1 text-left my-1 no-scrollbar">
-                    {sentences.slice(0, currentSentenceIdx + 1).map((sentenceText, sIdx) => {
+                  {/* Interactive Board Notes List (Teacher explaining concept by concept with auto-scroll) */}
+                  <div
+                    ref={notesScrollRef}
+                    className="flex-1 min-h-0 space-y-2.5 overflow-y-auto pr-1 text-left my-1 scroll-smooth no-scrollbar"
+                  >
+                    {sentences.map((sentenceText, sIdx) => {
                       const isCurrent = sIdx === currentSentenceIdx
+                      const isPast = sIdx < currentSentenceIdx
                       const cleanedText = cleanForBoard(sentenceText)
 
                       return (
                         <div
                           key={sIdx}
-                          className={`p-3 rounded-xl transition-all duration-300 ${isCurrent
-                            ? 'bg-[#ff8c21]/15 border-l-4 border-[#ff8c21] shadow-xs text-white'
-                            : 'bg-slate-800/40 border-l-2 border-slate-600/50 text-slate-300 opacity-75'
-                            }`}
+                          ref={isCurrent ? activeSentenceRef : null}
+                          className={`p-3 rounded-xl transition-all duration-300 ${
+                            isCurrent
+                              ? 'bg-[#ff8c21]/20 border-l-4 border-[#ff8c21] shadow-xs text-white scale-[1.01]'
+                              : isPast
+                              ? 'bg-slate-800/50 border-l-2 border-slate-600/60 text-slate-300'
+                              : 'bg-slate-800/20 border-l-2 border-slate-700/30 text-slate-400 opacity-60'
+                          }`}
                         >
-                          <p className="text-xs sm:text-sm leading-relaxed font-medium flex items-start gap-2">
-                            <span className={`text-xs mt-0.5 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
-                              {isCurrent ? '▶' : '•'}
+                          <p className="text-xs sm:text-sm leading-relaxed font-medium flex items-start gap-2.5">
+                            <span className={`text-[10px] mt-1 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
+                              {isCurrent ? '●' : '○'}
                             </span>
-                            <span>{cleanedText}</span>
+                            <span className="flex-1">{cleanedText}</span>
                           </p>
                         </div>
                       )
@@ -1722,9 +1756,9 @@ const CoursePlayer = ({
                 {/* Right ARIA Tutor Circle Avatar */}
                 <div className="md:col-span-5 h-full flex flex-col items-center justify-center text-center border-t md:border-t-0 md:border-l border-white/10 pt-3 md:pt-0 md:pl-3">
                   <div className={`relative flex items-center justify-center h-32 w-32 sm:h-36 sm:w-36 rounded-full border-4 ${playing ? 'border-[#ff8c21] bg-[#ff8c21]/10 avatar-active' : 'border-slate-700 bg-slate-800/80'} transition-all duration-300 shadow-xl`}>
-                    <span className="text-6xl">🤖</span>
+                    <span className="text-6xl select-none">🤖</span>
                     {playing && (
-                      <span className="absolute -inset-1.5 rounded-full border border-[#ff8c21]/50 animate-ping opacity-40" />
+                      <span className="absolute -inset-1.5 rounded-full border border-[#ff8c21]/50 animate-ping opacity-40 pointer-events-none" />
                     )}
                   </div>
 

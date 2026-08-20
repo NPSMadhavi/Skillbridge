@@ -2,6 +2,7 @@ import express from 'express';
 import {
   login,
   registerUser,
+  checkUserExists,
   getUsers,
   getStats,
   updateUser,
@@ -21,6 +22,7 @@ router.post('/login', login);
 
 // Protected admin routes
 router.post('/register', authenticateToken, requireRole(['ADMIN']), registerUser);
+router.post('/check-user', authenticateToken, requireRole(['ADMIN']), checkUserExists);
 router.get('/users', authenticateToken, requireRole(['ADMIN']), getUsers);
 router.get('/users/:id/progress', authenticateToken, requireRole(['ADMIN']), getUserProgress);
 router.get('/stats', authenticateToken, requireRole(['ADMIN']), getStats);
