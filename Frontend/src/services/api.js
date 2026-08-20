@@ -404,4 +404,17 @@ export const api = {
     }
     return res.json();
   },
+
+  chatWithTutor: async (courseId, chatData) => {
+    const res = await fetch(`${API_BASE_URL}/courses/${courseId}/chat`, {
+      method: 'POST',
+      headers: getHeaders(false),
+      body: JSON.stringify(chatData),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to chat with AI Tutor.');
+    }
+    return res.json();
+  },
 };

@@ -138,7 +138,7 @@ class AIService {
    * Generates a complete Course structure (curriculum, lessons, and quiz) from parsed PDF text.
    */
   async generateCourse(fileName, fullText) {
-    const textSlice = fullText.slice(0, 15000); 
+    const textSlice = fullText.slice(0, 15000);
 
     const systemPrompt = `You are an expert curriculum designer. 
 Analyze the provided document text and structure it into a complete, professional interactive course based ONLY on the actual concepts, chapters, and topics present in the document.
