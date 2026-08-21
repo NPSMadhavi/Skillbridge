@@ -150,7 +150,6 @@ Start the local Vite development server:
 npm run dev
 ```
 
-The application will be accessible at: `http://localhost:5173` (or the port specified by Vite).
 
 ### Production Build
 
@@ -168,19 +167,6 @@ npm run preview
 
 ---
 
-## 🔑 Seeded Login Credentials
-
-Use the pre-configured credentials below to test both roles:
-
-### 🛡️ Admin Portal (`/admin`)
-- **Email**: `admin@skillbridge.com`
-- **Password**: `AdminPassword123`
-
-### 🎓 Student Portal (`/login`)
-- **Email**: `premsai@netopsys.in`
-- **Password**: `Password123`
-
----
 
 ## ⚙️ Configuration & API Integration
 
