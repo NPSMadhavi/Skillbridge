@@ -17,7 +17,7 @@ import MyCertificates from './pages/MyCertificates'
 import { courses as defaultCourses } from './data/courses'
 import { api } from './services/api'
 
-// Helper to map DB RAG course
+// Helper to map DB AI course
 const mapRagCourse = (dbCourse) => {
   const curriculumData = typeof dbCourse.curriculum === 'string'
     ? JSON.parse(dbCourse.curriculum)
@@ -37,7 +37,7 @@ const mapRagCourse = (dbCourse) => {
     modules: curriculumData.curriculum?.length || 0,
     price: 0,
     free: true,
-    badge: 'RAG',
+    badge: 'AI Course',
     badgeTone: 'orange',
     tags: ['AI-POWERED'],
     image: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #60a5fa 100%)',

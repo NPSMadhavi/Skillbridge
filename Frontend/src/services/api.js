@@ -263,7 +263,7 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.error || 'Failed to publish RAG course.');
+      throw new Error(err.error || 'Failed to publish course.');
     }
     return res.json();
   },
@@ -282,10 +282,16 @@ export const api = {
   },
 
   adminUpdateCourse: async (id, courseData) => {
+    const isFormData = courseData instanceof FormData;
+    const headers = getHeaders(true);
+    if (isFormData) {
+      delete headers['Content-Type'];
+    }
+
     const res = await fetch(`${API_BASE_URL}/courses/${id}`, {
       method: 'PUT',
-      headers: getHeaders(true),
-      body: JSON.stringify(courseData),
+      headers,
+      body: isFormData ? courseData : JSON.stringify(courseData),
     });
     if (!res.ok) {
       const err = await res.json();

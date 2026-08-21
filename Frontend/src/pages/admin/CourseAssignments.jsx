@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
+import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 
 const CourseAssignments = () => {
@@ -22,12 +23,15 @@ const CourseAssignments = () => {
   const [savingCourseAssignments, setSavingCourseAssignments] = useState(false)
   const [loadingCourseUsers, setLoadingCourseUsers] = useState(false)
 
-  // Toast feedback
-  const [toast, setToast] = useState(null)
-
+  // Toast feedback helper
   const showToast = (type, text) => {
-    setToast({ type, text })
-    setTimeout(() => setToast(null), 4000)
+    if (type === 'ok' || type === 'success') {
+      toast.success(text)
+    } else if (type === 'warn' || type === 'warning') {
+      toast.warn(text)
+    } else {
+      toast.error(text)
+    }
   }
 
   const fetchData = async () => {
@@ -490,7 +494,7 @@ const CourseAssignments = () => {
                                 {c.title}
                               </h4>
                               <span className="text-[10px] px-2 py-0.5 rounded-full bg-ink border border-line text-muted uppercase font-bold shrink-0">
-                                {c.fileName === 'Manual Entry' ? 'Manual' : 'RAG PDF'}
+                                {c.fileName ? (c.fileName.includes('.') ? c.fileName.split('.').pop().toUpperCase() : 'DOC') : 'COURSE'}
                               </span>
                             </div>
                             <p className="text-[11px] text-muted line-clamp-1 mt-0.5">
@@ -610,7 +614,7 @@ const CourseAssignments = () => {
                   <div className="min-w-0 pr-3">
                     <div className="flex items-center gap-2">
                       <span className="text-[9px] px-2 py-0.5 rounded-full bg-orange/90 text-white font-bold uppercase">
-                        {activeCourse.fileName === 'Manual Entry' ? 'Manual' : 'RAG PDF'}
+                        {activeCourse.fileName ? (activeCourse.fileName.includes('.') ? activeCourse.fileName.split('.').pop().toUpperCase() : 'DOC') : 'COURSE'}
                       </span>
                       <h3 className="font-display text-base font-bold text-fg truncate">
                         {activeCourse.title}

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
+import { toast } from 'react-toastify'
 import { api } from '../../services/api'
+import CountrySelect from '../../components/CountrySelect'
 
 const LANGUAGES = [
   { value: 'en', label: 'English' },
@@ -51,9 +53,10 @@ const UsersList = () => {
       if (selectedUser?.id === deletingUser.id) {
         setSelectedUser(null)
       }
+      toast.success('Learner account deleted successfully.')
       setDeletingUser(null)
     } catch (err) {
-      alert(err.message || 'Failed to delete user.')
+      toast.error(err.message || 'Failed to delete user.')
     } finally {
       setIsDeleting(false)
     }
@@ -88,9 +91,10 @@ const UsersList = () => {
             : u
         )
       )
+      toast.success('Course assignments updated successfully!')
       setAssignModalUser(null)
     } catch (err) {
-      alert(err.message || 'Failed to save course assignments.')
+      toast.error(err.message || 'Failed to save course assignments.')
     } finally {
       setSavingAssignments(false)
     }
@@ -104,6 +108,7 @@ const UsersList = () => {
       setUserProgressData(data)
     } catch (err) {
       console.error('Failed to load user progress:', err)
+      toast.error('Failed to load user progress details.')
     } finally {
       setLoadingProgress(false)
     }
@@ -130,7 +135,9 @@ const UsersList = () => {
       }, 100)
     } catch (err) {
       console.error(err)
-      setCameraError('Could not access camera. Please check permissions.')
+      const msg = 'Could not access camera. Please check permissions.'
+      setCameraError(msg)
+      toast.error(msg)
     }
   }
 
@@ -165,6 +172,7 @@ const UsersList = () => {
     }))
     setCapturing(false)
     closeCamera()
+    toast.success('Face ID biometric data re-captured successfully!')
   }
 
   useEffect(() => {
@@ -179,8 +187,9 @@ const UsersList = () => {
     try {
       const res = await api.toggleUserStatus(id)
       setUsers(prev => prev.map(u => u.id === id ? { ...u, status: res.user.status } : u))
+      toast.success(`User status updated to ${res.user.status || 'updated'}.`)
     } catch (err) {
-      alert(err.message || 'Failed to toggle status.')
+      toast.error(err.message || 'Failed to toggle status.')
     }
   }
 
@@ -215,6 +224,7 @@ const UsersList = () => {
 
     if (Object.keys(errors).length) {
       setEditErrors(errors)
+      toast.warn('Please resolve all validation errors.')
       return
     }
 
@@ -239,9 +249,10 @@ const UsersList = () => {
 
       const res = await api.updateUser(editingUser.id, payload)
       setUsers(prev => prev.map(u => u.id === editingUser.id ? { ...u, ...res.user } : u))
+      toast.success('Learner profile updated successfully!')
       setEditingUser(null)
     } catch (err) {
-      alert(err.message || 'Failed to update user.')
+      toast.error(err.message || 'Failed to update user.')
     } finally {
       setUpdating(false)
     }
@@ -813,10 +824,11 @@ const UsersList = () => {
                   <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
                     Country
                   </label>
-                  <input
+                  <CountrySelect
                     value={editForm.country}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, country: e.target.value }))}
-                    className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
+                    onChange={(val) => setEditForm(prev => ({ ...prev, country: val }))}
+                    hasError={!!editErrors.country}
+                    placeholder="Select country..."
                   />
                   {editErrors.country && <p className="text-xs text-danger">{editErrors.country}</p>}
                 </div>
@@ -1232,7 +1244,7 @@ const UsersList = () => {
                             {c.title}
                           </h4>
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-ink border border-line text-muted uppercase font-bold shrink-0">
-                            {c.fileName === 'Manual Entry' ? 'Manual' : 'RAG PDF'}
+                            {c.fileName ? (c.fileName.includes('.') ? c.fileName.split('.').pop().toUpperCase() : 'DOC') : 'COURSE'}
                           </span>
                         </div>
                         <p className="text-[11px] text-muted line-clamp-1 mt-0.5">

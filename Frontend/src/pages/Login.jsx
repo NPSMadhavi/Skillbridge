@@ -329,14 +329,6 @@ const Login = ({ onSuccess }) => {
                   </button>
                 </label>
 
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    className="cursor-pointer border-0 bg-transparent p-0 text-[13px] font-semibold text-[#f97316] hover:underline"
-                  >
-                    Forgot password?
-                  </button>
-                </div>
 
                 <button
                   type="submit"

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { toast, ToastContainer } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
 import logo from '../../assets/SkillBridge_AI.png'
 import { api } from '../../services/api'
 
@@ -17,6 +19,11 @@ const AdminLogin = () => {
     event.preventDefault()
     setError('')
 
+    if (!email.trim() || !password) {
+      toast.error('Please provide both admin email and password.')
+      return
+    }
+
     setLoading(true)
     try {
       const data = await api.adminLogin(email.trim(), password)
@@ -24,9 +31,14 @@ const AdminLogin = () => {
         'skillbridge_admin',
         JSON.stringify({ email: data.admin.email, token: data.token, loggedInAt: Date.now() }),
       )
-      navigate('/admin/dashboard', { replace: true })
+      toast.success('Welcome back, Admin!')
+      setTimeout(() => {
+        navigate('/admin/dashboard', { replace: true })
+      }, 400)
     } catch (err) {
-      setError(err.message || 'Incorrect admin email or password.')
+      const msg = err.message || 'Incorrect admin email or password.'
+      setError(msg)
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
@@ -101,6 +113,19 @@ const AdminLogin = () => {
           </form>
         </section>
       </div>
+
+      <ToastContainer
+        position="top-right"
+        autoClose={3500}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss={false}
+        draggable
+        pauseOnHover
+        theme="colored"
+      />
     </main>
   )
 }

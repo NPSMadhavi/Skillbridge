@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 
 const AdminCourses = () => {
@@ -10,20 +11,10 @@ const AdminCourses = () => {
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(6)
 
-  // Users and assignment modal state
-  const [allUsers, setAllUsers] = useState([])
-  const [assignModalCourse, setAssignModalCourse] = useState(null)
-  const [assignedUserSelection, setAssignedUserSelection] = useState([])
-  const [savingLearners, setSavingLearners] = useState(false)
-  const [loadingCourseUsers, setLoadingCourseUsers] = useState(false)
-
   // Creation modal state
   const [showModal, setShowModal] = useState(false)
-  const [createMode, setCreateMode] = useState('pdf') // 'pdf' | 'manual'
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
-  const [category, setCategory] = useState('Data Science')
-  const [level, setLevel] = useState('Intermediate')
   const [selectedFile, setSelectedFile] = useState(null)
 
   // Generation loader state
@@ -35,6 +26,7 @@ const AdminCourses = () => {
   const [editingCourse, setEditingCourse] = useState(null)
   const [editTitle, setEditTitle] = useState('')
   const [editDescription, setEditDescription] = useState('')
+  const [editFile, setEditFile] = useState(null)
   const [isUpdating, setIsUpdating] = useState(false)
   const [editErrorMsg, setEditErrorMsg] = useState('')
 
@@ -57,14 +49,11 @@ const AdminCourses = () => {
   const fetchCourses = async () => {
     try {
       setLoading(true)
-      const [coursesData, usersData] = await Promise.all([
-        api.getCourses(),
-        api.getUsers().catch(() => []),
-      ])
+      const coursesData = await api.getCourses()
       setCoursesList(coursesData || [])
-      setAllUsers(usersData || [])
     } catch (err) {
       console.error('Failed to load courses:', err)
+      toast.error('Failed to load courses list.')
     } finally {
       setLoading(false)
     }
@@ -74,53 +63,14 @@ const AdminCourses = () => {
     fetchCourses()
   }, [])
 
-  const handleOpenAssignLearners = async (course) => {
-    setAssignModalCourse(course)
-    setLoadingCourseUsers(true)
-    try {
-      const res = await api.getCourseAssignments(course.id)
-      const assignedIds = (res.assignedUsers || []).map((u) => u.id)
-      setAssignedUserSelection(assignedIds)
-    } catch (err) {
-      console.error('Failed to fetch course assignments:', err)
-      // Fallback: match from allUsers
-      const matched = allUsers
-        .filter((u) => (u.assignedCourseIds || []).includes(course.id))
-        .map((u) => u.id)
-      setAssignedUserSelection(matched)
-    } finally {
-      setLoadingCourseUsers(false)
-    }
-  }
-
-  const toggleUserSelection = (userId) => {
-    setAssignedUserSelection((prev) =>
-      prev.includes(userId)
-        ? prev.filter((id) => id !== userId)
-        : [...prev, userId]
-    )
-  }
-
-  const handleSaveCourseLearners = async () => {
-    if (!assignModalCourse) return
-    setSavingLearners(true)
-    try {
-      await api.assignCourseUsers(assignModalCourse.id, assignedUserSelection)
-      setAssignModalCourse(null)
-      fetchCourses()
-    } catch (err) {
-      alert(err.message || 'Failed to save course assignments.')
-    } finally {
-      setSavingLearners(false)
-    }
-  }
-
 
   const handleFileChange = (e) => {
     const file = e.target.files[0]
     if (file) {
-      if (file.type !== 'application/pdf') {
-        setErrorMsg('Only PDF files are supported currently.')
+      if (file.size > 30 * 1024 * 1024) {
+        const msg = 'File size exceeds 30MB limit. Please upload a smaller file.'
+        setErrorMsg(msg)
+        toast.warn(msg)
         setSelectedFile(null)
       } else {
         setErrorMsg('')
@@ -132,59 +82,46 @@ const AdminCourses = () => {
   const handlePublish = async (e) => {
     e.preventDefault()
     if (!title.trim() || !description.trim()) {
-      setErrorMsg('Course title and description are required.')
+      const msg = 'Course title and description are required.'
+      setErrorMsg(msg)
+      toast.warn(msg)
       return
     }
 
-    if (createMode === 'pdf' && !selectedFile) {
-      setErrorMsg('Please select a PDF document for reference.')
+    if (!selectedFile) {
+      const msg = 'Please select a course document to upload.'
+      setErrorMsg(msg)
+      toast.warn(msg)
       return
     }
 
     setIsGenerating(true)
     setErrorMsg('')
 
-    if (createMode === 'pdf') {
-      setStage('uploading')
-      const t1 = setTimeout(() => setStage('parsing'), 2000)
-      const t2 = setTimeout(() => setStage('structuring'), 4500)
-      const t3 = setTimeout(() => setStage('finalizing'), 8000)
+    setStage('uploading')
+    const t1 = setTimeout(() => setStage('parsing'), 1800)
+    const t2 = setTimeout(() => setStage('structuring'), 4200)
+    const t3 = setTimeout(() => setStage('finalizing'), 7500)
 
-      try {
-        await api.adminUploadCourse(title.trim(), description.trim(), selectedFile)
-        clearTimeout(t1)
-        clearTimeout(t2)
-        clearTimeout(t3)
-        setIsGenerating(false)
-        setShowModal(false)
-        resetCreateForm()
-        fetchCourses()
-      } catch (err) {
-        clearTimeout(t1)
-        clearTimeout(t2)
-        clearTimeout(t3)
-        console.error('Course publish error:', err)
-        setErrorMsg(err.message || 'An error occurred during course generation.')
-        setIsGenerating(false)
-      }
-    } else {
-      // Manual Course Creation
-      try {
-        await api.adminCreateManualCourse({
-          title: title.trim(),
-          description: description.trim(),
-          category,
-          level
-        })
-        setIsGenerating(false)
-        setShowModal(false)
-        resetCreateForm()
-        fetchCourses()
-      } catch (err) {
-        console.error('Manual course creation error:', err)
-        setErrorMsg(err.message || 'Failed to create course.')
-        setIsGenerating(false)
-      }
+    try {
+      await api.adminUploadCourse(title.trim(), description.trim(), selectedFile)
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
+      setIsGenerating(false)
+      setShowModal(false)
+      resetCreateForm()
+      toast.success('Course created and AI curriculum generated successfully!')
+      fetchCourses()
+    } catch (err) {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
+      console.error('Course publish error:', err)
+      const msg = err.message || 'An error occurred during course generation.'
+      setErrorMsg(msg)
+      toast.error(msg)
+      setIsGenerating(false)
     }
   }
 
@@ -192,8 +129,6 @@ const AdminCourses = () => {
     setTitle('')
     setDescription('')
     setSelectedFile(null)
-    setCategory('Data Science')
-    setLevel('Intermediate')
     setErrorMsg('')
   }
 
@@ -201,28 +136,58 @@ const AdminCourses = () => {
     setEditingCourse(course)
     setEditTitle(course.title)
     setEditDescription(course.description)
+    setEditFile(null)
     setEditErrorMsg('')
+  }
+
+  const handleEditFileChange = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      if (file.size > 30 * 1024 * 1024) {
+        const msg = 'File size exceeds 30MB limit. Please upload a smaller file.'
+        setEditErrorMsg(msg)
+        toast.warn(msg)
+        setEditFile(null)
+      } else {
+        setEditErrorMsg('')
+        setEditFile(file)
+      }
+    }
   }
 
   const handleSaveEdit = async (e) => {
     e.preventDefault()
     if (!editTitle.trim() || !editDescription.trim()) {
-      setEditErrorMsg('Title and description cannot be empty.')
+      const msg = 'Title and description cannot be empty.'
+      setEditErrorMsg(msg)
+      toast.warn(msg)
       return
     }
 
     setIsUpdating(true)
     setEditErrorMsg('')
     try {
-      await api.adminUpdateCourse(editingCourse.id, {
-        title: editTitle.trim(),
-        description: editDescription.trim()
-      })
+      if (editFile) {
+        const formData = new FormData()
+        formData.append('title', editTitle.trim())
+        formData.append('description', editDescription.trim())
+        formData.append('file', editFile)
+        await api.adminUpdateCourse(editingCourse.id, formData)
+      } else {
+        await api.adminUpdateCourse(editingCourse.id, {
+          title: editTitle.trim(),
+          description: editDescription.trim(),
+        })
+      }
       setEditingCourse(null)
+      setEditFile(null)
+      toast.success('Course updated successfully!')
       fetchCourses()
     } catch (err) {
       console.error('Update course error:', err)
-      setEditErrorMsg(err.message || 'Failed to update course.')
+      const msg = err.message || 'Failed to update course.'
+      setEditErrorMsg(msg)
+      toast.error(msg)
     } finally {
       setIsUpdating(false)
     }
@@ -234,10 +199,11 @@ const AdminCourses = () => {
     }
     try {
       await api.adminDeleteCourse(courseId)
+      toast.success('Course deleted successfully.')
       fetchCourses()
     } catch (err) {
       console.error('Delete course error:', err)
-      alert(err.message || 'Failed to delete course.')
+      toast.error(err.message || 'Failed to delete course.')
     }
   }
 
@@ -274,7 +240,7 @@ const AdminCourses = () => {
           <span className="text-4xl">📚</span>
           <h3 className="mt-4 font-display text-lg font-bold text-fg">No courses published</h3>
           <p className="mt-1 text-sm text-muted max-w-md mx-auto">
-            Get started by uploading a textbook reference PDF or manually creating a course module.
+            Get started by uploading a course document (PDF, Word, TXT, etc.) to automatically generate a course module.
           </p>
           <button
             type="button"
@@ -319,14 +285,6 @@ const AdminCourses = () => {
                         📄 {course.fileName}
                       </span>
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenAssignLearners(course)}
-                          className="cursor-pointer rounded-lg bg-orange/10 text-orange hover:bg-orange/20 px-2.5 py-1 text-xs font-semibold border border-orange/30 transition"
-                          title="Assign learners to this course"
-                        >
-                          Assign
-                        </button>
                         <button
                           type="button"
                           onClick={() => setViewingCourse(course)}
@@ -449,32 +407,12 @@ const AdminCourses = () => {
                   </button>
                 </div>
 
-                {/* Mode Selector Tabs */}
-                <div className="grid grid-cols-2 gap-2 rounded-xl bg-ink p-1 border border-line text-xs font-bold">
-                  <button
-                    type="button"
-                    onClick={() => setCreateMode('pdf')}
-                    className={`py-2 rounded-lg transition border-0 cursor-pointer ${createMode === 'pdf' ? 'bg-orange text-white shadow-sm' : 'text-muted hover:text-fg'
-                      }`}
-                  >
-                    📄 PDF Upload (RAG)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCreateMode('manual')}
-                    className={`py-2 rounded-lg transition border-0 cursor-pointer ${createMode === 'manual' ? 'bg-orange text-white shadow-sm' : 'text-muted hover:text-fg'
-                      }`}
-                  >
-                    ✏️ Manual Creation
-                  </button>
-                </div>
-
                 <div className="space-y-1">
                   <label htmlFor="course-title" className="text-xs font-semibold text-muted">Course Name</label>
                   <input
                     id="course-title"
                     type="text"
-                    placeholder="e.g. Intro to RAG Architectures"
+                    placeholder="e.g. Workplace Safety & Operational Standards"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
                     className="w-full rounded-lg border border-line bg-ink px-3.5 py-2.5 text-sm text-fg placeholder-muted focus:border-orange focus:outline-none"
@@ -495,53 +433,37 @@ const AdminCourses = () => {
                   />
                 </div>
 
-                {createMode === 'pdf' ? (
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-muted">Reference PDF Document</label>
-                    <label className="group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-line bg-ink/50 p-6 text-center hover:border-orange/50 hover:bg-ink">
-                      <input
-                        type="file"
-                        accept=".pdf"
-                        onChange={handleFileChange}
-                        className="hidden"
-                      />
-                      <span className="text-2xl">📄</span>
-                      <span className="mt-2 text-xs font-bold text-fg">
-                        {selectedFile ? selectedFile.name : 'Upload PDF Document'}
-                      </span>
-                      <span className="text-[10px] text-muted mt-0.5">Max size 25MB</span>
-                    </label>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-muted">Category</label>
-                      <select
-                        value={category}
-                        onChange={(e) => setCategory(e.target.value)}
-                        className="w-full rounded-lg border border-line bg-ink px-3 py-2 text-xs text-fg focus:border-orange focus:outline-none"
-                      >
-                        <option value="Data Science">Data Science</option>
-                        <option value="Development">Development</option>
-                        <option value="Design">Design</option>
-                        <option value="Security">Security</option>
-                        <option value="General">General</option>
-                      </select>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-muted">Difficulty Level</label>
-                      <select
-                        value={level}
-                        onChange={(e) => setLevel(e.target.value)}
-                        className="w-full rounded-lg border border-line bg-ink px-3 py-2 text-xs text-fg focus:border-orange focus:outline-none"
-                      >
-                        <option value="Beginner">Beginner</option>
-                        <option value="Intermediate">Intermediate</option>
-                        <option value="Advanced">Advanced</option>
-                      </select>
-                    </div>
-                  </div>
-                )}
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-muted">Course Document</label>
+                  <label className={`group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition p-6 text-center ${
+                    selectedFile
+                      ? 'border-orange bg-orange/5'
+                      : 'border-line bg-ink/50 hover:border-orange/50 hover:bg-ink'
+                  }`}>
+                    <input
+                      type="file"
+                      accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json"
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                    <span className="text-3xl">
+                      {selectedFile ? (
+                        selectedFile.name.endsWith('.pdf') ? '📄' :
+                        selectedFile.name.match(/\.(docx?|doc)$/i) ? '📝' :
+                        selectedFile.name.match(/\.(txt|md|text)$/i) ? '📃' :
+                        selectedFile.name.match(/\.(pptx?|ppt)$/i) ? '📑' : '📁'
+                      ) : '📄'}
+                    </span>
+                    <span className="mt-2 text-xs font-bold text-fg break-all max-w-full px-2">
+                      {selectedFile ? selectedFile.name : 'Upload Document'}
+                    </span>
+                    <span className="text-[11px] text-muted mt-0.5">
+                      {selectedFile
+                        ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
+                        : 'PDF, Word (DOCX/DOC), Text (TXT/MD), CSV • Max 30MB'}
+                    </span>
+                  </label>
+                </div>
 
                 {errorMsg && (
                   <div className="rounded-lg border border-danger/20 bg-danger/5 p-3 text-xs font-semibold text-danger">
@@ -561,7 +483,7 @@ const AdminCourses = () => {
                     type="submit"
                     className="cursor-pointer rounded-lg bg-orange px-5 py-2 text-xs font-bold text-white border-0 hover:brightness-105 shadow-md"
                   >
-                    {createMode === 'pdf' ? 'Publish RAG Course' : 'Create Course'}
+                    Publish Course
                   </button>
                 </div>
               </form>
@@ -622,10 +544,59 @@ const AdminCourses = () => {
                   id="edit-course-desc"
                   value={editDescription}
                   onChange={(e) => setEditDescription(e.target.value)}
-                  rows="4"
+                  rows="3"
                   className="w-full rounded-lg border border-line bg-ink px-3.5 py-2.5 text-sm text-fg placeholder-muted focus:border-orange focus:outline-none resize-none"
                   required
                 />
+              </div>
+
+              {/* Replace Document Section */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-muted">Course Document</span>
+                  <span className="text-[11px] text-muted font-mono truncate max-w-[200px]" title={editingCourse.fileName}>
+                    📄 {editingCourse.fileName}
+                  </span>
+                </div>
+
+                <label className={`group flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition p-4 text-center ${
+                  editFile ? 'border-orange bg-orange/5' : 'border-line bg-ink/40 hover:border-orange/50 hover:bg-ink'
+                }`}>
+                  <input
+                    type="file"
+                    accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json"
+                    onChange={handleEditFileChange}
+                    className="hidden"
+                  />
+                  <span className="text-2xl">
+                    {editFile ? (
+                      editFile.name.endsWith('.pdf') ? '📄' :
+                      editFile.name.match(/\.(docx?|doc)$/i) ? '📝' :
+                      editFile.name.match(/\.(txt|md|text)$/i) ? '📃' : '📁'
+                    ) : '🔄'}
+                  </span>
+                  <span className="mt-1.5 text-xs font-bold text-fg break-all max-w-full px-2">
+                    {editFile ? editFile.name : 'Upload New Document to Replace (Optional)'}
+                  </span>
+                  <span className="text-[10px] text-muted mt-0.5">
+                    {editFile
+                      ? `${(editFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
+                      : 'PDF, Word (DOCX), TXT, MD • Re-generates lessons & re-indexes knowledge'}
+                  </span>
+                  {editFile && (
+                    <button
+                      type="button"
+                      onClick={(ev) => {
+                        ev.preventDefault()
+                        ev.stopPropagation()
+                        setEditFile(null)
+                      }}
+                      className="mt-2 text-[11px] text-danger hover:underline cursor-pointer bg-transparent border-0 font-semibold"
+                    >
+                      ✕ Keep current document
+                    </button>
+                  )}
+                </label>
               </div>
 
               {editErrorMsg && (
@@ -647,7 +618,7 @@ const AdminCourses = () => {
                   disabled={isUpdating}
                   className="cursor-pointer rounded-lg bg-orange px-5 py-2 text-xs font-bold text-white border-0 hover:brightness-105 shadow-md disabled:opacity-60"
                 >
-                  {isUpdating ? 'Saving...' : 'Save Changes'}
+                  {isUpdating ? (editFile ? 'Reprocessing & Saving...' : 'Saving...') : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -734,150 +705,6 @@ const AdminCourses = () => {
         document.body
       )}
 
-      {/* Assign Learners Modal */}
-      {assignModalCourse && createPortal(
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="assign-learners-modal-title"
-        >
-          <div className="relative w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in max-h-[85vh] flex flex-col justify-between overflow-hidden">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-line pb-4 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-orange/10 border border-orange/20 text-orange grid place-items-center font-bold text-lg">
-                  👥
-                </div>
-                <div>
-                  <h2 id="assign-learners-modal-title" className="font-display text-lg sm:text-xl font-semibold text-fg">
-                    Assign Learners
-                  </h2>
-                  <p className="text-xs text-muted truncate max-w-xs sm:max-w-sm">
-                    {assignModalCourse.title}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAssignModalCourse(null)}
-                className="grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-line bg-ink text-muted hover:text-fg transition"
-                aria-label="Close modal"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Quick action bar */}
-            <div className="flex items-center justify-between py-2 border-b border-line/40 shrink-0 text-xs">
-              <span className="text-muted font-medium">
-                {assignedUserSelection.length} of {allUsers.length} learner{allUsers.length === 1 ? '' : 's'} assigned
-              </span>
-              {allUsers.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setAssignedUserSelection(allUsers.map((u) => u.id))}
-                    className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-semibold"
-                  >
-                    Select all
-                  </button>
-                  <span className="text-muted">•</span>
-                  <button
-                    type="button"
-                    onClick={() => setAssignedUserSelection([])}
-                    className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
-                  >
-                    Clear all
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {/* Learners Checklist */}
-            <div className="flex-1 min-h-0 overflow-y-auto my-3 space-y-2 pr-1">
-              {loadingCourseUsers ? (
-                <div className="py-10 text-center text-xs text-muted">
-                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-sky border-t-transparent mx-auto mb-2" />
-                  Loading assigned learners...
-                </div>
-              ) : allUsers.length === 0 ? (
-                <div className="py-10 text-center text-xs text-muted">
-                  No learners registered in the system yet.
-                </div>
-              ) : (
-                allUsers.map((u) => {
-                  const isChecked = assignedUserSelection.includes(u.id);
-                  return (
-                    <div
-                      key={u.id}
-                      onClick={() => toggleUserSelection(u.id)}
-                      className={`flex items-center gap-3 p-3 rounded-2xl border transition cursor-pointer select-none ${isChecked
-                          ? 'border-sky/60 bg-sky/5 shadow-sm'
-                          : 'border-line bg-ink/40 hover:border-line/90'
-                        }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => { }}
-                        className="h-4 w-4 rounded text-sky focus:ring-sky/40 border-line"
-                      />
-                      {u.faceIdData && u.faceIdData.startsWith('data:image/') ? (
-                        <img src={u.faceIdData} alt="" className="h-9 w-9 rounded-xl object-cover shrink-0" />
-                      ) : (
-                        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-ink font-semibold text-muted text-xs">
-                          {u.fullName.slice(0, 1)}
-                        </span>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`text-xs font-semibold truncate ${isChecked ? 'text-sky' : 'text-fg'}`}>
-                            {u.fullName}
-                          </p>
-                          <span className="text-[10px] text-muted shrink-0">
-                            {u.finNumber}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-muted truncate">
-                          {u.email} • {u.country || 'Region'}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="pt-3 border-t border-line flex items-center justify-between shrink-0">
-              <span className="text-[11px] text-muted">
-                {assignedUserSelection.length === 0
-                  ? '⚠️ No learners assigned to this course'
-                  : `${assignedUserSelection.length} learner(s) can play this course`}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAssignModalCourse(null)}
-                  className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-xs font-semibold text-fg hover:border-sky/40 transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={savingLearners}
-                  onClick={handleSaveCourseLearners}
-                  className="cursor-pointer rounded-xl border-0 bg-orange px-5 py-2.5 text-xs font-bold text-white shadow-md hover:brightness-105 transition disabled:opacity-60"
-                >
-                  {savingLearners ? 'Saving...' : 'Save Learners'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
     </div>
   )
 }

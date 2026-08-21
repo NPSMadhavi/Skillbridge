@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
+import { toast } from 'react-toastify'
 import { api } from '../../services/api'
+import CountrySelect from '../../components/CountrySelect'
 
 const LANGUAGES = [
   { value: 'en', label: 'English' },
@@ -263,15 +265,13 @@ const RegisterUser = () => {
         const check = await api.checkUserExists({ faceIdData: capturedImages[0] })
         if (check.exists && check.field === 'faceIdData') {
           setCapturing(false)
-          setCameraError(`⚠️ ${check.message || 'User already exists with this Face ID.'}`)
+          const msg = check.message || 'User already exists with this Face ID.'
+          setCameraError(`⚠️ ${msg}`)
           setErrors((prev) => ({
             ...prev,
-            faceIdData: check.message || 'User already exists with this Face ID.',
+            faceIdData: msg,
           }))
-          setToast({
-            type: 'error',
-            text: check.message || 'User already exists with this Face ID.',
-          })
+          toast.error(msg)
           return
         }
       } catch (checkErr) {
@@ -286,10 +286,12 @@ const RegisterUser = () => {
       setErrors((prev) => ({ ...prev, faceIdData: undefined }))
       setCapturing(false)
       closeCamera()
-      setToast({ type: 'ok', text: 'Face ID verified and captured successfully.' })
+      toast.success('Face ID verified and captured successfully!')
     } catch (err) {
       setCapturing(false)
-      setCameraError('Failed to capture face biometric data. Please try again.')
+      const errTxt = 'Failed to capture face biometric data. Please try again.'
+      setCameraError(errTxt)
+      toast.error(errTxt)
     }
   }
 
@@ -308,6 +310,7 @@ const RegisterUser = () => {
     setErrors(nextErrors)
 
     if (Object.keys(nextErrors).length) {
+      toast.warn('Please resolve all validation errors before submitting.')
       if (nextErrors.fullName) fullNameRef.current?.focus()
       else if (nextErrors.finNumber) finNumberRef.current?.focus()
       else if (nextErrors.email) emailRef.current?.focus()
@@ -330,6 +333,7 @@ const RegisterUser = () => {
       setForm(emptyForm)
       setTouched(emptyTouched)
       setErrors({})
+      toast.success(`${res.user.fullName} registered successfully!`)
       setToast({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
     } catch (err) {
       const errorMsg = err.message || 'Registration failed.'
@@ -342,6 +346,7 @@ const RegisterUser = () => {
         setErrors((prev) => ({ ...prev, email: errorMsg }))
         emailRef.current?.focus()
       }
+      toast.error(errorMsg)
       setToast({ type: 'error', text: errorMsg })
     } finally {
       setSaving(false)
@@ -499,16 +504,14 @@ const RegisterUser = () => {
             <label htmlFor="country" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
               Country <span className="text-rose-500">*</span>
             </label>
-            <input
+            <CountrySelect
               ref={countryRef}
               id="country"
               value={form.country}
-              onChange={(e) => updateField('country', e.target.value)}
+              onChange={(val) => updateField('country', val)}
               onBlur={() => handleBlur('country')}
-              placeholder="e.g. Singapore"
-              aria-invalid={!!errors.country}
-              aria-describedby={errors.country ? 'country-error' : undefined}
-              className={getFieldClass(!!errors.country)}
+              hasError={!!errors.country}
+              placeholder="Search or select country..."
             />
             {errors.country && (
               <p id="country-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">

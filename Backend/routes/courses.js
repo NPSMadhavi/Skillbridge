@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
+import mammoth from 'mammoth';
 import axios from 'axios';
 import FormData from 'form-data';
 import prisma from '../config/prisma.js';
@@ -9,9 +10,115 @@ import vectorChunkService from '../services/vectorChunkService.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 30 * 1024 * 1024 }, // 30MB max
+});
 
-// 1. Admin: Create course module by uploading a PDF
+/**
+ * Extracts text and segmented pages/sections from any supported document format.
+ * Supported: PDF, DOCX, DOC, TXT, MD, CSV, JSON, RTF, HTML, XML, etc.
+ */
+async function extractDocumentContent(file) {
+  const { originalname, mimetype = '', buffer } = file;
+  const ext = originalname.split('.').pop()?.toLowerCase() || '';
+
+  let text = '';
+  const pages = [];
+
+  if (ext === 'pdf' || mimetype === 'application/pdf') {
+    const pdfData = await pdfParse(buffer);
+    text = pdfData.text || '';
+    const rawPages = text.split(/\f|\u000c/);
+    let pageNumber = 1;
+    for (const rawText of rawPages) {
+      const cleanText = rawText.trim();
+      if (cleanText.length > 10) {
+        pages.push({
+          page_number: pageNumber++,
+          text: cleanText,
+        });
+      }
+    }
+  } else if (
+    ext === 'docx' ||
+    ext === 'doc' ||
+    mimetype.includes('wordprocessingml') ||
+    mimetype.includes('msword')
+  ) {
+    try {
+      const result = await mammoth.extractRawText({ buffer });
+      text = result.value || '';
+    } catch (docxErr) {
+      console.warn(`[Doc Extraction] Mammoth parsing failed for ${originalname}, trying text fallback:`, docxErr.message);
+      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
+    }
+  } else if (
+    ['txt', 'text', 'md', 'markdown', 'csv', 'json', 'log', 'xml'].includes(ext) ||
+    mimetype.startsWith('text/') ||
+    mimetype.includes('json') ||
+    mimetype.includes('csv')
+  ) {
+    text = buffer.toString('utf-8');
+  } else if (ext === 'html' || ext === 'htm' || mimetype === 'text/html') {
+    const rawHtml = buffer.toString('utf-8');
+    text = rawHtml
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  } else if (ext === 'rtf' || mimetype.includes('rtf')) {
+    const rawRtf = buffer.toString('utf-8');
+    text = rawRtf
+      .replace(/\{\*?\\[^{}]+}|[{}]|\\\n?[A-Za-z]+\n?(?:-?\d+)?[ ]?/g, ' ')
+      .trim();
+  } else {
+    // Universal fallback: attempt docx parser first, then utf-8 text decoding
+    try {
+      const result = await mammoth.extractRawText({ buffer });
+      if (result.value && result.value.trim().length > 30) {
+        text = result.value;
+      }
+    } catch {
+      // Ignore
+    }
+    if (!text || text.trim().length === 0) {
+      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
+    }
+  }
+
+  // If pages weren't split by form feeds (e.g. Word or TXT), create structured page segments of ~1500 chars
+  if (pages.length === 0 && text.trim().length > 0) {
+    const paragraphs = text.split(/\n\s*\n/);
+    let currentPageText = '';
+    let pageNumber = 1;
+
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (!trimmed) continue;
+      if (currentPageText.length + trimmed.length > 1500 && currentPageText.length > 0) {
+        pages.push({
+          page_number: pageNumber++,
+          text: currentPageText.trim(),
+        });
+        currentPageText = trimmed + '\n\n';
+      } else {
+        currentPageText += trimmed + '\n\n';
+      }
+    }
+    if (currentPageText.trim().length > 0) {
+      pages.push({
+        page_number: pageNumber++,
+        text: currentPageText.trim(),
+      });
+    }
+  }
+
+  return { text: text.trim(), pages };
+}
+
+// 1. Admin: Create course module by uploading a document (PDF, Word, TXT, etc.)
 router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
   try {
     const { title, description } = req.body;
@@ -21,39 +128,17 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     }
 
     if (!req.file) {
-      return res.status(400).json({ error: 'Please upload a PDF document for the course.' });
+      return res.status(400).json({ error: 'Please upload a course document (PDF, DOCX, DOC, TXT, etc.).' });
     }
 
-    if (req.file.mimetype !== 'application/pdf') {
-      return res.status(400).json({ error: 'Only PDF documents are supported currently.' });
+    console.log(`[Document Extraction] Admin creating course: "${title}", parsing file: ${req.file.originalname}...`);
+    const { text: textContent, pages } = await extractDocumentContent(req.file);
+
+    if (!textContent || textContent.length < 30) {
+      return res.status(400).json({ error: 'Failed to extract text from document. The file might be empty, password-protected, or scanned images only.' });
     }
 
-    console.log(`[PDF Extraction] Admin creating course: "${title}", parsing file: ${req.file.originalname}...`);
-    const dataBuffer = req.file.buffer;
-    const pdfData = await pdfParse(dataBuffer);
-    const textContent = pdfData.text;
-
-    if (!textContent || textContent.trim().length < 50) {
-      return res.status(400).json({ error: 'Failed to extract text from PDF. Document might be empty or scanned.' });
-    }
-
-    console.log(`[PDF Extraction] PDF extracted successfully.`);
-    console.log(`[PDF Extraction] Total characters extracted: ${textContent.length}`);
-
-    // Parse text page-by-page splitting by form-feed page separators
-    const rawPages = textContent.split(/\f|\u000c/);
-    const pages = [];
-    let pageNumber = 1;
-    for (const rawText of rawPages) {
-      const cleanText = rawText.trim();
-      if (cleanText.length > 10) {
-        pages.push({
-          page_number: pageNumber++,
-          text: cleanText
-        });
-      }
-    }
-    console.log(`[PDF Extraction] Total pages parsed: ${pages.length}`);
+    console.log(`[Document Extraction] Document extracted successfully. Extracted ${textContent.length} characters across ${pages.length} section(s).`);
 
     console.log(`[Curriculum Design] Generating curriculum from document text...`);
     const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent);
@@ -69,32 +154,32 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         description: generatedCourse.description,
         fileName: req.file.originalname,
         fileText: textContent,
-        curriculum: generatedCourse
-      }
+        curriculum: generatedCourse,
+      },
     });
 
     // Store chunks and generate vector embeddings directly in PostgreSQL pgvector
     try {
-      console.log(`[pgvector RAG] Indexing course ${newCourse.id} into PostgreSQL pgvector...`);
+      console.log(`[pgvector] Indexing course ${newCourse.id} into PostgreSQL pgvector...`);
       await vectorChunkService.indexCourse(prisma, newCourse.id, textContent, pages);
-      console.log(`[pgvector RAG] Course chunks and pgvector embeddings stored successfully.`);
+      console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
     } catch (vectorErr) {
-      console.warn(`[pgvector RAG] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
+      console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
     }
 
     res.status(201).json({
-      message: 'RAG course published successfully.',
+      message: 'Course published successfully.',
       course: {
         id: newCourse.id,
         title: newCourse.title,
         description: newCourse.description,
         fileName: newCourse.fileName,
         curriculum: newCourse.curriculum,
-        createdAt: newCourse.createdAt
-      }
+        createdAt: newCourse.createdAt,
+      },
     });
   } catch (error) {
-    console.error('[PDF Extraction] Failed to publish custom course:', error);
+    console.error('[Document Extraction] Failed to publish course:', error);
     res.status(500).json({ error: error.message || 'Failed to process document and publish course.' });
   }
 });
@@ -599,15 +684,15 @@ You are actively teaching the course: "${course.title}" (Current Lesson: "${less
 ${currentConcept ? `The student is currently viewing / listening to this lesson concept: "${currentConcept}".` : ''}
 Selected Teaching Language: ${targetLanguage}.
 
-CRITICAL MULTILINGUAL TUTORING RULES:
-1. Target Teaching Language: You MUST generate your ENTIRE tutoring response in ${targetLanguage} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
-2. Explain like an expert human tutor: Provide simple, intuitive, and conversational explanations with real-world examples. DO NOT read or translate the course material word-for-word, and NEVER state or mention that you are translating the document.
-3. Grounding: Use the provided course context and active lecture concept as the source of truth for all lesson concepts.
-4. Cross-Lingual Understanding: The student may speak or type their question in English (e.g. "What is a loop?") or in ${targetLanguage}. Regardless of what language the question was asked in, understand the query completely and ALWAYS answer fluently in ${targetLanguage}!
-5. Technical Terminology: Keep important technical terms (e.g., React, API, Database, State, Function, Loop, Component) in their commonly used English/universal form alongside the explanation in ${targetLanguage}.
-6. Context Retention: Answer follow-up questions conversationally and maintain continuity across the discussion.
-7. Consistency: Never switch away to English unless ${targetLanguage} is English or for industry-standard technical keywords.
-8. NEVER refuse to answer and NEVER output disclaimer or translation templates.`;
+CRITICAL CONCISE & UNDERSTANDABLE TUTORING RULES:
+1. SHORT & DIRECT (MAX 2-3 SENTENCES): Keep your answer SHORT, CONCISE, and TO THE POINT. Deliver at most 2 to 3 clear, conversational sentences (around 35-60 words). Never output long essays, large lists of bullet points, or multiple paragraphs.
+2. SIMPLE & INTUITIVE: Explain the concept in plain, simple, easily digestible words that any beginner can understand immediately.
+3. VOICE & AUDIO FRIENDLY: Your answer will be spoken aloud to the student in real-time via text-to-speech. Short and clear answers allow the student to quickly understand without lengthy interruptions to their lesson.
+4. TARGET TEACHING LANGUAGE: Generate your ENTIRE answer in ${targetLanguage} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
+5. CROSS-LINGUAL UNDERSTANDING: If the student asks in English or another language, understand the intent and respond fluently in ${targetLanguage}.
+6. TECHNICAL TERMS: Keep essential technical keywords (e.g. React, API, Database, State, Function, Loop, Component) in their standard form alongside the explanation in ${targetLanguage}.
+7. GROUNDING: Base your explanation on the course concepts and current lesson context.
+8. FRIENDLY TONE: Warm, natural, direct, and encouraging.`;
 
     const userPrompt = `Retrieved Course Context:\n${contextText}\n\n${currentConcept ? `Active Lesson Concept:\n${currentConcept}\n\n` : ''}Student Question:\n${message}\n\nSelected Response Language:\n${targetLanguage}`;
 
@@ -638,8 +723,8 @@ CRITICAL MULTILINGUAL TUTORING RULES:
   }
 });
 
-// 6. Admin: Update a course module details
-router.put('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res) => {
+// 6. Admin: Update a course module details (and optionally replace document)
+router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
   try {
     const courseId = req.params.id;
     const { title, description, curriculum } = req.body;
@@ -660,17 +745,47 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res) =
     }
 
     const updateData = {};
-    if (title) updateData.title = title.trim();
-    if (description) updateData.description = description.trim();
+    const finalTitle = title ? title.trim() : existingCourse.title;
+    const finalDescription = description ? description.trim() : existingCourse.description;
 
-    let curriculumObj = curriculum !== undefined ? curriculum : existingCourse.curriculum;
-    if (typeof curriculumObj === 'string') {
-      try { curriculumObj = JSON.parse(curriculumObj); } catch (e) { }
-    }
-    if (curriculumObj && typeof curriculumObj === 'object') {
-      if (title) curriculumObj.title = title.trim();
-      if (description) curriculumObj.description = description.trim();
-      updateData.curriculum = curriculumObj;
+    updateData.title = finalTitle;
+    updateData.description = finalDescription;
+
+    if (req.file) {
+      console.log(`[Document Extraction] Admin updating course "${finalTitle}" with new file: ${req.file.originalname}...`);
+      const { text: textContent, pages } = await extractDocumentContent(req.file);
+
+      if (!textContent || textContent.length < 30) {
+        return res.status(400).json({ error: 'Failed to extract text from new document. File may be empty or unreadable.' });
+      }
+
+      console.log(`[Document Extraction] Extracted ${textContent.length} characters. Generating updated curriculum...`);
+      const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent);
+      generatedCourse.title = finalTitle;
+      generatedCourse.description = finalDescription;
+
+      updateData.fileName = req.file.originalname;
+      updateData.fileText = textContent;
+      updateData.curriculum = generatedCourse;
+
+      // Re-index vector chunks and embeddings for the new document
+      try {
+        console.log(`[pgvector] Re-indexing course ${courseId} with new document embeddings...`);
+        await vectorChunkService.indexCourse(prisma, courseId, textContent, pages);
+        console.log(`[pgvector] Vector embeddings updated successfully.`);
+      } catch (vectorErr) {
+        console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);
+      }
+    } else {
+      let curriculumObj = curriculum !== undefined ? curriculum : existingCourse.curriculum;
+      if (typeof curriculumObj === 'string') {
+        try { curriculumObj = JSON.parse(curriculumObj); } catch (e) { }
+      }
+      if (curriculumObj && typeof curriculumObj === 'object') {
+        curriculumObj.title = finalTitle;
+        curriculumObj.description = finalDescription;
+        updateData.curriculum = curriculumObj;
+      }
     }
 
     const updatedCourse = await prisma.course.update({
@@ -746,7 +861,7 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
         timeout: 45000
       });
 
-      if (pyResponse.data && pyResponse.data.text) {
+      if (pyResponse.data && typeof pyResponse.data.text === 'string') {
         const text = pyResponse.data.text.trim();
         const detectedLanguage = pyResponse.data.detected_language || targetLangCode || 'en';
         console.log(`[Whisper Flow Python AI Service Result]: "${text}" (detected: ${detectedLanguage})`);

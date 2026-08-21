@@ -161,6 +161,7 @@ const MyCertificates = () => {
           setSelectedCourseForCert(null)
         }}
         autoDownload={false}
+        triggerBlast={false}
       />
     )
   }

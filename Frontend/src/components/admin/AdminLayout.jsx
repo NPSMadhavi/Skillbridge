@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom'
+import { ToastContainer } from 'react-toastify'
+import 'react-toastify/dist/ReactToastify.css'
 import logo from '../../assets/SkillBridge_AI.png'
 
 const getAdminSession = () => {
@@ -160,6 +162,19 @@ const AdminLayout = () => {
           <Outlet />
         </main>
       </div>
+
+      <ToastContainer
+        position="top-right"
+        autoClose={3500}
+        hideProgressBar={false}
+        newestOnTop
+        closeOnClick
+        rtl={false}
+        pauseOnFocusLoss={false}
+        draggable
+        pauseOnHover
+        theme="colored"
+      />
     </div>
   )
 }

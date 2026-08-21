@@ -408,10 +408,16 @@ const CoursePlayer = ({
   const chatMessagesRef = useRef(chatMessages)
   const lastProcessedTextRef = useRef('')
   const lastProcessedTimeRef = useRef(0)
+  const chatEndRef = useRef(null)
 
   useEffect(() => {
     chatMessagesRef.current = chatMessages
   }, [chatMessages])
+
+  // Auto-scroll chat to latest message
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [chatMessages, chatLoading])
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -424,6 +430,7 @@ const CoursePlayer = ({
 
   useEffect(() => {
     playingRef.current = playing
+    voiceManagerRef.current?.setLecturePlaying(playing)
   }, [playing])
 
   useEffect(() => {
@@ -515,7 +522,8 @@ const CoursePlayer = ({
       setIsAriaSpeaking(true)
       isAriaSpeakingRef.current = true
       voiceManagerRef.current?.setTutorSpeaking(true)
-      console.log(`[TUTOR] TTS start in ${preferredLanguage}: ARIA is speaking response...`)
+      console.log(`[VOICE] State: AI_SPEAKING`)
+      console.log(`[VOICE] TTS start in ${preferredLanguage}: ARIA is speaking response...`)
       const cleanText = text
         .replace(/###/g, '')
         .replace(/####/g, '')
@@ -544,7 +552,6 @@ const CoursePlayer = ({
         setIsAriaSpeaking(false)
         isAriaSpeakingRef.current = false
         voiceManagerRef.current?.setTutorSpeaking(false)
-        console.log('[TUTOR] TTS end: ARIA finished speaking.')
         onEndCallback?.()
       }
 
@@ -561,18 +568,18 @@ const CoursePlayer = ({
         }
       }, 2500)
 
-      // Absolute safety timeout: max duration (min 4s, max 20s)
+      // Absolute safety timeout: max duration (min 4s, max 22s)
       const safetyTimeoutMs = Math.min(22000, Math.max(4000, cleanText.length * 75))
       setTimeout(() => {
         if (!hasFinished) {
-          console.warn('[TUTOR] TTS safety timeout reached. Resetting ARIA speaking state.')
+          console.warn('[VOICE] TTS safety timeout reached. Resetting ARIA speaking state.')
           finishTTS()
         }
       }, safetyTimeoutMs)
 
       window.speechSynthesis.speak(utterance)
     } catch (e) {
-      console.warn('[TUTOR] Speech synthesis failed:', e)
+      console.warn('[VOICE] Speech synthesis failed:', e)
       setIsAriaSpeaking(false)
       isAriaSpeakingRef.current = false
       voiceManagerRef.current?.setTutorSpeaking(false)
@@ -593,15 +600,14 @@ const CoursePlayer = ({
       savedLecturePositionRef.current = currentSentenceIdxRef.current
       window.speechSynthesis.cancel()
       setPlaying(false)
-      console.log(`[LiveTutor] Lecture interrupted by user at Concept ${currentSentenceIdxRef.current + 1}. Position saved.`)
+      console.log(`[VOICE] Lecture interrupted by user at Concept ${currentSentenceIdxRef.current + 1}. Position saved.`)
     } else if (isAriaSpeakingRef.current) {
       window.speechSynthesis.cancel()
       isAriaSpeakingRef.current = false
-      console.log('[LiveTutor] ARIA response interrupted by student. Listening to new question...')
+      console.log('[VOICE] ARIA response interrupted by student. Listening to new question...')
     }
 
     isAwakeRef.current = true
-    inConversationModeRef.current = true
     vadStateRef.current = 'AWAKE'
     voiceManagerRef.current?.setAwake(true)
     setVoiceStatusText('✨ "Hey ARIA" Detected! Listening... Ask your question')
@@ -609,6 +615,7 @@ const CoursePlayer = ({
     const ack = ACKNOWLEDGMENTS[selectedLanguageCode] || ACKNOWLEDGMENTS.en
     speakAriaAnswer(ack, () => {
       setVoiceStatusText('💬 ARIA is listening for your question...')
+      voiceManagerRef.current?.setAwake(true)
     })
 
     if (awakeTimerRef.current) {
@@ -617,13 +624,13 @@ const CoursePlayer = ({
 
     awakeTimerRef.current = setTimeout(() => {
       if (isAwakeRef.current && vadStateRef.current === 'AWAKE' && !isAnsweringRef.current) {
-        console.log('[LiveTutor] Awake window timeout without question.')
+        console.log('[VOICE] Awake window timeout without question.')
         resumeLectureFromExactPosition()
       }
     }, 8000)
   }
 
-  const handleVoiceQuestion = async (userSpeech, forceQuestion = false) => {
+  const handleVoiceQuestion = async (userSpeech, forceQuestion = false, utteranceId = null) => {
     if (!userSpeech || isAnsweringRef.current) return
     const rawSpeech = userSpeech.trim()
     if (rawSpeech.length < 2 || isNoiseOrHallucination(rawSpeech)) {
@@ -648,12 +655,19 @@ const CoursePlayer = ({
       wasLecturePlayingRef.current = false
       setVoiceStatusText('⏸️ Lecture paused by voice command.')
       isAnsweringRef.current = false
-      inConversationModeRef.current = false
-      voiceManagerRef.current?.setConversationMode(false)
+      voiceManagerRef.current?.setAwake(false)
       return
     }
 
     const hasWake = containsWakeWord(rawSpeech)
+    const isAwake = isAwakeRef.current || inConversationModeRef.current
+
+    // CRITICAL GUARD: If system is not awake, NEVER answer unless speech explicitly contains "Hey ARIA"
+    if (!isAwake && !hasWake) {
+      console.log(`[VOICE] Rejected non-wake speech in SLEEPING state: "${rawSpeech}"`)
+      return
+    }
+
     const cleanQuestion = extractQuestionFromWakeWord(rawSpeech)
 
     // If user only said "Hey ARIA" without an attached question
@@ -662,7 +676,7 @@ const CoursePlayer = ({
       return
     }
 
-    // Determine final question (in conversation mode, questions don't require "Hey ARIA")
+    // Determine final question (in active listening, questions don't require "Hey ARIA")
     let finalQuestion = cleanQuestion || rawSpeech
     if (!finalQuestion || finalQuestion.length < 2) {
       if (hasWake) {
@@ -674,7 +688,7 @@ const CoursePlayer = ({
     // Deduplication check: prevent duplicate triggers for identical utterance within 2.5s
     const now = Date.now()
     if (lastProcessedTextRef.current === finalQuestion.toLowerCase() && (now - lastProcessedTimeRef.current < 2500)) {
-      console.log(`[LiveTutor] Duplicate question ignored: "${finalQuestion}"`)
+      console.log(`[VOICE] Duplicate question ignored: "${finalQuestion}"`)
       return
     }
     lastProcessedTextRef.current = finalQuestion.toLowerCase()
@@ -691,13 +705,13 @@ const CoursePlayer = ({
       savedLecturePositionRef.current = currentSentenceIdxRef.current
       window.speechSynthesis.cancel()
       setPlaying(false)
-      console.log(`[LiveTutor] Direct question received. Paused lecture at Concept ${savedLecturePositionRef.current + 1}.`)
+      console.log(`[VOICE] Direct question received. Paused lecture at Concept ${savedLecturePositionRef.current + 1}.`)
     }
 
     isAwakeRef.current = false
     isAnsweringRef.current = true
-    inConversationModeRef.current = true
     vadStateRef.current = 'PROCESSING'
+    voiceManagerRef.current?.setState(TutorState.AI_THINKING)
 
     // Get current concept being explained on chalkboard
     const currentConceptText = (sentencesRef.current && sentencesRef.current[savedLecturePositionRef.current]) ||
@@ -707,7 +721,8 @@ const CoursePlayer = ({
     setVoiceStatusText(`✨ Question: "${finalQuestion}"`)
     setChatMessages((prev) => [...prev, { sender: 'user', text: finalQuestion }])
     setChatLoading(true)
-    console.log(`[LiveTutor] AI request: Sending question to ARIA AI Tutor: "${finalQuestion}" (Concept: "${currentConceptText.slice(0, 40)}...", Lang: ${preferredLanguage})`)
+    console.log(`[VOICE] State: AI_THINKING`)
+    console.log(`[VOICE] AI request: Sending question to ARIA AI Tutor: "${finalQuestion}" (Concept: "${currentConceptText.slice(0, 40)}...", Lang: ${preferredLanguage})`)
 
     try {
       const historyToSend = (chatMessagesRef.current || []).slice(-8)
@@ -721,33 +736,27 @@ const CoursePlayer = ({
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
       setChatMessages((prev) => [...prev, { sender: 'aria', text: ariaAnswer }])
       setVoiceStatusText('🤖 ARIA is answering...')
-      console.log(`[LiveTutor] AI response received: "${ariaAnswer.substring(0, 60)}..."`)
+      console.log(`[VOICE] AI response received: "${ariaAnswer.substring(0, 60)}..."`)
 
       // Speak ARIA answer immediately with TTS
       speakAriaAnswer(ariaAnswer, () => {
         isAnsweringRef.current = false
         vadStateRef.current = 'IDLE'
 
-        // Multi-turn conversational follow-up window (6 seconds)
-        if (handsFreeVoiceRef.current) {
-          isAwakeRef.current = true
-          inConversationModeRef.current = true
-          voiceManagerRef.current?.setConversationMode(true)
-          setVoiceStatusText('💬 ARIA is listening for follow-up (or say "Resume")...')
-          console.log('[LiveTutor] ARIA finished speaking. Entered 6s conversational follow-up window (no "Hey ARIA" required)...')
-
-          followUpTimerRef.current = setTimeout(() => {
-            console.log('[LiveTutor] Follow-up window ended. Returning to lecture playback...')
-            voiceManagerRef.current?.setConversationMode(false)
-            voiceManagerRef.current?.setAwake(false)
+        if (wasLecturePlayingRef.current) {
+          console.log(`[VOICE] Question answered. Resuming lecture from saved position (Concept ${savedLecturePositionRef.current + 1})...`)
+          setVoiceStatusText(`▶️ Resuming course lecture from Concept ${savedLecturePositionRef.current + 1}...`)
+          setTimeout(() => {
             resumeLectureFromExactPosition()
-          }, 6000)
+          }, 1200)
         } else {
-          resumeLectureFromExactPosition()
+          isAwakeRef.current = false
+          voiceManagerRef.current?.setAwake(false)
+          setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
         }
       })
     } catch (err) {
-      console.error('[LiveTutor] ARIA AI Tutor chat error:', err)
+      console.error('[VOICE] ARIA AI Tutor chat error:', err)
       setChatMessages((prev) => [...prev, { sender: 'aria', text: '⚠️ Failed to answer question via AI Tutor. Resuming lecture...' }])
       isAnsweringRef.current = false
       vadStateRef.current = 'IDLE'
@@ -779,7 +788,7 @@ const CoursePlayer = ({
     isAwakeRef.current = false
     inConversationModeRef.current = false
     setRecording(false)
-    console.log('[TUTOR] Voice interaction pipeline released.')
+    console.log('[VOICE] Voice interaction pipeline released.')
   }
 
   // Centralized Voice Interaction & Always-On Hands-Free Microphone Lifecycle (Whisper-Flow Architecture)
@@ -793,74 +802,107 @@ const CoursePlayer = ({
       return
     }
 
-    console.log(`[MIC] Initializing Always-On assistant in ${preferredLanguage} (${speechRecognitionLang})...`)
+    console.log(`[VOICE] Initializing Always-On assistant in ${preferredLanguage} (${speechRecognitionLang})...`)
     setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
 
     const manager = new VoiceTutorManager({
-      onAudioChunkReady: async (audioBlob) => {
+      onWakeWordDetected: (wakePhrase) => {
+        interruptLectureAndWake()
+      },
+      onAudioChunkReady: async (audioBlob, isWakeSlice = false) => {
+        if (isTranscribingRef.current) return
+        isTranscribingRef.current = true
         try {
-          console.log(`[MIC] Sending audio slice to Whisper (${selectedLanguageCode})...`)
-          setVoiceStatusText(`🤖 Transcribing speech (${currentLangObj.label})...`)
+          console.log(`[VOICE] Transcribing audio slice with Whisper (${selectedLanguageCode}, isWakeCheck: ${isWakeSlice}, size: ${audioBlob.size}B)...`)
           const res = await api.transcribeSpeech(audioBlob, selectedLanguageCode)
           const transcription = (res?.text || '').trim()
-          console.log(`[MIC] Whisper transcript: "${transcription}"`)
+          console.log(`[VOICE] Whisper transcript: "${transcription}"`)
 
-          if (transcription && !isNoiseOrHallucination(transcription) && transcription.length >= 3) {
-            const hasWake = containsWakeWord(transcription)
-            const isFollowUp = inConversationModeRef.current || isAwakeRef.current
-
-            // Only wake up and answer if user said "Hey ARIA" / "ARIA" or is in active follow-up window
-            if (hasWake || isFollowUp) {
-              if (playingRef.current) {
-                wasLecturePlayingRef.current = true
-                savedLecturePositionRef.current = currentSentenceIdxRef.current
-                window.speechSynthesis.cancel()
-                setPlaying(false)
-              }
-              handleVoiceQuestion(transcription, true)
+          if (!transcription || isNoiseOrHallucination(transcription) || transcription.length < 2) {
+            if (isAwakeRef.current) {
+              manager.setState(TutorState.ACTIVE_LISTENING)
             } else {
-              console.log('[MIC] Speech without ARIA wake-word ignored.')
-              manager.setState(TutorState.IDLE)
+              manager.setState(TutorState.SLEEPING)
+            }
+            return
+          }
+
+          const hasWake = containsWakeWord(transcription)
+          const isAwake = isAwakeRef.current || inConversationModeRef.current
+
+          // When system is sleeping, ONLY wake word can trigger any action
+          if (!isAwake) {
+            if (hasWake) {
+              console.log(`[VOICE] Wake word detected via Whisper audio slice: "${transcription}"`)
+              const clean = extractQuestionFromWakeWord(transcription)
+              if (clean && clean.length >= 2) {
+                // User spoke wake word + question in one breath
+                if (playingRef.current) {
+                  wasLecturePlayingRef.current = true
+                  savedLecturePositionRef.current = currentSentenceIdxRef.current
+                  window.speechSynthesis.cancel()
+                  setPlaying(false)
+                }
+                handleVoiceQuestion(transcription, true)
+              } else {
+                // User spoke "Hey Aria" alone
+                interruptLectureAndWake()
+              }
+            } else {
+              console.log(`[VOICE] Speech without ARIA wake-word ignored in SLEEPING state: "${transcription}"`)
+              manager.setState(TutorState.SLEEPING)
             }
           } else {
-            manager.setState(TutorState.IDLE)
+            // System is in ACTIVE_LISTENING (user was asked to speak their question)
+            if (playingRef.current) {
+              wasLecturePlayingRef.current = true
+              savedLecturePositionRef.current = currentSentenceIdxRef.current
+              window.speechSynthesis.cancel()
+              setPlaying(false)
+            }
+            handleVoiceQuestion(transcription, true)
           }
         } catch (err) {
-          console.error('[MIC] Whisper transcription failed:', err)
-          manager.setState(TutorState.IDLE)
+          console.error('[VOICE] Whisper transcription failed:', err)
+          if (!isAwakeRef.current) {
+            manager.setState(TutorState.SLEEPING)
+          }
+        } finally {
+          isTranscribingRef.current = false
         }
       },
       onInterimTranscript: (interim) => {
         if (containsWakeWord(interim)) {
-          if (playingRef.current) {
-            wasLecturePlayingRef.current = true
-            savedLecturePositionRef.current = currentSentenceIdxRef.current
-            window.speechSynthesis.cancel()
-            setPlaying(false)
-          }
+          console.log(`[VOICE] Wake word detected in interim transcript: "${interim}"`)
           const clean = extractQuestionFromWakeWord(interim)
           if (clean && clean.length >= 2) {
-            setVoiceStatusText(`✨ "ARIA" heard: "${clean}"...`)
+            // User spoke wake word + question in one breath
+            if (playingRef.current) {
+              wasLecturePlayingRef.current = true
+              savedLecturePositionRef.current = currentSentenceIdxRef.current
+              window.speechSynthesis.cancel()
+              setPlaying(false)
+            }
+            handleVoiceQuestion(interim, true)
           } else {
-            setVoiceStatusText(`✨ "Hey ARIA" Detected! Listening...`)
+            interruptLectureAndWake()
           }
         }
       },
-      onFinalTranscript: (transcript) => {
-        console.log(`[MIC] SpeechRecognition final transcript: "${transcript}"`)
+      onFinalTranscript: (transcript, utteranceId) => {
         if (!transcript || isNoiseOrHallucination(transcript) || transcript.length < 3) return
         const hasWake = containsWakeWord(transcript)
-        const isFollowUp = inConversationModeRef.current || isAwakeRef.current
+        const isAwake = isAwakeRef.current || inConversationModeRef.current
 
-        // Only wake up and answer if user said "Hey ARIA" / "ARIA" or is in active follow-up window
-        if (hasWake || isFollowUp) {
+        // Only wake up and answer if user said "Hey ARIA" / "ARIA" or is in active state
+        if (hasWake || isAwake) {
           if (playingRef.current) {
             wasLecturePlayingRef.current = true
             savedLecturePositionRef.current = currentSentenceIdxRef.current
             window.speechSynthesis.cancel()
             setPlaying(false)
           }
-          handleVoiceQuestion(transcript, true)
+          handleVoiceQuestion(transcript, true, utteranceId)
         }
       },
       onUserInterrupt: () => {
@@ -870,14 +912,18 @@ const CoursePlayer = ({
 
     manager.onStateChange((newState) => {
       setTutorVoiceState(newState)
-      if (newState === TutorState.LISTENING) {
+      if (newState === TutorState.SLEEPING || newState === TutorState.IDLE) {
         if (!isAwakeRef.current && !inConversationModeRef.current) {
           setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
         }
+      } else if (newState === TutorState.ACTIVE_LISTENING || newState === TutorState.LISTENING) {
+        setVoiceStatusText('💬 ARIA is listening for your question...')
       } else if (newState === TutorState.USER_SPEAKING) {
         setVoiceStatusText(`🎙️ Listening (${currentLangObj.native})...`)
-      } else if (newState === TutorState.PROCESSING) {
+      } else if (newState === TutorState.AI_THINKING || newState === TutorState.PROCESSING) {
         setVoiceStatusText('🤖 ARIA is thinking...')
+      } else if (newState === TutorState.AI_SPEAKING || newState === TutorState.TUTOR_SPEAKING) {
+        setVoiceStatusText('🗣️ ARIA is speaking...')
       } else if (newState === TutorState.ERROR) {
         setVoiceStatusText('⚠️ Microphone unavailable or permission denied.')
       }
@@ -1353,6 +1399,27 @@ const CoursePlayer = ({
       })
   }
 
+  // Unified module grouping for course curriculum
+  const moduleGroups = useMemo(() => {
+    if (!course.lessons || !course.lessons.length) return []
+    const groups = []
+    let currentGroup = null
+
+    course.lessons.forEach((lesson, index) => {
+      const rawModule = lesson.moduleTitle || lesson.chapterTitle || 'Module 1'
+      if (!currentGroup || currentGroup.moduleTitle !== rawModule) {
+        currentGroup = {
+          moduleTitle: rawModule,
+          lessons: []
+        }
+        groups.push(currentGroup)
+      }
+      currentGroup.lessons.push({ lesson, index })
+    })
+
+    return groups
+  }, [course.lessons])
+
   return (
     <div className="h-screen max-h-screen overflow-hidden bg-[#f4f7fc] text-[#0f172a] select-none flex flex-col font-sans">
       {/* Sub-header Navigation with Active Language Selector */}
@@ -1398,7 +1465,11 @@ const CoursePlayer = ({
               </div>
               <div className="min-w-0 flex-1">
                 <h1 className="text-xs font-bold text-slate-900 leading-snug truncate">{course.title}</h1>
-                <p className="text-[11px] text-slate-400 font-medium">{course.lessons?.length || 5} Modules</p>
+                <p className="text-[11px] text-slate-400 font-medium">
+                  {course.chapters?.length
+                    ? `${course.chapters.length} Chapters • ${course.lessons?.length || 0} Lessons`
+                    : `${course.lessons?.length || 0} Lessons`}
+                </p>
               </div>
             </div>
 
@@ -1416,79 +1487,105 @@ const CoursePlayer = ({
 
           <hr className="shrink-0 border-slate-100 my-2.5" />
 
-          {/* Course Content Section */}
+          {/* Course Content Section - Unified Module Groups */}
           <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            <h2 className="shrink-0 text-xs font-bold text-slate-900 mb-2">Course Content</h2>
+            <div className="shrink-0 flex items-center justify-between mb-2">
+              <h2 className="text-xs font-bold text-slate-900">Curriculum Lessons</h2>
+              <span className="text-[10px] text-slate-400 font-semibold">
+                {course.lessons?.length || 0} Total
+              </span>
+            </div>
 
-            <ul className="space-y-1.5 flex-1 min-h-0 overflow-y-auto pr-0.5 no-scrollbar">
-              {course.lessons.map((lesson, index) => {
-                const isActive = lesson.id === activeLesson?.id
-                const isCompleted = isLessonDone(lesson.id) || lesson.status === 'done'
-                const prevLessonDone = Boolean(index > 0 && (isLessonDone(course.lessons[index - 1]?.id) || course.lessons[index - 1]?.status === 'done'))
-                const isUnlocked = index === 0 || isCompleted || prevLessonDone || index <= highestUnlockedIdx
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-0.5 no-scrollbar">
+              {moduleGroups.map((group, gIdx) => (
+                <div key={gIdx} className="space-y-1.5">
+                  {/* Unified Module Group Header */}
+                  <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
+                    <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wide truncate max-w-[80%]" title={group.moduleTitle}>
+                      {group.moduleTitle.replace(/^Module\s*/i, 'Mod ')}
+                    </span>
+                    <span className="text-[9px] font-semibold text-slate-400">
+                      {group.lessons.length} {group.lessons.length === 1 ? 'lesson' : 'lessons'}
+                    </span>
+                  </div>
 
-                return (
-                  <li key={lesson.id}>
-                    <button
-                      type="button"
-                      disabled={!isUnlocked}
-                      onClick={() => {
-                        if (isUnlocked) {
-                          window.speechSynthesis.cancel()
-                          setActiveLessonId(lesson.id)
-                          setCurrentSentenceIdx(0)
-                          setElapsedSeconds(0)
-                          setPlaying(true)
-                        }
-                      }}
-                      className={`w-full flex items-center gap-2 p-2.5 rounded-xl border text-left transition cursor-pointer ${isActive
-                        ? 'bg-[#eff6ff] border-slate-200 shadow-2xs font-semibold'
-                        : isCompleted
-                          ? 'bg-slate-50 border-slate-100 hover:bg-slate-100'
-                          : isUnlocked
-                            ? 'bg-slate-50 border-slate-100 hover:bg-slate-100 text-slate-800'
-                            : 'bg-slate-50/60 border-slate-100 text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed'
-                        }`}
-                    >
-                      {/* Left Icon Badge */}
-                      <span
-                        className={`h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold ${isActive
-                          ? 'bg-[#2563eb] text-white shadow-xs'
-                          : isCompleted
-                            ? 'bg-[#22c55e] text-white'
-                            : isUnlocked
-                              ? 'bg-slate-200 text-slate-700'
-                              : 'bg-slate-200 text-slate-400'
-                          }`}
-                      >
-                        {isActive ? '▶' : isCompleted ? '✓' : (isUnlocked ? '▶' : '🔒')}
-                      </span>
+                  {/* Clean Lesson Items Inside This Module */}
+                  <ul className="space-y-1.5">
+                    {group.lessons.map(({ lesson, index }) => {
+                      const isActive = lesson.id === activeLesson?.id
+                      const isCompleted = isLessonDone(lesson.id) || lesson.status === 'done'
+                      const prevLessonDone = Boolean(index > 0 && (isLessonDone(course.lessons[index - 1]?.id) || course.lessons[index - 1]?.status === 'done'))
+                      const isUnlocked = index === 0 || isCompleted || prevLessonDone || index <= highestUnlockedIdx
 
-                      {/* Lesson Details */}
-                      <div className="min-w-0 flex-1">
-                        <p className={`text-[11px] leading-snug truncate ${isActive ? 'font-bold text-slate-900' : 'font-medium text-slate-800'}`}>
-                          {lesson.title}
-                        </p>
-                        <p className="text-[10px] text-slate-400 font-normal mt-0.5">
-                          {getRealLessonDurationStr(lesson, lesson.id === activeLesson?.id ? explanation : null, index)}
-                        </p>
-                      </div>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+                      return (
+                        <li key={lesson.id}>
+                          <button
+                            type="button"
+                            disabled={!isUnlocked}
+                            onClick={() => {
+                              if (isUnlocked) {
+                                window.speechSynthesis.cancel()
+                                setActiveLessonId(lesson.id)
+                                setCurrentSentenceIdx(0)
+                                setElapsedSeconds(0)
+                                setPlaying(true)
+                              }
+                            }}
+                            className={`w-full flex items-center gap-2 p-2.5 rounded-xl border text-left transition cursor-pointer ${isActive
+                              ? 'bg-[#eff6ff] border-blue-200 shadow-2xs font-semibold'
+                              : isCompleted
+                                ? 'bg-slate-50 border-slate-100 hover:bg-slate-100'
+                                : isUnlocked
+                                  ? 'bg-slate-50 border-slate-100 hover:bg-slate-100 text-slate-800'
+                                  : 'bg-slate-50/60 border-slate-100 text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed'
+                              }`}
+                          >
+                            {/* Left Icon Badge */}
+                            <span
+                              className={`h-6 w-6 shrink-0 rounded-full flex items-center justify-center text-[10px] font-bold ${isActive
+                                ? 'bg-[#2563eb] text-white shadow-xs'
+                                : isCompleted
+                                  ? 'bg-[#22c55e] text-white'
+                                  : isUnlocked
+                                    ? 'bg-slate-200 text-slate-700'
+                                    : 'bg-slate-200 text-slate-400'
+                                }`}
+                            >
+                              {isActive ? '▶' : isCompleted ? '✓' : (isUnlocked ? '▶' : '🔒')}
+                            </span>
+
+                            {/* Clean Numbered Lesson Title & Duration */}
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-[11px] leading-snug truncate ${isActive ? 'font-bold text-slate-900' : 'font-medium text-slate-800'}`}>
+                                {index + 1}. {lesson.title}
+                              </p>
+                              <p className="text-[10px] text-slate-400 font-normal mt-0.5">
+                                {getRealLessonDurationStr(lesson, lesson.id === activeLesson?.id ? explanation : null, index)}
+                              </p>
+                            </div>
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
         {/* CENTER COLUMN: ENLARGED Video/Slide Play Screen */}
         <section className="flex flex-col h-full min-h-0 overflow-hidden gap-2">
           {/* Active Lesson Header & Hands-Free Status Banner */}
-          <div className="shrink-0 flex items-center justify-between gap-3">
+          <div className="shrink-0 flex flex-col gap-0.5">
+            {activeLesson?.chapterTitle && (
+              <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider">
+                {activeLesson.chapterTitle} {activeLesson.moduleTitle ? `• ${activeLesson.moduleTitle}` : ''}
+              </span>
+            )}
             <h2 className="text-base font-bold text-slate-900 leading-snug truncate">
-              {activeLesson?.title || 'Introduction to Full stack web development'}
+              {activeLesson?.title || 'Introduction to Lesson Topics'}
             </h2>
-
           </div>
 
           {/* ENLARGED CENTER LECTURE SLIDE VIDEO PLAYER UI WITH Sleek CONTROL BAR */}
@@ -1792,6 +1889,7 @@ const CoursePlayer = ({
                 ARIA is typing...
               </div>
             )}
+            <div ref={chatEndRef} />
           </div>
 
           {/* Bottom Chat Input Form */}

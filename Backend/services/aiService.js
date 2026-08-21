@@ -135,48 +135,142 @@ class AIService {
   }
 
   /**
-   * Generates a complete Course structure (curriculum, lessons, and quiz) from parsed PDF text.
+   * Generates a complete dynamic Course structure (chapters, modules, lessons, and quiz)
+   * tailored to the uploaded document length, complexity, and sections.
    */
   async generateCourse(fileName, fullText) {
-    const textSlice = fullText.slice(0, 15000);
+    const docLength = fullText.length;
+    // For very long documents, sample introduction, middle sections, and conclusion
+    let textSlice = fullText;
+    if (docLength > 35000) {
+      const part1 = fullText.slice(0, 15000);
+      const mid = Math.floor(docLength / 2);
+      const part2 = fullText.slice(mid - 5000, mid + 5000);
+      const part3 = fullText.slice(-10000);
+      textSlice = `${part1}\n\n[... middle section ...]\n\n${part2}\n\n[... concluding section ...]\n\n${part3}`;
+    } else {
+      textSlice = fullText.slice(0, 35000);
+    }
 
-    const systemPrompt = `You are an expert curriculum designer. 
-Analyze the provided document text and structure it into a complete, professional interactive course based ONLY on the actual concepts, chapters, and topics present in the document.
-DO NOT use hardcoded lesson templates like "Introduction & Scope", "Core Principles & Frameworks", "Practical Application", "Advanced Analysis", or "Summary & Wrap-up" unless those exact headings literally exist in the document text.
-Instead, extract the actual headings, sections, or programming concepts (e.g. if the document discusses Java Variables, Classes, and Objects, then the lessons must be about Java Variables, Classes, and Objects. If it is about React, the lessons must be about React hooks, useState, useEffect).
-You must respond with a raw JSON object matching the following structure exactly, and nothing else. No markdown wrapping.
+    const systemPrompt = `You are an expert curriculum architect and senior instructional designer.
+Analyze the provided document text and synthesize a complete, professional, multi-tiered interactive curriculum based SOLELY on the actual content, chapters, and topics present in the document.
+
+DYNAMIC CURRICULUM ARCHITECTURE RULES:
+1. Dynamic Scope Based on Document Depth:
+   - Determine the number of Chapters, Modules, and Lessons dynamically based on document length and topic richness.
+   - Small documents: 2-3 Chapters, 4-6 Total Lessons.
+   - Medium documents: 3-5 Chapters, 6-12 Total Lessons.
+   - Large / comprehensive documents: 5-8+ Chapters, 12-20+ Total Lessons.
+   - DO NOT artificially cap or force the course to 5 lessons. Let the curriculum naturally reflect the full breadth of the material.
+2. Two or More Modules per Chapter:
+   - Every Chapter MUST contain at least 2 distinct, meaningful Modules (e.g. Chapter 1 -> Module 1.1 Foundations, Module 1.2 Core Mechanisms).
+   - Each Module must contain 1 to 3 concrete Lessons derived from the document's actual concepts.
+3. Content-Driven Topics:
+   - Extract real headings, algorithms, technical definitions, and domain topics from the text.
+   - Avoid generic placeholder titles like "Introduction & Scope" or "Advanced Analysis" unless they literally reflect the text.
+4. Realistic Teaching Durations:
+   - Assign realistic lesson durations between 5 to 15 minutes (e.g. "06:30", "08:45", "12:10") to represent substantial, high-value learning sessions.
+5. Flat Sequential Lessons Array:
+   - The "lessons" array MUST be a continuous, 1-indexed flat array containing ALL lessons across all chapters and modules in sequential learning order (Lesson 1 -> Lesson 2 -> ... -> Lesson N).
+   - The first lesson (id: 1) has status "active", all subsequent lessons have status "locked".
+6. Output Format:
+   You must respond with a raw JSON object matching the following structure exactly, and nothing else. No markdown code fences.
 {
-  "title": "A short, engaging course title based on the document",
-  "description": "A 1-2 sentence description summarizing what the document teaches",
-  "learning": ["Objective 1", "Objective 2", "Objective 3", "Objective 4"],
-  "includes": ["AI Avatar Instructor", "5 interactive lessons", "Custom Assessment", "Digital Certificate"],
+  "title": "A concise, professional course title reflecting the document",
+  "description": "A comprehensive 2-3 sentence overview summarizing what learners will master",
+  "learning": [
+    "Master foundational concepts of [Topic A]",
+    "Implement and configure [Topic B] workflows",
+    "Analyze and debug [Topic C] architectures",
+    "Apply best practices for [Topic D] in production environments"
+  ],
+  "includes": [
+    "Interactive ARIA AI Avatar Tutoring",
+    "Multi-chapter comprehensive curriculum",
+    "Real-time voice Q&A and concept breakdowns",
+    "Chapter assessments & verified certificate"
+  ],
+  "chapters": [
+    {
+      "chapterId": 1,
+      "title": "Chapter 1: [Chapter Title]",
+      "description": "Brief description of this chapter's domain",
+      "modules": [
+        {
+          "moduleId": 1,
+          "title": "Module 1.1: [Module Title]",
+          "lessons": [
+            { "id": 1, "title": "[Specific Lesson Title 1]", "duration": "07:30", "status": "active" },
+            { "id": 2, "title": "[Specific Lesson Title 2]", "duration": "09:15", "status": "locked" }
+          ]
+        },
+        {
+          "moduleId": 2,
+          "title": "Module 1.2: [Module Title]",
+          "lessons": [
+            { "id": 3, "title": "[Specific Lesson Title 3]", "duration": "08:45", "status": "locked" }
+          ]
+        }
+      ]
+    }
+  ],
   "curriculum": [
-    { "title": "Module 1: [Module Title]", "lessons": 3, "duration": "30m", "locked": false },
-    { "title": "Module 2: [Module Title]", "lessons": 2, "duration": "20m", "locked": true }
+    { "title": "Chapter 1: [Chapter Title]", "lessons": 3, "duration": "25m", "locked": false }
   ],
   "lessons": [
-    { "id": 1, "title": "[Lesson Title 1]", "duration": "01:45", "status": "active" },
-    { "id": 2, "title": "[Lesson Title 2]", "duration": "02:10", "status": "locked" },
-    { "id": 3, "title": "[Lesson Title 3]", "duration": "01:50", "status": "locked" },
-    { "id": 4, "title": "[Lesson Title 4]", "duration": "02:15", "status": "locked" },
-    { "id": 5, "title": "[Lesson Title 5]", "duration": "01:30", "status": "locked" }
+    {
+      "id": 1,
+      "chapterId": 1,
+      "chapterTitle": "Chapter 1: [Chapter Title]",
+      "moduleId": 1,
+      "moduleTitle": "Module 1.1: [Module Title]",
+      "title": "[Specific Lesson Title 1]",
+      "duration": "07:30",
+      "status": "active"
+    },
+    {
+      "id": 2,
+      "chapterId": 1,
+      "chapterTitle": "Chapter 1: [Chapter Title]",
+      "moduleId": 1,
+      "moduleTitle": "Module 1.1: [Module Title]",
+      "title": "[Specific Lesson Title 2]",
+      "duration": "09:15",
+      "status": "locked"
+    },
+    {
+      "id": 3,
+      "chapterId": 1,
+      "chapterTitle": "Chapter 1: [Chapter Title]",
+      "moduleId": 2,
+      "moduleTitle": "Module 1.2: [Module Title]",
+      "title": "[Specific Lesson Title 3]",
+      "duration": "08:45",
+      "status": "locked"
+    }
   ],
   "quiz": [
     {
-      "question": "A multiple choice question testing content in this document?",
+      "question": "A multiple-choice question testing understanding of concepts in this course?",
       "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answerIndex": 0
+      "answerIndex": 1
     }
   ]
-}
-Ensure there are exactly 5 lessons in the lessons array. Provide 5 multiple-choice questions in the quiz array based on the text.`;
+}`;
 
-    const userPrompt = `Document Filename: ${fileName}\n\nDocument Text Preview:\n${textSlice}`;
+    const userPrompt = `Document Filename: ${fileName}\nDocument Length: ${docLength} characters\n\nDocument Text Content Preview:\n${textSlice}`;
 
     try {
       const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
       const parsed = JSON.parse(aiResponse.replace(/```json/g, '').replace(/```/g, '').trim());
-      if (parsed.title && parsed.lessons && parsed.quiz) {
+      if (parsed.title && Array.isArray(parsed.lessons) && parsed.lessons.length > 0 && parsed.quiz) {
+        // Ensure lessons have clean 1-based sequential IDs and active status for lesson 1
+        parsed.lessons = parsed.lessons.map((l, idx) => ({
+          ...l,
+          id: idx + 1,
+          status: idx === 0 ? 'active' : (l.status === 'done' ? 'done' : 'locked'),
+          duration: l.duration || '08:00'
+        }));
         return parsed;
       }
       throw new Error('Incomplete structure from AI response.');
@@ -286,28 +380,29 @@ CRITICAL QUIZ GENERATION RULES:
   }
 
   /**
-   * Synthesizes a conceptual explanation of a lesson using RAG in the user's preferred language.
-   * Grounded strictly in the retrieved text chunks.
+   * Synthesizes an in-depth conceptual lecture of a lesson using RAG in the user's preferred language.
+   * Grounded strictly in the retrieved text chunks and designed to provide thorough, extended course-play content.
    */
   async explainLesson(courseTitle, lessonTitle, contextText, language = 'English') {
-    const systemPrompt = `You are ARIA, the expert AI Tutor for SkillBridge.
-Your student is learning the course: "${courseTitle}".
-Current Lesson: "${lessonTitle}".
+    const systemPrompt = `You are ARIA, the senior AI Tutor for SkillBridge.
+Your student is taking the course: "${courseTitle}".
+Current Lesson Topic: "${lessonTitle}".
 Active Teaching Language: ${language}.
 
-CRITICAL MULTILINGUAL TEACHING INSTRUCTIONS:
-1. Target Teaching Language: You MUST deliver the ENTIRE lesson explanation, headings, concepts, and analogies fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
-2. Explain like an expert human tutor: Break down concepts into simple, intuitive explanations using your own pedagogical words in ${language}. DO NOT recite or copy sentences word-for-word verbatim from the uploaded document, and NEVER mention that you are translating the document.
-3. Grounding: Use the provided document context as the source of truth for the lesson's topics and core principles.
-4. Technical Terminology: Keep important technical terms (e.g. React, API, Database, State, Function, Loop, Props, Component) in their commonly used English/universal form alongside the explanation in ${language} so the student learns industry-standard terminology.
-5. Consistency: Never switch away to English unless citing a commonly recognized technical keyword.
-6. Structure your response into clear, engaging sections:
-   - ### 💡 Overview & Core Idea (1-2 clear, intuitive sentences explaining what this concept is and why it matters)
-   - #### 🎯 Key Principles (3-4 bullet points breaking down the essential rules or components)
-   - #### 🌐 Real-World Analogy (A vivid real-world analogy or practical scenario explaining how it works)
-   - #### 📌 Summary Takeaways (2 concise bullet points to remember)
-   - #### ⚡ Practice Reflection (1 short reflective question for the student to test their understanding)
-7. Always provide an encouraging, thorough, and highly pedagogical teaching breakdown in ${language}.`;
+PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
+1. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
+2. Comprehensive Teaching Duration: Provide an extensive, thorough, and high-value lecture (10-15 clear instructional paragraphs/points). Speak as a world-class instructor explaining each concept step-by-step with depth rather than providing short superficial summaries.
+3. Grounding: Draw core principles, terminology, and workflows directly from the retrieved document context.
+4. Technical Terminology: Keep recognized technical terms (e.g. React, API, Database, Vector, State, Function, Component) in their standard form alongside the explanation in ${language}.
+5. Blackboard Presentation Structure:
+   Structure your teaching response into these clear, rich pedagogical sections:
+   - ### 💡 Overview & Core Motivation (Detailed intuitive breakdown of what this topic is, why it is critical, and where it fits in the broader architecture)
+   - #### 🎯 Foundational Principles & Pillars (4-6 comprehensive bullet points detailing essential rules, mechanisms, and properties)
+   - #### 🔍 Technical Deep-Dive & Execution Flow (Step-by-step explanation of how the system/process operates from start to finish)
+   - #### 🌐 Real-World Analogy & Practical Case (A vivid, memorable real-world analogy and industry practical scenario)
+   - #### ⚠️ Common Pitfalls & Best Practices (What mistakes engineers/learners commonly make and how to avoid them)
+   - #### 📌 Key Architectural Takeaways (3 high-value bullet points summarizing the core learnings)
+   - #### ⚡ Practice Reflection & Challenge (An insightful question for the learner to test their mental model)`;
 
     const userPrompt = `Retrieved Course Context:\n${contextText}\n\nLesson to teach: "${lessonTitle}"\nSelected Teaching Language: ${language}`;
 
@@ -320,78 +415,140 @@ CRITICAL MULTILINGUAL TEACHING INSTRUCTIONS:
   }
 
   /**
-   * Fallback: Generates a structured course mockup using headings extracted from the document
+   * Fallback: Generates a structured dynamic course mockup using headings extracted from the document
    */
   _getMockCourse(fileName, text) {
     const cleanName = fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
     const formattedTitle = cleanName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
-    const lessonTitles = [];
+    const extractedHeadings = [];
     if (text) {
       const paras = text.split(/\n+/);
       for (let p of paras) {
         p = p.trim();
-        if (!p || p.length < 3 || p.length > 60) continue;
-
-        // Exclude lines ending with standard body punctuation
+        if (!p || p.length < 3 || p.length > 70) continue;
         if (p.endsWith('.') || p.endsWith(',') || p.endsWith('?') || p.endsWith(';')) continue;
-
-        // Clean initial numbering/formatting symbols
         const clean = p.replace(/^[\d\.\-\s#\*]+/g, '').trim();
-        if (clean.length < 4 || clean.length > 50) continue;
-
-        // Must start with alphanumeric letter
+        if (clean.length < 4 || clean.length > 60) continue;
         if (!/^[A-Za-z0-9]/.test(clean)) continue;
-
-        // Exclude descriptions or questions
         const lower = clean.toLowerCase();
-        if (lower.includes('write a') || lower.includes('demonstrating this') || lower.includes('practice questions') || lower.includes('example idea')) continue;
+        if (lower.includes('write a') || lower.includes('practice question') || lower.includes('table of contents')) continue;
 
-        if (!lessonTitles.includes(clean)) {
-          lessonTitles.push(clean);
+        if (!extractedHeadings.includes(clean)) {
+          extractedHeadings.push(clean);
         }
-        if (lessonTitles.length >= 5) break;
+        if (extractedHeadings.length >= 16) break;
       }
     }
 
+    // Determine target lesson count based on text volume
+    const textLen = (text || '').length;
+    const targetLessonCount = textLen > 30000 ? Math.min(16, Math.max(8, extractedHeadings.length)) :
+                              textLen > 10000 ? Math.min(10, Math.max(6, extractedHeadings.length)) :
+                              Math.max(4, Math.min(6, extractedHeadings.length || 4));
+
     const defaultTopics = [
-      'Overview & Foundations',
-      'Core Implementation & Structure',
-      'Key Elements & Functions',
-      'Advanced Integration & Testing',
-      'Practical Case Study'
+      'Foundations & Core Scope',
+      'Architectural Mechanisms',
+      'Component Lifecycles & Flow',
+      'Practical Implementation Patterns',
+      'Advanced Configuration & Optimization',
+      'Error Handling & Reliability',
+      'Security & Standard Compliance',
+      'End-to-End Case Study Analysis'
     ];
-    while (lessonTitles.length < 5) {
-      const nextTopic = defaultTopics[lessonTitles.length];
-      lessonTitles.push(`${formattedTitle}: ${nextTopic}`);
+
+    while (extractedHeadings.length < targetLessonCount) {
+      const idx = extractedHeadings.length % defaultTopics.length;
+      extractedHeadings.push(`${formattedTitle}: ${defaultTopics[idx]}`);
     }
+
+    // Group into chapters with 2+ modules per chapter
+    const chapters = [];
+    const flatLessons = [];
+    const numChapters = Math.max(2, Math.ceil(targetLessonCount / 4));
+    let lessonIndex = 0;
+
+    for (let c = 0; c < numChapters; c++) {
+      const chapterId = c + 1;
+      const chapterTitle = `Chapter ${chapterId}: ${extractedHeadings[lessonIndex] || `${formattedTitle} Phase ${chapterId}`}`;
+      const modules = [];
+
+      // 2 modules per chapter
+      for (let m = 0; m < 2; m++) {
+        const moduleId = m + 1;
+        const moduleLessons = [];
+        const lessonsInMod = (c === numChapters - 1 && m === 1) 
+          ? Math.max(1, targetLessonCount - lessonIndex)
+          : Math.max(1, Math.floor((targetLessonCount - lessonIndex) / (2 * (numChapters - c))));
+
+        const actualTake = Math.min(lessonsInMod, targetLessonCount - lessonIndex);
+        const moduleTitle = `Module ${chapterId}.${moduleId}: ${extractedHeadings[lessonIndex] || `Principles Part ${moduleId}`}`;
+
+        for (let l = 0; l < actualTake; l++) {
+          const currentLessonTitle = extractedHeadings[lessonIndex] || `Lesson ${lessonIndex + 1}`;
+          const lessonObj = {
+            id: flatLessons.length + 1,
+            chapterId,
+            chapterTitle,
+            moduleId,
+            moduleTitle,
+            title: currentLessonTitle,
+            duration: `0${Math.floor(6 + (lessonIndex % 7))}:${(lessonIndex * 15) % 60 < 10 ? '0' : ''}${(lessonIndex * 15) % 60}`,
+            status: flatLessons.length === 0 ? 'active' : 'locked'
+          };
+          moduleLessons.push(lessonObj);
+          flatLessons.push(lessonObj);
+          lessonIndex++;
+          if (lessonIndex >= targetLessonCount) break;
+        }
+
+        if (moduleLessons.length > 0) {
+          modules.push({
+            moduleId,
+            title: moduleTitle,
+            lessons: moduleLessons
+          });
+        }
+        if (lessonIndex >= targetLessonCount) break;
+      }
+
+      if (modules.length > 0) {
+        chapters.push({
+          chapterId,
+          title: chapterTitle,
+          description: `Master concepts in ${chapterTitle}`,
+          modules
+        });
+      }
+      if (lessonIndex >= targetLessonCount) break;
+    }
+
+    const curriculumSummary = chapters.map(ch => ({
+      title: ch.title,
+      lessons: ch.modules.reduce((acc, m) => acc + m.lessons.length, 0),
+      duration: `${ch.modules.reduce((acc, m) => acc + m.lessons.length * 8, 0)}m`,
+      locked: ch.chapterId > 1
+    }));
 
     return {
       title: `${formattedTitle} Masterclass`,
-      description: `Learn the core principles of ${formattedTitle} parsed directly from your uploaded document.`,
+      description: `Comprehensive interactive curriculum for ${formattedTitle} structured into ${chapters.length} chapters and ${flatLessons.length} sequential lesson modules.`,
       learning: [
-        `Understand the fundamental principles of ${lessonTitles[0]}`,
-        `Apply core lessons learned in ${lessonTitles[1]} to solve real-world problems`,
-        `Synthesize advanced methodologies from ${lessonTitles[2]}`,
-        'Verify learning with AI-designed exercises'
+        `Master foundational architecture of ${flatLessons[0]?.title || formattedTitle}`,
+        `Implement core workflows and verified industry patterns`,
+        `Troubleshoot and optimize complex implementations`,
+        'Validate full mastery with AI-generated assessments'
       ],
       includes: [
-        'ARIA AI Tutor Support',
-        '5 conceptual lessons',
-        'Dynamic assessment model',
-        'Completion certificate'
+        'Interactive ARIA AI Avatar Tutoring',
+        `${flatLessons.length} in-depth sequential lessons`,
+        `${chapters.length} structured learning chapters`,
+        'Digital verified completion certificate'
       ],
-      curriculum: [
-        { title: 'Module 1: Core Subjects', lessons: 3, duration: '28m', locked: false },
-        { title: 'Module 2: Advanced Topics', lessons: 2, duration: '20m', locked: true }
-      ],
-      lessons: [
-        { id: 1, title: lessonTitles[0], duration: '01:45', status: 'active' },
-        { id: 2, title: lessonTitles[1], duration: '02:10', status: 'locked' },
-        { id: 3, title: lessonTitles[2], duration: '01:50', status: 'locked' },
-        { id: 4, title: lessonTitles[3], duration: '02:15', status: 'locked' },
-        { id: 5, title: lessonTitles[4], duration: '01:30', status: 'locked' }
-      ],
+      chapters,
+      curriculum: curriculumSummary,
+      lessons: flatLessons,
       quiz: [
         {
           question: `What is the primary focus of the document "${fileName}"?`,

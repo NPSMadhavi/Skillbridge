@@ -68,7 +68,7 @@ const mapRagCourse = (dbCourse) => {
     modules: curriculumData.curriculum?.length || 5,
     price: 0,
     free: true,
-    badge: 'RAG',
+    badge: 'AI Course',
     badgeTone: 'orange',
     tags: ['AI-POWERED'],
     image: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #60a5fa 100%)',

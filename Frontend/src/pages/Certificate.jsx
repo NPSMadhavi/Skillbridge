@@ -1,10 +1,20 @@
 import { useMemo, useState, useEffect } from 'react'
 import logo from '../assets/SkillBridge_AI.png'
 import { downloadCertificateDirect } from '../utils/certificatePdf'
+import { triggerCertificateBlast } from '../utils/confettiBlast'
 
-const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = false }) => {
+const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = false, triggerBlast = false }) => {
   const [downloading, setDownloading] = useState(false)
   const [errorMsg, setErrorMsg] = useState(null)
+
+  // Trigger grand celebration confetti blast only when freshly earned
+  useEffect(() => {
+    if (!triggerBlast) return
+    const timer = setTimeout(() => {
+      triggerCertificateBlast()
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [triggerBlast])
 
   // Retrieve user full name from sessionStorage
   const user = useMemo(() => {
@@ -99,10 +109,10 @@ const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = 
       {/* Top Congratulations Heading */}
       <div className="no-print text-center mb-1 sm:mb-2">
         <h1 className="text-lg sm:text-xl font-bold text-[#1e2e4a] tracking-tight">
-          Congratulations, {firstName} !
+          Congratulations, {firstName}!
         </h1>
         <p className="text-xs text-slate-500 font-medium mt-0.5">
-          You&apos;ve successfully completed all course modules and requirements.
+          You&apos;ve successfully completed all course modules and passed the final assessment with <span className="font-bold text-emerald-600">{scorePercentage}%</span>!
         </p>
       </div>
 

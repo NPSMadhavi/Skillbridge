@@ -1,6 +1,7 @@
 import { useMemo, useEffect, useState } from 'react'
 import Certificate from './Certificate'
 import { api } from '../services/api'
+import { triggerCertificateBlast } from '../utils/confettiBlast'
 
 const fallbackQuestions = [
   {
@@ -199,6 +200,7 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
                 completedLessonIds: allLessonIds
               }).catch(e => console.warn('Failed to save completion:', e));
             }
+            triggerCertificateBlast()
             setShowCertificate(true)
           } else {
             setShowFailedView(true)

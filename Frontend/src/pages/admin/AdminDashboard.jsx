@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 
 const StatCard = ({ label, value, hint, tone, icon }) => (
@@ -33,6 +34,7 @@ const AdminDashboard = () => {
         setRecent(usersList.slice(0, 5))
       } catch (err) {
         console.error('Failed to load dashboard data', err)
+        toast.error('Failed to load dashboard metrics.')
       } finally {
         setLoading(false)
       }
