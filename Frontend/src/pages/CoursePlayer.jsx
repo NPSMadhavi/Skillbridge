@@ -4,10 +4,10 @@ import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWak
 import logo from '../assets/SkillBridge_AI.png'
 import ariaAvatarImg from '../assets/avatar.png'
 
-const PythonLogo = ({ className = "h-5 w-5" }) => (
-  <svg className={className} viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M63.35 4C35.03 4 36.43 16.3 36.43 16.3L36.48 29.07H64.08V32.96H24.79C24.79 32.96 4 30.64 4 58.91C4 87.18 22.09 85.8 22.09 85.8L32.86 85.8V70.66C32.86 70.66 32.35 52.48 50.84 52.48H77.94C77.94 52.48 91.73 52.92 91.73 39.19V16.3C91.73 16.3 94.61 4 63.35 4ZM48.65 13.06C51.5 13.06 53.82 15.38 53.82 18.23C53.82 21.08 51.5 23.4 48.65 23.4C45.8 23.4 43.48 21.08 43.48 18.23C43.48 15.38 45.8 13.06 48.65 13.06Z" fill="white" />
-    <path d="M64.65 124C92.97 124 91.57 111.7 91.57 111.7L91.52 98.93H63.92V95.04H103.21C103.21 95.04 124 97.36 124 69.09C124 40.82 105.91 42.2 105.91 42.2L95.14 42.2V57.34C95.14 57.34 95.65 75.52 77.16 75.52H50.06C50.06 75.52 36.27 75.08 36.27 88.81V111.7C36.27 111.7 33.39 124 64.65 124ZM79.35 114.94C76.5 114.94 74.18 112.62 74.18 109.77C74.18 106.92 76.5 104.6 79.35 104.6C82.2 104.6 84.52 106.92 84.52 109.77C84.52 112.62 82.2 114.94 79.35 114.94Z" fill="white" opacity="0.9" />
+const CourseBookIcon = ({ className = "h-5 w-5" }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4.5" y="3.5" width="15" height="17" rx="2.5" />
+    <path d="M4.5 16.5h15" />
   </svg>
 )
 
@@ -1461,7 +1461,7 @@ const CoursePlayer = ({
           <div className="shrink-0 space-y-2">
             <div className="flex items-center gap-2.5">
               <div className="h-10 w-10 shrink-0 rounded-xl bg-[#2563eb] text-white flex items-center justify-center shadow-xs">
-                <PythonLogo className="h-5 w-5" />
+                <CourseBookIcon className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
                 <h1 className="text-xs font-bold text-slate-900 leading-snug truncate">{course.title}</h1>

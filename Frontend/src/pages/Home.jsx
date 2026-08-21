@@ -2,10 +2,10 @@ import { useMemo, useState, useEffect } from 'react'
 import { courses } from '../data/courses'
 import { api } from '../services/api'
 
-const PythonLogo = ({ className = "h-6 w-6" }) => (
-  <svg className={className} viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M63.35 4C35.03 4 36.43 16.3 36.43 16.3L36.48 29.07H64.08V32.96H24.79C24.79 32.96 4 30.64 4 58.91C4 87.18 22.09 85.8 22.09 85.8L32.86 85.8V70.66C32.86 70.66 32.35 52.48 50.84 52.48H77.94C77.94 52.48 91.73 52.92 91.73 39.19V16.3C91.73 16.3 94.61 4 63.35 4ZM48.65 13.06C51.5 13.06 53.82 15.38 53.82 18.23C53.82 21.08 51.5 23.4 48.65 23.4C45.8 23.4 43.48 21.08 43.48 18.23C43.48 15.38 45.8 13.06 48.65 13.06Z" fill="white" />
-    <path d="M64.65 124C92.97 124 91.57 111.7 91.57 111.7L91.52 98.93H63.92V95.04H103.21C103.21 95.04 124 97.36 124 69.09C124 40.82 105.91 42.2 105.91 42.2L95.14 42.2V57.34C95.14 57.34 95.65 75.52 77.16 75.52H50.06C50.06 75.52 36.27 75.08 36.27 88.81V111.7C36.27 111.7 33.39 124 64.65 124ZM79.35 114.94C76.5 114.94 74.18 112.62 74.18 109.77C74.18 106.92 76.5 104.6 79.35 104.6C82.2 104.6 84.52 106.92 84.52 109.77C84.52 112.62 82.2 114.94 79.35 114.94Z" fill="white" opacity="0.9" />
+const CourseBookIcon = ({ className = "h-5 w-5" }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="4.5" y="3.5" width="15" height="17" rx="2.5" />
+    <path d="M4.5 16.5h15" />
   </svg>
 )
 
@@ -310,42 +310,42 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
   }, [ragCourses]);
 
   return (
-    <div className="w-full h-full flex flex-col justify-between overflow-hidden bg-[#f8fafc] text-[#0f172a] px-6 py-4 sm:px-8 sm:py-5 lg:px-10 lg:py-5 select-none">
-      <div className="max-w-7xl mx-auto w-full h-full flex flex-col justify-between overflow-hidden gap-3 sm:gap-4">
+    <div className="w-full h-full flex flex-col justify-between overflow-y-auto lg:overflow-hidden bg-[#f8fafc] text-[#0f172a] p-4 sm:p-5 lg:p-6 select-none">
+      <div className="max-w-7xl mx-auto w-full h-full flex flex-col justify-between gap-3 sm:gap-4 overflow-visible lg:overflow-hidden">
 
         {/* Top Greeting Header */}
         <div className="flex-shrink-0">
-          <h1 className="font-display text-lg sm:text-xl font-bold tracking-tight text-[#0f172a]">
+          <h1 className="font-display text-base sm:text-lg lg:text-xl font-bold tracking-tight text-[#0f172a]">
             Welcome Back, {user.fullName || 'James'}
           </h1>
-          <p className="text-xs text-slate-400 font-medium mt-0.5">
+          <p className="text-[11px] sm:text-xs text-slate-400 font-medium mt-0.5">
             {formattedDate}
           </p>
         </div>
 
         {/* 2-Column Main Dashboard Grid */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-5 min-h-0 items-stretch overflow-hidden">
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-3.5 sm:gap-4 lg:gap-5 min-h-0 items-stretch overflow-visible lg:overflow-hidden">
 
           {/* LEFT COLUMN: Continue Learning Banner + Your Learning Progress */}
-          <div className="lg:col-span-6 flex flex-col justify-between gap-3 sm:gap-4 min-h-0 overflow-hidden">
+          <div className="lg:col-span-6 flex flex-col justify-between gap-3 sm:gap-4 min-h-0 overflow-visible lg:overflow-hidden">
 
             {/* TOP BLUE CARD: Continue Learning */}
             <div
               style={{ background: 'linear-gradient(135deg, #0A55A1 0%, #0C59A8 50%, #0E5EB1 100%)' }}
-              className="rounded-2xl p-5 sm:p-6 text-white flex justify-between items-center relative overflow-hidden flex-[1.3] min-h-[210px]"
+              className="rounded-2xl p-4 sm:p-5 lg:p-6 text-white flex justify-between items-center relative overflow-hidden flex-[1.2] lg:flex-[1.3] min-h-[190px] sm:min-h-[210px] shadow-sm"
             >
               {/* Background Ambient Glow */}
               <div className="pointer-events-none absolute -right-12 -bottom-12 h-48 w-48 rounded-full bg-white/10 blur-xl" />
 
-              <div className="flex flex-col justify-between h-full z-20 flex-1 pr-28 sm:pr-36">
-                <span className="text-[11px] font-semibold text-blue-100">
+              <div className="flex flex-col justify-between h-full z-20 flex-1 pr-20 sm:pr-32 lg:pr-36">
+                <span className="text-[10px] sm:text-[11px] font-semibold text-blue-100">
                   {activeCourseProgressPct === 100 ? 'Course Completed' : 'Continue Learning'}
                 </span>
                 <div className="my-1">
-                  <h3 className="font-display text-lg sm:text-xl font-bold tracking-tight text-white leading-snug line-clamp-2">
+                  <h3 className="font-display text-base sm:text-lg lg:text-xl font-bold tracking-tight text-white leading-snug line-clamp-2">
                     {activeCourseObj ? activeCourseObj.title : 'No Courses Assigned'}
                   </h3>
-                  <p className="text-[11px] text-blue-100/90 font-medium mt-0.5">
+                  <p className="text-[10px] sm:text-[11px] text-blue-100/90 font-medium mt-0.5">
                     {activeCourseObj
                       ? `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
                       : 'Please contact your administrator to assign courses'}
@@ -359,7 +359,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                       style={{ width: `${activeCourseProgressPct}%` }}
                     />
                   </div>
-                  <span className="text-[10px] font-semibold text-blue-100">
+                  <span className="text-[9px] sm:text-[10px] font-semibold text-blue-100">
                     {activeCourseProgressPct}% Complete
                   </span>
                 </div>
@@ -368,12 +368,12 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   <button
                     type="button"
                     onClick={() => onPlayCourse?.(activeCourseObj)}
-                    className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2 text-xs font-extrabold text-slate-900 shadow-md hover:bg-slate-100 transition cursor-pointer border-0 w-fit"
+                    className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white px-3.5 sm:px-4 py-1.5 sm:py-2 text-[11px] sm:text-xs font-extrabold text-slate-900 shadow-md hover:bg-slate-100 transition cursor-pointer border-0 w-fit"
                   >
-                    <span className="text-[10px] text-black">▶</span> {activeCourseProgressPct === 100 ? 'Review Course' : activeCourseCompletedCount > 0 ? 'Resume Course' : 'Start Course'}
+                    <span className="text-[9px] sm:text-[10px] text-black">▶</span> {activeCourseProgressPct === 100 ? 'Review Course' : activeCourseCompletedCount > 0 ? 'Resume Course' : 'Start Course'}
                   </button>
                 ) : (
-                  <span className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white/20 px-3.5 py-1.5 text-xs font-semibold text-blue-100 w-fit">
+                  <span className="mt-1 inline-flex items-center gap-1.5 rounded-xl bg-white/20 px-3 py-1 text-[11px] font-semibold text-blue-100 w-fit">
                     Awaiting Course Assignment
                   </span>
                 )}
@@ -384,29 +384,31 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 <img
                   src="/avatar.png"
                   alt="Learning Avatar"
-                  className="h-full w-auto object-contain object-bottom drop-shadow-2xl"
+                  className="h-[140px] sm:h-full w-auto object-contain object-bottom drop-shadow-xl opacity-80 sm:opacity-100"
                 />
               </div>
             </div>
 
             {/* BOTTOM WHITE CARD: Your learning progress */}
-            <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/70 flex flex-col justify-between flex-shrink-0">
+            <div className="bg-white rounded-2xl p-3.5 sm:p-4 lg:p-5 border border-slate-200/70 flex flex-col justify-between flex-shrink-0 shadow-2xs">
               <h3 className="font-display text-xs sm:text-sm font-semibold text-[#1e2e4a] tracking-tight mb-1.5">
                 Your learning progress
               </h3>
 
-              <div className="flex items-center gap-4 sm:gap-6 my-auto">
+              <div className="flex flex-col sm:flex-row items-center gap-3 sm:gap-5 lg:gap-6 my-auto">
                 {/* Left: Donut Progress Ring */}
-                <DonutProgress percentage={stats.overallProgress} />
+                <div className="shrink-0 scale-90 sm:scale-95 lg:scale-100 origin-center">
+                  <DonutProgress percentage={stats.overallProgress} />
+                </div>
 
-                {/* Right: Top Motivation Text + Bottom Horizontal 3 Stats Row with Vertical Dividers */}
-                <div className="flex flex-col justify-start gap-3.5 sm:gap-4 flex-1 min-w-0 -mt-1.5 sm:-mt-2">
+                {/* Right: Top Motivation Text + Bottom Horizontal 3 Stats Row */}
+                <div className="flex flex-col justify-start gap-2.5 sm:gap-3.5 lg:gap-4 flex-1 min-w-0 text-center sm:text-left sm:-mt-1">
                   {/* Top Motivation Text */}
                   <div>
-                    <h4 className="font-display text-lg sm:text-xl font-bold text-[#1e2e4a] tracking-tight leading-snug">
+                    <h4 className="font-display text-base sm:text-lg lg:text-xl font-bold text-[#1e2e4a] tracking-tight leading-snug">
                       {stats.overallProgress > 0 ? "You're doing great!" : displayCourses.length > 0 ? "Ready to learn!" : "Welcome to SkillBridge"}
                     </h4>
-                    <p className="text-xs text-slate-400 font-normal mt-0.5 leading-snug">
+                    <p className="text-[11px] sm:text-xs text-slate-400 font-normal mt-0.5 leading-snug">
                       {stats.overallProgress > 0
                         ? "Keep going and complete your courses"
                         : displayCourses.length > 0
@@ -416,49 +418,49 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   </div>
 
                   {/* Bottom: 3 Stats Badges */}
-                  <div className="flex items-center gap-3 sm:gap-4 pt-2 sm:pt-2.5">
+                  <div className="grid grid-cols-3 sm:flex items-center gap-1.5 sm:gap-3 lg:gap-4 pt-1 sm:pt-2 w-full justify-center sm:justify-start">
                     {/* Total Modules */}
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-xl bg-[#eff6ff] text-[#3b82f6] flex items-center justify-center flex-shrink-0">
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                    <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-2 text-center sm:text-left">
+                      <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-xl bg-[#eff6ff] text-[#3b82f6] flex items-center justify-center flex-shrink-0">
+                        <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                         </svg>
                       </div>
                       <div>
-                        <p className="text-sm font-bold font-display text-[#0f172a] leading-none">{stats.totalModules}</p>
-                        <p className="text-[10px] text-slate-400 font-medium mt-0.5">Total Modules</p>
+                        <p className="text-xs sm:text-sm font-bold font-display text-[#0f172a] leading-none">{stats.totalModules}</p>
+                        <p className="text-[9px] sm:text-[10px] text-slate-400 font-medium mt-0.5 whitespace-nowrap">Total Modules</p>
                       </div>
                     </div>
 
                     {/* Vertical Divider 1 */}
-                    <div className="w-[1px] h-6 bg-slate-100 flex-shrink-0" />
+                    <div className="hidden sm:block w-[1px] h-6 bg-slate-100 flex-shrink-0" />
 
                     {/* Completed */}
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-full bg-[#f0fdf4] text-[#16a34a] flex items-center justify-center flex-shrink-0">
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                    <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-2 text-center sm:text-left">
+                      <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-[#f0fdf4] text-[#16a34a] flex items-center justify-center flex-shrink-0">
+                        <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                       </div>
                       <div>
-                        <p className="text-sm font-bold font-display text-[#0f172a] leading-none">{stats.completedCourses}</p>
-                        <p className="text-[10px] text-slate-400 font-medium mt-0.5">Completed</p>
+                        <p className="text-xs sm:text-sm font-bold font-display text-[#0f172a] leading-none">{stats.completedCourses}</p>
+                        <p className="text-[9px] sm:text-[10px] text-slate-400 font-medium mt-0.5 whitespace-nowrap">Completed</p>
                       </div>
                     </div>
 
                     {/* Vertical Divider 2 */}
-                    <div className="w-[1px] h-6 bg-slate-100 flex-shrink-0" />
+                    <div className="hidden sm:block w-[1px] h-6 bg-slate-100 flex-shrink-0" />
 
                     {/* In Progress */}
-                    <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-full bg-[#fff7ed] text-[#ea580c] flex items-center justify-center flex-shrink-0">
-                        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
+                    <div className="flex flex-col sm:flex-row items-center gap-1.5 sm:gap-2 text-center sm:text-left">
+                      <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-[#fff7ed] text-[#ea580c] flex items-center justify-center flex-shrink-0">
+                        <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
                       </div>
                       <div>
-                        <p className="text-sm font-bold font-display text-[#0f172a] leading-none">{stats.inProgressCourses}</p>
-                        <p className="text-[10px] text-slate-400 font-medium mt-0.5">In Progress</p>
+                        <p className="text-xs sm:text-sm font-bold font-display text-[#0f172a] leading-none">{stats.inProgressCourses}</p>
+                        <p className="text-[9px] sm:text-[10px] text-slate-400 font-medium mt-0.5 whitespace-nowrap">In Progress</p>
                       </div>
                     </div>
                   </div>
@@ -469,12 +471,12 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
           </div>
 
           {/* RIGHT COLUMN: Full Height My Courses Card */}
-          <div className="lg:col-span-6 bg-white rounded-2xl p-4 sm:p-5 border border-slate-200/70 flex flex-col justify-between flex-1 min-h-0 overflow-hidden">
+          <div className="lg:col-span-6 bg-white rounded-2xl p-3.5 sm:p-4 lg:p-5 border border-slate-200/70 flex flex-col justify-between flex-1 min-h-[280px] lg:min-h-0 overflow-hidden shadow-2xs">
             <div className="flex items-center justify-between mb-2 flex-shrink-0">
-              <h3 className="font-display text-base font-bold text-[#1e2e4a] tracking-tight">
+              <h3 className="font-display text-sm sm:text-base font-bold text-[#1e2e4a] tracking-tight">
                 My Assigned Courses
               </h3>
-              <span className="text-xs text-slate-400 font-medium">
+              <span className="text-[11px] sm:text-xs text-slate-400 font-medium">
                 {displayCourses.length} Course{displayCourses.length === 1 ? '' : 's'}
               </span>
             </div>
@@ -490,7 +492,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 </div>
               ) : (
                 displayCourses.map((c, idx) => {
-                  const bgColors = ['bg-[#22c55e]', 'bg-[#2563eb]', 'bg-[#9333ea]', 'bg-[#ea580c]', 'bg-[#0891b2]', 'bg-[#4f46e5]'];
+                  const bgColors = ['bg-[#2563eb]', 'bg-[#8b5cf6]', 'bg-[#059669]', 'bg-[#ea580c]', 'bg-[#0891b2]', 'bg-[#4f46e5]', 'bg-[#db2777]'];
                   const courseLessons = (Array.isArray(c.lessons) && c.lessons.length > 0)
                     ? c.lessons
                     : (Array.isArray(c.curriculum) && c.curriculum.length > 0 ? c.curriculum : []);
@@ -521,18 +523,18 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                   const isStarted = completedCount > 0;
 
                   return (
-                    <div key={c.id} className="py-2.5 flex items-center justify-between group gap-3">
-                      <div className="flex items-center gap-3.5 min-w-0">
-                        <div className={`h-10 w-10 rounded-xl ${bgColors[idx % bgColors.length]} text-white flex items-center justify-center flex-shrink-0 shadow-sm`}>
-                          <PythonLogo className="h-5 w-5" />
+                    <div key={c.id} className="py-2 sm:py-2.5 flex items-center justify-between group gap-2.5 sm:gap-3">
+                      <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0 flex-1">
+                        <div className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl ${bgColors[idx % bgColors.length]} text-white flex items-center justify-center flex-shrink-0 shadow-sm`}>
+                          <CourseBookIcon className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <h4 className="font-display text-xs sm:text-sm font-bold text-[#1e2e4a] truncate group-hover:text-[#ff7a00] transition">
                             {c.title}
                           </h4>
-                          <div className="flex items-center gap-3 text-[11px] text-slate-400 mt-1 font-normal">
+                          <div className="flex items-center gap-3 text-[10px] sm:text-[11px] text-slate-400 mt-0.5 sm:mt-1 font-normal">
                             <span className="flex items-center gap-1 text-slate-400">
-                              <svg className="h-3.5 w-3.5 text-[#f97316]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                              <svg className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-[#f97316]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                               </svg>
                               {totalCount} Modules
@@ -545,20 +547,22 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                         <button
                           type="button"
                           onClick={() => onPlayCourse?.(c)}
-                          className="cursor-pointer rounded-xl bg-[#16a34a] hover:bg-[#15803d] w-[132px] h-9 text-xs font-bold text-white transition shadow-sm border-0 flex items-center justify-center gap-1.5 flex-shrink-0"
+                          className="cursor-pointer rounded-xl bg-[#16a34a] hover:bg-[#15803d] min-w-[76px] sm:w-[124px] lg:w-[132px] h-8 sm:h-9 text-[11px] sm:text-xs font-bold text-white transition shadow-sm border-0 flex items-center justify-center gap-1 sm:gap-1.5 flex-shrink-0 px-2.5 sm:px-3"
                         >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <svg className="h-3 w-3 sm:h-3.5 sm:w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                           </svg>
-                          Completed
+                          <span className="hidden sm:inline">Completed</span>
+                          <span className="sm:hidden">Done</span>
                         </button>
                       ) : (
                         <button
                           type="button"
                           onClick={() => onPlayCourse?.(c)}
-                          className="cursor-pointer rounded-xl bg-[#ff7a00] hover:bg-[#ea6c00] w-[132px] h-9 text-xs font-bold text-white transition shadow-sm border-0 flex items-center justify-center gap-1.5 flex-shrink-0"
+                          className="cursor-pointer rounded-xl bg-[#ff7a00] hover:bg-[#ea6c00] min-w-[76px] sm:w-[124px] lg:w-[132px] h-8 sm:h-9 text-[11px] sm:text-xs font-bold text-white transition shadow-sm border-0 flex items-center justify-center gap-1 sm:gap-1.5 flex-shrink-0 px-2.5 sm:px-3"
                         >
-                          {isStarted ? 'Continue' : 'Start Course'} <span className="text-xs font-bold">→</span>
+                          <span>{isStarted ? 'Continue' : 'Start'}</span>
+                          <span className="text-[10px] sm:text-xs font-bold">→</span>
                         </button>
                       )}
                     </div>
@@ -569,7 +573,6 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
           </div>
 
         </div>
-
 
       </div>
     </div>

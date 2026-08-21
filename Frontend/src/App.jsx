@@ -75,7 +75,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
   }
 
   return (
-    <div className="h-screen max-h-screen overflow-hidden flex flex-col bg-[#f4f6fb]">
+    <div className="min-h-screen lg:h-screen lg:max-h-screen flex flex-col bg-[#f4f6fb] overflow-y-auto lg:overflow-hidden">
       <Header
         onLogoClick={() => navigate('/')}
         onLogout={() => {
@@ -87,7 +87,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
         setSearchQuery={setSearchQuery}
         showSearch={true}
       />
-      <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto lg:overflow-hidden">
         {children}
       </div>
     </div>
