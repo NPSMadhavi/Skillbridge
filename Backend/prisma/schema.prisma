@@ -59,14 +59,23 @@ model Course {
 }
 
 model CourseChunk {
-  id          String   @id @default(uuid())
-  courseId    String
-  chunkIndex  Int
-  chunkText   String   @db.Text
-  embedding   Unsupported("vector(768)")?
-  createdAt   DateTime @default(now())
+  id              String   @id @default(uuid())
+  courseId        String
+  chunkIndex      Int
+  chunkText       String   @db.Text
+  topic           String?
+  subtopic        String?
+  concept         String?
+  chunkType       String?
+  sourcePage      Int?
+  sourceSection   String?
+  prerequisites   String?
+  keyPoints       Json?
+  semanticSummary String?  @db.Text
+  embedding       Unsupported("vector(768)")?
+  createdAt       DateTime @default(now())
 
-  course      Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
   @@index([courseId])
 }

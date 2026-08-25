@@ -81,7 +81,7 @@ const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = 
   }, [autoDownload])
 
   return (
-    <div className="min-h-screen sm:h-screen sm:max-h-screen w-full bg-[#f8fafc] text-[#0f172a] select-none flex flex-col items-center justify-between p-3 sm:p-4 font-sans overflow-y-auto sm:overflow-hidden">
+    <div className="min-h-screen w-full bg-[#f8fafc] text-[#0f172a] select-none flex flex-col items-center justify-between p-3 sm:p-5 font-sans overflow-y-auto">
       <style>{`
         @media print {
           body * {

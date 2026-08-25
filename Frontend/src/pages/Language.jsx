@@ -53,7 +53,7 @@ const Language = ({ onContinue }) => {
   }
 
   return (
-    <main className="relative isolate flex min-h-svh w-full items-center justify-center overflow-hidden px-4 py-10 sm:px-6 lg:px-8">
+    <main className="relative isolate flex min-h-svh w-full items-center justify-center overflow-y-auto px-4 py-8 sm:px-6 lg:px-8">
       <div
         className="pointer-events-none absolute inset-0 -z-10 bg-[radial-gradient(ellipse_80%_55%_at_50%_0%,#1b3b72_0%,#0d2248_42%,#081530_100%)]"
         aria-hidden="true"
@@ -79,8 +79,8 @@ const Language = ({ onContinue }) => {
                 type="button"
                 onClick={() => setSelected(language.code)}
                 className={`group animate-rise-in flex min-h-[88px] cursor-pointer items-center gap-4 rounded-2xl border px-5 py-4 text-left transition duration-300 ${active
-                    ? 'border-[#ff8c21]/70 bg-[rgba(255,140,33,0.12)] shadow-[0_0_0_1px_rgba(255,140,33,0.25),0_12px_30px_rgba(0,0,0,0.25)]'
-                    : 'border-white/10 bg-[rgba(22,42,78,0.45)] hover:border-white/25 hover:bg-[rgba(30,54,96,0.55)]'
+                  ? 'border-[#ff8c21]/70 bg-[rgba(255,140,33,0.12)] shadow-[0_0_0_1px_rgba(255,140,33,0.25),0_12px_30px_rgba(0,0,0,0.25)]'
+                  : 'border-white/10 bg-[rgba(22,42,78,0.45)] hover:border-white/25 hover:bg-[rgba(30,54,96,0.55)]'
                   }`}
                 style={{ animationDelay: `${Math.min(index, 11) * 0.04}s` }}
                 aria-pressed={active}

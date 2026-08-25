@@ -161,7 +161,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     // Store chunks and generate vector embeddings directly in PostgreSQL pgvector
     try {
       console.log(`[pgvector] Indexing course ${newCourse.id} into PostgreSQL pgvector...`);
-      await vectorChunkService.indexCourse(prisma, newCourse.id, textContent, pages);
+      await vectorChunkService.indexCourse(prisma, newCourse.id, textContent, pages, generatedCourse);
       console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
     } catch (vectorErr) {
       console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
@@ -342,8 +342,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 
-// 4. Generate AI concept explanation for a specific lesson/chapter using RAG Vector DB
+// 4. Generate AI concept explanation for a specific lesson/chapter using RAG Vector DB with Database Persistence Cache
 router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res) => {
+  const fetchStartTime = Date.now();
   try {
     const course = await prisma.course.findUnique({
       where: { id: req.params.id }
@@ -383,29 +384,103 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
 
     const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
     const targetLanguage = targetLangInfo.name;
-    console.log(`[RAG Explain Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${lessonTitle}" (Course ID: ${course.id})`);
+    const lessonIdStr = String(req.params.lessonId);
 
-    // Retrieve semantically relevant context chunks from PostgreSQL pgvector
+    console.log(`[PERF:LESSON_FETCH_START] Course: ${course.id}, Lesson: ${lessonIdStr} ("${lessonTitle}"), Lang: "${targetLanguage}" (${targetLangInfo.code})`);
+
+    // 1. FAST PATH: Check if lesson explanation is already stored in Course.curriculum database record
+    let curriculum = course.curriculum;
+    if (typeof curriculum === 'string') {
+      try { curriculum = JSON.parse(curriculum); } catch { curriculum = {}; }
+    }
+    if (!curriculum || typeof curriculum !== 'object') curriculum = {};
+
+    if (Array.isArray(curriculum.lessons)) {
+      const existingLesson = curriculum.lessons.find(
+        l => String(l.id) === lessonIdStr || l.title === lessonTitle
+      );
+
+      if (existingLesson) {
+        const cachedExplanation = existingLesson.explanations?.[targetLangInfo.code] ||
+          (targetLangInfo.code === 'en' ? existingLesson.explanation : null);
+
+        if (cachedExplanation && typeof cachedExplanation === 'string' && cachedExplanation.trim().length > 30) {
+          const fetchDuration = Date.now() - fetchStartTime;
+          console.log(`[PERF:LESSON_FETCH_END] Served lesson "${lessonTitle}" directly from PostgreSQL DB cache in ${fetchDuration}ms (0 LLM / 0 vector calls)`);
+          return res.json({
+            explanation: cachedExplanation,
+            language: targetLangInfo,
+            cached: true,
+            fetchDurationMs: fetchDuration
+          });
+        }
+      }
+    }
+
+    // 2. SLOW PATH: Run RAG Vector Search + LLM Generation once and persist for future opens
+    const ragStartTime = Date.now();
+    console.log(`[PERF:RAG_START] Starting vector search query for lesson "${lessonTitle}" (Course ID: ${course.id})`);
+
     let chunks = [];
     try {
-      chunks = await vectorChunkService.querySimilarChunks(prisma, course.id, lessonTitle, 6);
-      console.log(`[pgvector Explain Query] Vector search results: Retrieved ${chunks.length} chunks.`);
-      chunks.forEach((c) => {
-        console.log(`  -> Chunk ID: ${c.id} (Page: ${c.page_number}, Index: ${c.chunk_index}, Similarity: ${c.similarity ?? 'N/A'})`);
-        console.log(`     Text content: "${(c.text || '').slice(0, 150).replace(/\n/g, ' ')}..."`);
+      chunks = await vectorChunkService.querySimilarChunks(prisma, course.id, lessonTitle, 6, {
+        includeNeighbors: true,
+        lessonTitle,
+        topicFilter: lessonTitle
       });
+      const ragDuration = Date.now() - ragStartTime;
+      console.log(`[PERF:RAG_END] Retrieved ${chunks.length} chunks from pgvector in ${ragDuration}ms.`);
     } catch (e) {
-      console.warn(`[pgvector Explain Query] pgvector query failed. Falling back to simple slicing:`, e.message);
+      const ragDuration = Date.now() - ragStartTime;
+      console.warn(`[PERF:RAG_END] pgvector query notice (${ragDuration}ms):`, e.message);
     }
 
     // Join retrieved chunks into prompt context text
     const contextText = chunks.length > 0
       ? chunks.map(c => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
-      : course.fileText.slice(0, 15000);
+      : (course.fileText || '').slice(0, 15000);
 
-    // Call the LLM to explain based on retrieved context in preferred language
+    const llmStartTime = Date.now();
+    console.log(`[PERF:LLM_START] Generating lesson explanation with LLM for "${lessonTitle}" in ${targetLanguage}...`);
+
     const explanation = await aiService.explainLesson(course.title, lessonTitle, contextText, targetLanguage);
-    res.json({ explanation, language: targetLangInfo });
+    const llmDuration = Date.now() - llmStartTime;
+    console.log(`[PERF:LLM_END] Generated explanation via LLM in ${llmDuration}ms.`);
+
+    // 3. PERSISTENCE: Save generated explanation into PostgreSQL Course.curriculum
+    try {
+      if (Array.isArray(curriculum.lessons)) {
+        const targetLesson = curriculum.lessons.find(
+          l => String(l.id) === lessonIdStr || l.title === lessonTitle
+        );
+        if (targetLesson) {
+          if (!targetLesson.explanations) targetLesson.explanations = {};
+          targetLesson.explanations[targetLangInfo.code] = explanation;
+          if (targetLangInfo.code === 'en') {
+            targetLesson.explanation = explanation;
+          }
+          await prisma.course.update({
+            where: { id: course.id },
+            data: { curriculum: curriculum }
+          });
+          console.log(`[Persisted Cache] Successfully persisted explanation for lesson "${lessonTitle}" (${targetLangInfo.code}) into Course.curriculum`);
+        }
+      }
+    } catch (persistErr) {
+      console.warn(`[Persisted Cache] Notice on persisting lesson explanation:`, persistErr.message);
+    }
+
+    const totalDuration = Date.now() - fetchStartTime;
+    console.log(`[PERF:LESSON_FETCH_END] Total lesson fetch & generation completed in ${totalDuration}ms`);
+
+    res.json({
+      explanation,
+      language: targetLangInfo,
+      cached: false,
+      fetchDurationMs: totalDuration,
+      ragDurationMs: Date.now() - ragStartTime,
+      llmDurationMs: llmDuration
+    });
   } catch (error) {
     console.error('Failed to generate dynamic lesson guide:', error);
     res.status(500).json({ error: 'Failed to generate custom lesson guide.' });
@@ -458,7 +533,10 @@ router.post('/:id/lessons/:lessonId/quiz', authenticateToken, async (req, res) =
     // Retrieve semantically relevant context chunks from PostgreSQL pgvector for this specific chapter
     let chunks = [];
     try {
-      chunks = await vectorChunkService.querySimilarChunks(prisma, course.id, lessonTitle, 5);
+      chunks = await vectorChunkService.querySimilarChunks(prisma, course.id, lessonTitle, 5, {
+        lessonTitle,
+        topicFilter: lessonTitle
+      });
       console.log(`[pgvector Quiz Query] Retrieved ${chunks.length} chunks from pgvector for quiz.`);
     } catch (e) {
       console.warn(`[pgvector Quiz Query] pgvector query failed:`, e.message);
@@ -663,21 +741,24 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
     console.log(`[RAG Chat Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
 
     // Retrieve semantic context matching student query from PostgreSQL pgvector
+    const ragChatStartTime = Date.now();
+    console.log(`[PERF:RAG_START] Starting question vector query for message: "${message.slice(0, 50)}..." (Course ID: ${course.id})`);
     let chunks = [];
     try {
-      chunks = await vectorChunkService.querySimilarChunks(prisma, course.id, message, 5);
-      console.log(`[pgvector Chat Query] Vector search results: Retrieved ${chunks.length} chunks.`);
-      chunks.forEach((c) => {
-        console.log(`  -> Chunk ID: ${c.id} (Page: ${c.page_number}, Index: ${c.chunk_index}, Similarity: ${c.similarity ?? 'N/A'})`);
-        console.log(`     Text content: "${(c.text || '').slice(0, 150).replace(/\n/g, ' ')}..."`);
+      chunks = await vectorChunkService.querySimilarChunks(prisma, course.id, message, 5, {
+        lessonTitle,
+        topicFilter: lessonTitle
       });
+      const ragChatDuration = Date.now() - ragChatStartTime;
+      console.log(`[PERF:RAG_END] Retrieved ${chunks.length} chunks from pgvector in ${ragChatDuration}ms.`);
     } catch (e) {
-      console.warn(`[pgvector Chat Query] pgvector RAG query failed for chat. Falling back to slicing:`, e.message);
+      const ragChatDuration = Date.now() - ragChatStartTime;
+      console.warn(`[PERF:RAG_END] pgvector RAG query notice (${ragChatDuration}ms):`, e.message);
     }
 
     const contextText = chunks.length > 0
       ? chunks.map(c => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
-      : course.fileText.slice(0, 15000);
+      : (course.fileText || '').slice(0, 15000);
 
     const systemPrompt = `You are ARIA, the intelligent AI Tutor for SkillBridge.
 You are actively teaching the course: "${course.title}" (Current Lesson: "${lessonTitle || 'Overview'}").
@@ -696,13 +777,17 @@ CRITICAL CONCISE & UNDERSTANDABLE TUTORING RULES:
 
     const userPrompt = `Retrieved Course Context:\n${contextText}\n\n${currentConcept ? `Active Lesson Concept:\n${currentConcept}\n\n` : ''}Student Question:\n${message}\n\nSelected Response Language:\n${targetLanguage}`;
 
-    console.log(`[LLM Chat Prompt] Target Language: ${targetLanguage}, History Length: ${Array.isArray(conversationHistory) ? conversationHistory.length : 0}`);
+    const llmChatStartTime = Date.now();
+    console.log(`[PERF:LLM_START] Generating tutor answer via LLM in ${targetLanguage}...`);
 
     let reply;
     try {
       reply = await aiService._callLLM(systemPrompt, userPrompt, false, conversationHistory || []);
+      const llmChatDuration = Date.now() - llmChatStartTime;
+      console.log(`[PERF:LLM_END] Generated tutor answer via LLM in ${llmChatDuration}ms.`);
     } catch (e) {
-      console.warn('AI call in chat failed:', e.message);
+      const llmChatDuration = Date.now() - llmChatStartTime;
+      console.warn(`[PERF:LLM_END] AI call in chat fallback triggered (${llmChatDuration}ms):`, e.message);
       if (targetLangInfo.code === 'zh') {
         reply = `非常好的一点！在 ${course.title} 中，理解这个概念对于掌握核心技能非常重要。如果您有更多疑问，欢迎随时提问！`;
       } else if (targetLangInfo.code === 'ms') {
@@ -771,7 +856,7 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
       // Re-index vector chunks and embeddings for the new document
       try {
         console.log(`[pgvector] Re-indexing course ${courseId} with new document embeddings...`);
-        await vectorChunkService.indexCourse(prisma, courseId, textContent, pages);
+        await vectorChunkService.indexCourse(prisma, courseId, textContent, pages, generatedCourse);
         console.log(`[pgvector] Vector embeddings updated successfully.`);
       } catch (vectorErr) {
         console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);

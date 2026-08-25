@@ -1,46 +1,70 @@
 /**
  * SkillBridge Voice Tutor Interaction Manager
- * Modeled after Whisper Flow (https://github.com/dimastatz/whisper-flow.git)
+ * Strict 8-State Voice State Machine with Hardware/Software Echo Prevention,
+ * Robust Wake-Word Detection, Web Audio VAD, and Multilingual Support.
  *
- * Implements a strict Two-Stage Voice State Machine:
- * 1. SLEEPING / IDLE: Microphone stream continuously ACTIVE, monitoring solely for wake-word ("Hey ARIA").
- * 2. ACTIVE_LISTENING: Real-time high-fidelity transcription + VAD silence completion + Whisper.
- * 3. AI_THINKING: LLM / RAG processing lock.
- * 4. AI_SPEAKING: TTS playback with 100% microphone transcription suppression to prevent self-echo.
- * 5. POST_SPEECH_COOLDOWN: 500ms buffer purge before returning to SLEEPING.
+ * States:
+ * 1. SLEEPING           - Passive mic monitoring, evaluating SOLELY for wake-word ("Hey ARIA").
+ * 2. WAKE_DETECTED       - Wake-word confirmed, buffers purged, wake detection paused.
+ * 3. ARIA_GREETING       - ARIA speaks short acknowledgement ("Yes? Tell me.") with 100% mic gating.
+ * 4. ACTIVE_LISTENING    - VAD active, capturing user's question until natural silence.
+ * 5. PROCESSING          - User speech finished, Whisper + RAG + LLM execution lock.
+ * 6. ARIA_SPEAKING       - TTS playback of answer with complete mic/ASR suppression.
+ * 7. FOLLOW_UP_LISTENING - Post-speech window allowing natural follow-up without wake-word.
+ * 8. RETURN_TO_SLEEP     - Timeout / user dismiss, returning to SLEEPING.
  */
 
 export const TutorState = {
   SLEEPING: 'SLEEPING',
-  IDLE: 'SLEEPING', // Backward-compatibility alias
   WAKE_DETECTED: 'WAKE_DETECTED',
+  ARIA_GREETING: 'ARIA_GREETING',
   ACTIVE_LISTENING: 'ACTIVE_LISTENING',
-  LISTENING: 'ACTIVE_LISTENING', // Alias
-  USER_SPEAKING: 'USER_SPEAKING',
-  AI_THINKING: 'AI_THINKING',
-  PROCESSING: 'AI_THINKING', // Alias
-  AI_SPEAKING: 'AI_SPEAKING',
-  TUTOR_SPEAKING: 'AI_SPEAKING', // Alias
-  POST_SPEECH_COOLDOWN: 'POST_SPEECH_COOLDOWN',
+  PROCESSING: 'PROCESSING',
+  ARIA_SPEAKING: 'ARIA_SPEAKING',
+  FOLLOW_UP_LISTENING: 'FOLLOW_UP_LISTENING',
+  RETURN_TO_SLEEP: 'RETURN_TO_SLEEP',
   ERROR: 'ERROR'
 };
 
-// Tolerant wake words & phonetic variants for ARIA (including Whisper ASR phonetics)
+// Configurable diagnostic logging categories
+export const LogCategory = {
+  VOICE_STATE: 'VOICE_STATE',
+  WAKE_DETECTION: 'WAKE_DETECTION',
+  WAKE_MATCH: 'WAKE_MATCH',
+  VAD_START: 'VAD_START',
+  VAD_END: 'VAD_END',
+  AUDIO_DURATION: 'AUDIO_DURATION',
+  TRANSCRIPTION: 'TRANSCRIPTION',
+  TRANSCRIPTION_CONFIDENCE: 'TRANSCRIPTION_CONFIDENCE',
+  RAG_REQUEST: 'RAG_REQUEST',
+  LLM_REQUEST: 'LLM_REQUEST',
+  TTS_START: 'TTS_START',
+  TTS_END: 'TTS_END',
+  ECHO_REJECTED: 'ECHO_REJECTED',
+  RETURN_TO_SLEEP: 'RETURN_TO_SLEEP'
+};
+
+// Tolerant wake word patterns across supported languages
 const WAKE_WORD_PATTERNS = [
-  // Common prefixes + phonetic ARIA variants
-  /\b(?:hey|hi|hello|ok|okay|ask|hay|heya|yo|dear|here|hear)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
-  // Whisper phonetic captures for "Hey Aria" / "Hey Arya"
+  /\b(?:hey|hi|hello|ok|okay|ask|hay|heya|yo|dear|here|hear|hallo)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
   /\b(?:here\s+ya|hear\s+ya|hey\s+ya|heya|hiya|hi\s+ya|hariya|harya|haria)\b/i,
-  // Single-word direct wake names
   /\b(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
-  // Chinese
   /(?:你好|嗨|请问|问一下)?\s*(?:aria|arya|area)/i,
-  // Malay
   /\b(?:hai|halo|helo|tanya)\s+(?:aria|arya|area)\b/i,
-  // Tamil
   /(?:வணக்கம்|ஹாய்)?\s*(?:aria|ஆரியா)/i,
-  // Bangla
   /(?:হ্যালো|নমস্কার)?\s*(?:aria|আরিয়া)/i
+];
+
+// ARIA's own acknowledgment and greeting phrases across all languages that must NEVER be processed as user questions
+export const KNOWN_SELF_ECHO_PATTERNS = [
+  /\b(?:yes|yeah|ya)?\s*(?:tell\s+me|im\s+listening|i\s+am\s+listening|listening|please\s+tell\s+me)\b/i,
+  /\b(?:yes\s*\??\s*tell\s+me|i'm\s+listening|im\s+listening|i\s+am\s+listening|yes\s+tell\s+me\s+i'm\s+listening)\b/i,
+  /\b(?:yes\s*\??\s*tell\s+me|yes\s+tell\s+me|tell\s+me\s+i'm\s+listening)\b/i,
+  /\b(?:hello\s+i\s+am\s+aria|i\s+am\s+aria|your\s+personal\s+ai\s+tutor)\b/i,
+  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么)/i,
+  /\b(?:ya\s*\??\s*saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu)\b/i,
+  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்)/i,
+  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি)/i
 ];
 
 const ARIA_VARIANTS_SET = new Set([
@@ -61,12 +85,15 @@ export const containsWakeWord = (text) => {
   const normalized = normalizeTranscript(text);
   if (!normalized) return false;
 
-  // Direct regex pattern match
+  // If text is purely an echo of ARIA's own greeting, do not treat as wake word
+  if (KNOWN_SELF_ECHO_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return false;
+  }
+
   if (WAKE_WORD_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return true;
   }
 
-  // Token-level fuzzy match: check if any word in the transcript is an ARIA variation
   const tokens = normalized.split(' ');
   return tokens.some((token) => ARIA_VARIANTS_SET.has(token));
 };
@@ -74,12 +101,10 @@ export const containsWakeWord = (text) => {
 export const extractQuestionFromWakeWord = (text) => {
   if (!text) return '';
   let clean = text.trim();
-  // Strip leading wake phrases (including "Here ya", "Hear ya", "Hey ya")
   clean = clean.replace(
     /^(?:hey|hi|hello|ok|okay|ask|hay|heya|yo|dear|here|hear|excuse\s+me|你好|嗨|hai|halo|வணக்கம்|ஹாய்|হ্যালো)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria|ya|ia|ஆரியா|আরিয়া)[\s,.:!?-]*/i,
     ''
   ).trim();
-  // Strip trailing wake phrases: e.g. "What is ANN, Aria?"
   clean = clean.replace(
     /[\s,.:!?-]*(?:aria|area|arya|aarya|ariya|auria|oria|arria|ya|ஆரியா|আরিয়া)$/i,
     ''
@@ -97,18 +122,28 @@ export const isNoiseOrHallucination = (text) => {
     'see you in the next video', 'see you in the next one', 'see you next time',
     'see you later', 'i will see you in the next', 'i will see you',
     'subtitles by', 'subscribe to', 'subscribe', 'like and subscribe',
-    'translated by', 'you', 'so', 'bye', 'goodbye'
+    'translated by', 'you', 'so', 'bye', 'goodbye', 'okay bye',
+    'yes', 'yeah', 'ok', 'okay', 'tell me', 'listening', 'im listening', 'i am listening'
   ];
-  return noisePhrases.some((p) => t === p || t.includes(p));
+  return noisePhrases.some((p) => t === p || (t.length < 20 && t.includes(p)));
 };
 
 export class VoiceTutorManager {
   constructor(options = {}) {
-    this.options = options;
+    this.options = {
+      debug: true,
+      followUpTimeoutMs: 7000,
+      speechRmsThreshold: 14,
+      silenceRmsThreshold: 8,
+      silenceDurationMs: 1200,
+      maxRecordingMs: 15000,
+      ...options
+    };
+
     this.state = TutorState.SLEEPING;
     this.stateListeners = new Set();
 
-    // Audio & Pipeline handles (kept continuously active)
+    // Audio & Pipeline handles
     this.micStream = null;
     this.audioContext = null;
     this.analyser = null;
@@ -117,31 +152,34 @@ export class VoiceTutorManager {
     this.vadInterval = null;
     this.recognition = null;
 
-    // State & Suppression Flags
+    // Gating & Lifecycle flags
     this.isMounted = false;
     this.isTutorSpeaking = false;
-    this.isLecturePlaying = false;
-    this.isAwake = false;
-    this.inConversationMode = false;
     this.ttsMutedUntil = 0;
-    this.wakeTimeoutId = null;
+    this.recentAriaUtterances = []; // For transcript echo rejection
+    this.followUpTimeoutId = null;
     this.cooldownTimeoutId = null;
-    this.currentUtteranceId = null;
 
-    // VAD & Energy parameters
-    this.SPEECH_RMS_THRESHOLD = 14;
-    this.SILENCE_RMS_THRESHOLD = 8;
-    this.SILENCE_DURATION_MS = 1200;
-    this.MAX_RECORDING_MS = 15000;
+    // VAD state variables
     this.speechFramesCount = 0;
     this.lastSpeechTime = 0;
     this.recordingStartTime = 0;
-    this.lastEnergyLogTime = 0;
+    this.isRecording = false;
 
     // Deduplication tracking
     this.lastProcessedText = '';
     this.lastProcessedTime = 0;
     this.isRestarting = false;
+  }
+
+  log(category, message, data = null) {
+    if (!this.options.debug) return;
+    const prefix = `[VOICE:${category}]`;
+    if (data !== null && data !== undefined) {
+      console.log(`${prefix} ${message}`, data);
+    } else {
+      console.log(`${prefix} ${message}`);
+    }
   }
 
   onStateChange(listener) {
@@ -151,76 +189,58 @@ export class VoiceTutorManager {
 
   setState(newState) {
     if (this.state === newState) return;
+    const oldState = this.state;
     this.state = newState;
-    console.log(`[VOICE] State: ${newState}`);
+    this.log(LogCategory.VOICE_STATE, `${oldState} -> ${newState}`);
+
     this.stateListeners.forEach((listener) => {
       try {
         listener(newState);
       } catch (e) {
-        console.error(e);
+        console.error('[VOICE] Error in state listener:', e);
       }
     });
   }
 
   setLecturePlaying(isPlaying) {
     this.isLecturePlaying = isPlaying;
-    if (isPlaying && this.isRecording && this.isRecordingWakeSlice) {
-      this.isRecording = false;
-      this.isRecordingWakeSlice = false;
-      if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-        try { this.mediaRecorder.stop(); } catch (e) {}
-      }
-      this.audioChunks = [];
+    if (isPlaying && this.isRecording) {
+      this.stopMediaRecording();
+      this.clearBuffers();
     }
   }
 
   setAwake(awake) {
-    this.isAwake = awake;
     if (awake) {
-      if (this.state === TutorState.SLEEPING || this.state === TutorState.IDLE) {
+      if (this.state === TutorState.SLEEPING) {
         this.setState(TutorState.ACTIVE_LISTENING);
       }
-      this.resetWakeTimeout();
-    } else if (!this.inConversationMode && !this.isTutorSpeaking) {
-      this.setState(TutorState.SLEEPING);
+      this.resetFollowUpTimeout();
+    } else if (!this.isTutorSpeaking) {
+      this.returnToSleep();
     }
   }
 
   setConversationMode(inConv) {
     this.inConversationMode = inConv;
-    this.isAwake = inConv;
     if (inConv) {
-      if (this.state === TutorState.SLEEPING || this.state === TutorState.IDLE) {
+      if (this.state === TutorState.SLEEPING) {
         this.setState(TutorState.ACTIVE_LISTENING);
       }
+      this.resetFollowUpTimeout();
     } else if (!this.isTutorSpeaking) {
-      this.setState(TutorState.SLEEPING);
+      this.returnToSleep();
     }
   }
 
-  resetWakeTimeout() {
-    if (this.wakeTimeoutId) {
-      clearTimeout(this.wakeTimeoutId);
-    }
-    // Return to SLEEPING if no user input within 8 seconds of waking
-    this.wakeTimeoutId = setTimeout(() => {
-      if (
-        this.state === TutorState.ACTIVE_LISTENING &&
-        !this.isTutorSpeaking &&
-        !this.inConversationMode
-      ) {
-        console.log('[VOICE] Active listening window timeout. Returning to SLEEPING.');
-        this.isAwake = false;
-        this.setState(TutorState.SLEEPING);
-      }
-    }, 8000);
-  }
-
+  /**
+   * Initializes the microphone stream with hardware echo cancellation and begins passive wake-word monitoring.
+   */
   async start(langCode = 'en-US') {
     if (this.isMounted) return;
     this.isMounted = true;
     this.langCode = langCode;
-    console.log(`[VOICE] Initializing Always-On Voice Manager (Lang: ${langCode})...`);
+    this.log(LogCategory.VOICE_STATE, `Initializing Voice Tutor Manager (Lang: ${langCode})...`);
 
     try {
       await this.initMicrophonePipeline();
@@ -248,7 +268,7 @@ export class VoiceTutorManager {
       }
 
       this.micStream = stream;
-      console.log('[VOICE] Permission state: GRANTED (Continuous microphone stream active)');
+      this.log(LogCategory.VOICE_STATE, 'Microphone stream initialized with Echo Cancellation + Noise Suppression.');
 
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       const audioCtx = new AudioCtx();
@@ -268,29 +288,26 @@ export class VoiceTutorManager {
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
 
-      // Continuous VAD & Audio Presence Loop (~40ms tick)
+      // Continuous VAD loop (~40ms tick)
       if (this.vadInterval) clearInterval(this.vadInterval);
       this.vadInterval = setInterval(() => {
         if (!this.isMounted || !this.analyser) return;
 
-        // Keep audio context alive
         if (this.audioContext && this.audioContext.state === 'suspended') {
-          this.audioContext.resume().catch(() => {});
+          this.audioContext.resume().catch(() => { });
         }
 
-        // Suppress VAD completely while ARIA is speaking or in post-TTS cooldown
+        // 1. STRICT ECHO SUPPRESSION: Gated during ARIA_GREETING, ARIA_SPEAKING, PROCESSING, or Cooldown
         if (
           this.isTutorSpeaking ||
           Date.now() < this.ttsMutedUntil ||
-          this.state === TutorState.AI_SPEAKING ||
-          this.state === TutorState.POST_SPEECH_COOLDOWN ||
-          this.state === TutorState.AI_THINKING
+          this.state === TutorState.ARIA_GREETING ||
+          this.state === TutorState.ARIA_SPEAKING ||
+          this.state === TutorState.PROCESSING
         ) {
           this.speechFramesCount = 0;
           return;
         }
-
-
 
         this.analyser.getByteFrequencyData(dataArray);
         let sumSquares = 0;
@@ -298,49 +315,44 @@ export class VoiceTutorManager {
           sumSquares += dataArray[i] * dataArray[i];
         }
         const rms = Math.sqrt(sumSquares / bufferLength);
-
-        // Periodic diagnostic log confirming mic audio reaches detector
         const now = Date.now();
-        if (rms > this.SPEECH_RMS_THRESHOLD && now - this.lastEnergyLogTime > 4000) {
-          this.lastEnergyLogTime = now;
-          console.log(`[VOICE] Mic audio reaching detector (RMS: ${rms.toFixed(1)}, State: ${this.state})`);
-        }
 
-        // If already recording, check silence completion
+        // 2. If actively recording user speech: evaluate silence completion
         if (this.isRecording) {
-          if (rms >= this.SILENCE_RMS_THRESHOLD) {
+          if (rms >= this.options.silenceRmsThreshold) {
             this.lastSpeechTime = now;
           }
 
           const silenceDuration = now - this.lastSpeechTime;
           const totalDuration = now - this.recordingStartTime;
-          const silenceLimit = this.isRecordingWakeSlice ? 600 : this.SILENCE_DURATION_MS;
-          const minDuration = this.isRecordingWakeSlice ? 700 : 1000;
-          const maxDuration = this.isRecordingWakeSlice ? 3000 : this.MAX_RECORDING_MS;
 
           if (
-            (silenceDuration >= silenceLimit && totalDuration >= minDuration) ||
-            totalDuration >= maxDuration
+            (silenceDuration >= this.options.silenceDurationMs && totalDuration >= 800) ||
+            totalDuration >= this.options.maxRecordingMs
           ) {
+            this.log(LogCategory.VAD_END, `Speech ended (Silence: ${silenceDuration}ms, Duration: ${totalDuration}ms)`);
             this.stopMediaRecording();
           }
           return;
         }
 
-        // If NOT recording: check for speech onset in SLEEPING (wake check) or ACTIVE_LISTENING (question)
-        if (rms >= this.SPEECH_RMS_THRESHOLD) {
-          this.speechFramesCount += 1;
-          if (this.speechFramesCount >= 2) {
-            // ~80ms sustained energy: begin capturing speech slice
-            this.speechFramesCount = 0;
-            this.isRecordingWakeSlice = (this.state === TutorState.SLEEPING || this.state === TutorState.IDLE);
-            if (this.state === TutorState.ACTIVE_LISTENING) {
-              this.setState(TutorState.USER_SPEAKING);
+        // 3. If in ACTIVE_LISTENING or FOLLOW_UP_LISTENING: check for speech onset
+        if (
+          this.state === TutorState.ACTIVE_LISTENING ||
+          this.state === TutorState.FOLLOW_UP_LISTENING
+        ) {
+          if (rms >= this.options.speechRmsThreshold) {
+            this.speechFramesCount += 1;
+            if (this.speechFramesCount >= 2) {
+              // Confirmed speech onset (~80ms sustained energy)
+              this.speechFramesCount = 0;
+              this.log(LogCategory.VAD_START, `User speech detected (RMS: ${rms.toFixed(1)})`);
+              this.clearFollowUpTimeout();
+              this.startMediaRecording();
             }
-            this.startMediaRecording();
+          } else {
+            this.speechFramesCount = 0;
           }
-        } else {
-          this.speechFramesCount = 0;
         }
       }, 40);
     } catch (err) {
@@ -354,17 +366,15 @@ export class VoiceTutorManager {
     if (!this.micStream || this.isRecording) return;
     try {
       if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-        try {
-          this.mediaRecorder.stop();
-        } catch (e) {}
+        try { this.mediaRecorder.stop(); } catch (e) { }
       }
 
       this.audioChunks = [];
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
         : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : '';
+          ? 'audio/webm'
+          : '';
 
       const recorder = mimeType
         ? new MediaRecorder(this.micStream, { mimeType })
@@ -378,11 +388,10 @@ export class VoiceTutorManager {
 
       recorder.onstop = async () => {
         this.isRecording = false;
-        const wasWakeSlice = this.isRecordingWakeSlice;
-        this.isRecordingWakeSlice = false;
 
-        // Strict guard: ignore recordings that finished during speech/cooldown
+        // Strict guard: Discard recordings finalized during TTS
         if (this.isTutorSpeaking || Date.now() < this.ttsMutedUntil) {
+          this.log(LogCategory.ECHO_REJECTED, 'Audio chunk discarded because TTS was active');
           this.audioChunks = [];
           return;
         }
@@ -392,20 +401,20 @@ export class VoiceTutorManager {
         });
         this.audioChunks = [];
 
-        if (audioBlob.size < 2000) {
-          if (this.isAwake || this.inConversationMode) {
-            this.setState(TutorState.ACTIVE_LISTENING);
-          } else {
-            this.setState(TutorState.SLEEPING);
+        const duration = Date.now() - this.recordingStartTime;
+        this.log(LogCategory.AUDIO_DURATION, `Captured audio blob (${audioBlob.size}B, ${duration}ms)`);
+
+        if (audioBlob.size < 2500 || duration < 600) {
+          this.log(LogCategory.TRANSCRIPTION, 'Audio slice too short / noise-only. Resetting to active listening.');
+          if (this.state === TutorState.ACTIVE_LISTENING || this.state === TutorState.FOLLOW_UP_LISTENING) {
+            this.resetFollowUpTimeout();
           }
           return;
         }
 
-        if (this.options.onAudioChunkReady) {
-          if (!wasWakeSlice) {
-            this.setState(TutorState.AI_THINKING);
-          }
-          this.options.onAudioChunkReady(audioBlob, wasWakeSlice);
+        if (this.options.onAudioCaptured) {
+          this.setState(TutorState.PROCESSING);
+          this.options.onAudioCaptured(audioBlob);
         }
       };
 
@@ -417,8 +426,6 @@ export class VoiceTutorManager {
     } catch (err) {
       console.error('[VOICE] Failed to start MediaRecorder:', err);
       this.isRecording = false;
-      this.isRecordingWakeSlice = false;
-      this.setState(TutorState.ACTIVE_LISTENING);
     }
   }
 
@@ -429,27 +436,23 @@ export class VoiceTutorManager {
         this.mediaRecorder.stop();
       } catch (e) {
         console.warn('[VOICE] Error stopping recorder:', e);
-        this.setState(TutorState.ACTIVE_LISTENING);
       }
-    } else if (this.isAwake || this.inConversationMode) {
-      this.setState(TutorState.ACTIVE_LISTENING);
-    } else {
-      this.setState(TutorState.SLEEPING);
     }
   }
 
+  /**
+   * Initializes lightweight browser SpeechRecognition solely for fast wake-phrase recognition.
+   */
   initSpeechRecognition() {
     const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRec) {
-      console.warn('[VOICE] SpeechRecognition API not supported in browser. Relying on VAD + Whisper.');
+      this.log(LogCategory.WAKE_DETECTION, 'Browser SpeechRecognition API not supported. Relying on VAD + Whisper backend.');
       return;
     }
 
     try {
       if (this.recognition) {
-        try {
-          this.recognition.abort();
-        } catch (e) {}
+        try { this.recognition.abort(); } catch (e) { }
       }
 
       const rec = new SpeechRec();
@@ -459,7 +462,7 @@ export class VoiceTutorManager {
       rec.lang = this.langCode || 'en-US';
 
       rec.onstart = () => {
-        console.log(`[VOICE] Wake-word detector active and listening (${rec.lang})`);
+        this.log(LogCategory.WAKE_DETECTION, `SpeechRecognition wake detector active (${rec.lang})`);
         this.isRestarting = false;
       };
 
@@ -474,11 +477,7 @@ export class VoiceTutorManager {
         if (!transcript) return;
 
         const isFinal = result.isFinal;
-        if (!isFinal) {
-          this.handleInterimTranscript(transcript);
-        } else {
-          this.handleFinalTranscript(transcript);
-        }
+        this.handleTranscriptEvent(transcript, isFinal);
       };
 
       rec.onerror = (e) => {
@@ -488,7 +487,7 @@ export class VoiceTutorManager {
       };
 
       rec.onend = () => {
-        if (this.isMounted && !this.isRestarting) {
+        if (this.isMounted && !this.isRestarting && !this.isTutorSpeaking && Date.now() >= this.ttsMutedUntil) {
           this.scheduleRestart();
         }
       };
@@ -503,7 +502,10 @@ export class VoiceTutorManager {
   scheduleRestart() {
     this.isRestarting = true;
     setTimeout(() => {
-      if (!this.isMounted) return;
+      if (!this.isMounted || this.isTutorSpeaking || Date.now() < this.ttsMutedUntil) {
+        this.isRestarting = false;
+        return;
+      }
       try {
         if (this.recognition) {
           this.recognition.start();
@@ -511,159 +513,226 @@ export class VoiceTutorManager {
           this.initSpeechRecognition();
         }
       } catch (err) {
-        try {
-          this.initSpeechRecognition();
-        } catch (e) {}
+        try { this.initSpeechRecognition(); } catch (e) { }
       }
       this.isRestarting = false;
     }, 150);
   }
 
-  handleInterimTranscript(transcript) {
-    // 1. Check for barge-in interruption if ARIA is speaking
-    if (this.isTutorSpeaking) {
-      if (containsWakeWord(transcript)) {
-        console.log('[VOICE] User barge-in interrupt detected during speech (interim)');
-        if (this.options.onUserInterrupt) {
-          this.options.onUserInterrupt();
-        }
-      }
-      return;
-    }
-
+  handleTranscriptEvent(transcript, isFinal) {
+    // 1. Strict Gating: Completely discard transcriptions during ARIA speech or post-speech cooldown
     if (
+      this.isTutorSpeaking ||
       Date.now() < this.ttsMutedUntil ||
-      this.state === TutorState.AI_SPEAKING ||
-      this.state === TutorState.POST_SPEECH_COOLDOWN ||
-      this.state === TutorState.AI_THINKING
+      this.state === TutorState.ARIA_GREETING ||
+      this.state === TutorState.ARIA_SPEAKING ||
+      this.state === TutorState.PROCESSING
     ) {
+      this.log(LogCategory.ECHO_REJECTED, `Rejected transcript during speaking/cooldown/processing: "${transcript}"`);
       return;
     }
 
-    // 2. In SLEEPING state, monitor for wake phrase in real-time interim results
-    if (this.state === TutorState.SLEEPING || this.state === TutorState.IDLE) {
+    // 2. Transcript Echo Rejection: Check if transcript matches recent ARIA utterances or greeting phrases
+    if (this.isTranscriptSelfEcho(transcript)) {
+      this.log(LogCategory.ECHO_REJECTED, `Rejected self-echo matching ARIA utterance: "${transcript}"`);
+      return;
+    }
+
+    // 3. In SLEEPING state: ARIA ONLY evaluates for wake-word. Discard all other speech.
+    if (this.state === TutorState.SLEEPING) {
       if (containsWakeWord(transcript)) {
-        console.log(`[VOICE] Wake word detected: ${transcript}`);
-        this.setState(TutorState.WAKE_DETECTED);
-        this.isAwake = true;
-        this.resetWakeTimeout();
-        this.setState(TutorState.ACTIVE_LISTENING);
-        if (this.options.onWakeWordDetected) {
-          this.options.onWakeWordDetected(transcript);
-        }
+        this.log(LogCategory.WAKE_MATCH, `Wake phrase detected: "${transcript}"`);
+        this.triggerWakeSequence(transcript);
       }
       return;
     }
 
-    // 3. In ACTIVE_LISTENING, deliver interim preview
-    if (this.options.onInterimTranscript) {
-      this.options.onInterimTranscript(transcript);
+    // 4. In ACTIVE_LISTENING or FOLLOW_UP_LISTENING:
+    if (
+      this.state === TutorState.ACTIVE_LISTENING ||
+      this.state === TutorState.FOLLOW_UP_LISTENING
+    ) {
+      if (isFinal) {
+        const clean = extractQuestionFromWakeWord(transcript);
+        const finalQuestion = clean || transcript;
+
+        if (finalQuestion && finalQuestion.length >= 2 && !isNoiseOrHallucination(finalQuestion) && !this.isTranscriptSelfEcho(finalQuestion)) {
+          this.log(LogCategory.TRANSCRIPTION, `User question captured: "${finalQuestion}"`);
+          this.processUserQuestion(finalQuestion);
+        }
+      }
     }
   }
 
-  handleFinalTranscript(rawTranscript) {
-    if (!rawTranscript || isNoiseOrHallucination(rawTranscript)) return;
+  /**
+   * Compares transcript against recent ARIA utterances and known greeting patterns to reject acoustic self-echo.
+   */
+  isTranscriptSelfEcho(transcript) {
+    if (!transcript) return false;
+    const cleanTrans = normalizeTranscript(transcript);
+    if (!cleanTrans || cleanTrans.length < 2) return true;
 
-    // 1. Check for barge-in interruption if ARIA is speaking
-    if (this.isTutorSpeaking) {
-      if (containsWakeWord(rawTranscript)) {
-        console.log('[VOICE] User barge-in interrupt detected during speech (final)');
-        if (this.options.onUserInterrupt) {
-          this.options.onUserInterrupt();
-        }
-      } else {
-        console.log('[VOICE] ASR blocked because ARIA is speaking');
-      }
-      return;
+    // Check against known acknowledgment and greeting echo patterns
+    if (KNOWN_SELF_ECHO_PATTERNS.some((p) => p.test(transcript) || p.test(cleanTrans))) {
+      return true;
     }
 
+    // Check short generic acknowledgment words
     if (
-      Date.now() < this.ttsMutedUntil ||
-      this.state === TutorState.AI_SPEAKING ||
-      this.state === TutorState.POST_SPEECH_COOLDOWN ||
-      this.state === TutorState.AI_THINKING
+      cleanTrans === 'yes' ||
+      cleanTrans === 'yeah' ||
+      cleanTrans === 'listening' ||
+      cleanTrans === 'im listening' ||
+      cleanTrans === 'i am listening' ||
+      cleanTrans === 'tell me' ||
+      cleanTrans === 'yes tell me'
     ) {
-      return;
+      return true;
     }
 
-    const hasWake = containsWakeWord(rawTranscript);
-
-    // 2. If in SLEEPING state, only wake word can activate the system
-    if (this.state === TutorState.SLEEPING || this.state === TutorState.IDLE) {
-      if (hasWake) {
-        console.log(`[VOICE] Wake word detected: ${rawTranscript}`);
-        this.setState(TutorState.WAKE_DETECTED);
-        this.isAwake = true;
-        this.resetWakeTimeout();
-        this.setState(TutorState.ACTIVE_LISTENING);
-
-        const extractedQuestion = extractQuestionFromWakeWord(rawTranscript);
-        if (extractedQuestion && extractedQuestion.length >= 2) {
-          // Combined wake + command: "Hey Aria, what is a vector database?"
-          this.processFinalizedUtterance(extractedQuestion);
-        } else if (this.options.onWakeWordDetected) {
-          // Wake-word only: "Hey Aria"
-          this.options.onWakeWordDetected(rawTranscript);
-        }
-      } else {
-        // Normal background conversation while SLEEPING: discard silently
-        return;
+    for (const phrase of this.recentAriaUtterances) {
+      const cleanPhrase = normalizeTranscript(phrase);
+      if (!cleanPhrase) continue;
+      if (cleanPhrase.includes(cleanTrans) || cleanTrans.includes(cleanPhrase)) {
+        return true;
       }
-      return;
+      const phraseWords = cleanPhrase.split(' ').filter((w) => w.length > 2);
+      const transWords = cleanTrans.split(' ').filter((w) => w.length > 2);
+      if (transWords.length > 0 && transWords.every((w) => phraseWords.includes(w))) {
+        return true;
+      }
     }
-
-    // 3. In ACTIVE_LISTENING / USER_SPEAKING state
-    const cleanQuestion = hasWake ? extractQuestionFromWakeWord(rawTranscript) : rawTranscript.trim();
-    if (!cleanQuestion || cleanQuestion.length < 2) return;
-
-    this.processFinalizedUtterance(cleanQuestion);
+    return false;
   }
 
-  processFinalizedUtterance(questionText) {
+  /**
+   * Triggers the Wake Sequence:
+   * SLEEPING -> WAKE_DETECTED -> triggers greeting callback.
+   */
+  triggerWakeSequence(wakeTranscript) {
+    this.setState(TutorState.WAKE_DETECTED);
+    this.clearBuffers();
+    this.clearFollowUpTimeout();
+
+    if (this.options.onWakeWordDetected) {
+      this.options.onWakeWordDetected(wakeTranscript);
+    }
+  }
+
+  /**
+   * Called when user question text is finalized (via Whisper or ASR).
+   */
+  processUserQuestion(questionText) {
     const normalized = normalizeTranscript(questionText);
     const now = Date.now();
 
-    // Deduplication check: prevent duplicate submissions within 2.5s
+    // Guard against self-echo
+    if (this.isTranscriptSelfEcho(questionText) || isNoiseOrHallucination(questionText)) {
+      this.log(LogCategory.ECHO_REJECTED, `Dropped question as self-echo/noise: "${questionText}"`);
+      return;
+    }
+
+    // Deduplication check: prevent duplicate triggers within 2.5s
     if (this.lastProcessedText === normalized && now - this.lastProcessedTime < 2500) {
       return;
     }
 
     this.lastProcessedText = normalized;
     this.lastProcessedTime = now;
-    this.currentUtteranceId = `utt_${now}_${Math.random().toString(36).substring(2, 7)}`;
+    this.clearFollowUpTimeout();
+    this.setState(TutorState.PROCESSING);
 
-    console.log(`[VOICE] User transcript: ${questionText}`);
-    this.setState(TutorState.AI_THINKING);
-
-    if (this.options.onFinalTranscript) {
-      this.options.onFinalTranscript(questionText, this.currentUtteranceId);
+    if (this.options.onQuestionReady) {
+      this.options.onQuestionReady(questionText);
     }
   }
 
-  setTutorSpeaking(speaking) {
+  /**
+   * Sets ARIA speaking state with complete microphone suppression and echo prevention.
+   */
+  setTutorSpeaking(speaking, spokenText = '') {
     this.isTutorSpeaking = speaking;
     if (speaking) {
       if (this.cooldownTimeoutId) {
         clearTimeout(this.cooldownTimeoutId);
         this.cooldownTimeoutId = null;
       }
-      this.setState(TutorState.AI_SPEAKING);
+      this.clearFollowUpTimeout();
+      this.clearBuffers();
+
+      // PAUSE & ABORT speech recognition so the microphone buffer does not accumulate speaker audio
+      if (this.recognition) {
+        try {
+          this.recognition.abort();
+        } catch (e) { }
+      }
+
+      // Record spoken text for echo rejection
+      if (spokenText) {
+        this.recentAriaUtterances.push(spokenText);
+        if (this.recentAriaUtterances.length > 8) {
+          this.recentAriaUtterances.shift();
+        }
+      }
+
+      // Set mute window far into the future until TTS ends
+      this.ttsMutedUntil = Date.now() + 60000;
+      this.log(LogCategory.TTS_START, 'ARIA speaking started. Mic recognition aborted & 100% gated.');
     } else {
-      console.log('[VOICE] TTS finished');
-      this.setState(TutorState.POST_SPEECH_COOLDOWN);
-      // Strict 500ms cooldown after speech
-      this.ttsMutedUntil = Date.now() + 500;
+      this.log(LogCategory.TTS_END, 'ARIA speaking ended. Entering 1000ms acoustic cooldown.');
+      // Enforce strict 1000ms cooldown after speech
+      this.ttsMutedUntil = Date.now() + 1000;
       this.clearBuffers();
 
       if (this.cooldownTimeoutId) clearTimeout(this.cooldownTimeoutId);
       this.cooldownTimeoutId = setTimeout(() => {
         this.clearBuffers();
-        if (this.inConversationMode || this.isAwake) {
-          this.setState(TutorState.ACTIVE_LISTENING);
-        } else {
-          this.setState(TutorState.SLEEPING);
+        const nextState = (this.state === TutorState.ARIA_GREETING) ? TutorState.ACTIVE_LISTENING : TutorState.FOLLOW_UP_LISTENING;
+        this.setState(nextState);
+        this.resetFollowUpTimeout();
+
+        // Fresh restart of SpeechRecognition with an empty buffer
+        if (this.isMounted && !this.isTutorSpeaking) {
+          try {
+            if (this.recognition) {
+              this.recognition.start();
+            } else {
+              this.initSpeechRecognition();
+            }
+          } catch (e) {
+            try { this.initSpeechRecognition(); } catch (err) { }
+          }
         }
-      }, 500);
+      }, 1000);
+    }
+  }
+
+  /**
+   * Manages the follow-up conversational window.
+   * If silence exceeds followUpTimeoutMs, returns to SLEEPING.
+   */
+  resetFollowUpTimeout() {
+    this.clearFollowUpTimeout();
+    this.followUpTimeoutId = setTimeout(() => {
+      if (this.state === TutorState.FOLLOW_UP_LISTENING && !this.isTutorSpeaking) {
+        this.log(LogCategory.RETURN_TO_SLEEP, 'Follow-up listening timeout. Returning to SLEEPING.');
+        this.setState(TutorState.RETURN_TO_SLEEP);
+        setTimeout(() => {
+          if (this.state === TutorState.RETURN_TO_SLEEP) {
+            this.setState(TutorState.SLEEPING);
+            if (this.options.onReturnToSleep) {
+              this.options.onReturnToSleep();
+            }
+          }
+        }, 300);
+      }
+    }, this.options.followUpTimeoutMs);
+  }
+
+  clearFollowUpTimeout() {
+    if (this.followUpTimeoutId) {
+      clearTimeout(this.followUpTimeoutId);
+      this.followUpTimeoutId = null;
     }
   }
 
@@ -671,18 +740,25 @@ export class VoiceTutorManager {
     this.audioChunks = [];
     this.speechFramesCount = 0;
     this.lastSpeechTime = 0;
-    console.log('[VOICE] Microphone buffers cleared');
+  }
+
+  /**
+   * Explicitly returns to SLEEPING mode (e.g. user voice dismissal or exit).
+   */
+  returnToSleep() {
+    this.clearFollowUpTimeout();
+    this.clearBuffers();
+    this.setState(TutorState.RETURN_TO_SLEEP);
+    setTimeout(() => {
+      this.setState(TutorState.SLEEPING);
+    }, 200);
   }
 
   destroy() {
-    console.log('[VOICE] Destroying Voice Tutor Manager & releasing handles...');
+    this.log(LogCategory.VOICE_STATE, 'Releasing voice manager resources...');
     this.isMounted = false;
     this.stateListeners.clear();
-
-    if (this.wakeTimeoutId) {
-      clearTimeout(this.wakeTimeoutId);
-      this.wakeTimeoutId = null;
-    }
+    this.clearFollowUpTimeout();
 
     if (this.cooldownTimeoutId) {
       clearTimeout(this.cooldownTimeoutId);
@@ -695,30 +771,22 @@ export class VoiceTutorManager {
     }
 
     if (this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch (e) {}
+      try { this.recognition.stop(); } catch (e) { }
       this.recognition = null;
     }
 
     if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-      try {
-        this.mediaRecorder.stop();
-      } catch (e) {}
+      try { this.mediaRecorder.stop(); } catch (e) { }
       this.mediaRecorder = null;
     }
 
     if (this.audioContext) {
-      try {
-        this.audioContext.close();
-      } catch (e) {}
+      try { this.audioContext.close(); } catch (e) { }
       this.audioContext = null;
     }
 
     if (this.micStream) {
-      try {
-        this.micStream.getTracks().forEach((t) => t.stop());
-      } catch (e) {}
+      try { this.micStream.getTracks().forEach((t) => t.stop()); } catch (e) { }
       this.micStream = null;
     }
 
@@ -727,4 +795,5 @@ export class VoiceTutorManager {
 }
 
 export default VoiceTutorManager;
+
 

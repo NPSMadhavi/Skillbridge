@@ -121,6 +121,7 @@ export const faceLogin = async (req, res) => {
     });
   } catch (error) {
     console.error('Face login error:', error);
-    res.status(500).json({ error: error.message || 'An error occurred during face sign in.' });
+    const status = error.statusCode || 500;
+    res.status(status).json({ error: error.message || 'An error occurred during face sign in.' });
   }
 };

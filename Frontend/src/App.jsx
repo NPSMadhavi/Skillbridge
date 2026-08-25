@@ -75,7 +75,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
   }
 
   return (
-    <div className="min-h-screen lg:h-screen lg:max-h-screen flex flex-col bg-[#f4f6fb] overflow-y-auto lg:overflow-hidden">
+    <div className="h-screen max-h-screen flex flex-col bg-[#f8fafc] overflow-hidden">
       <Header
         onLogoClick={() => navigate('/')}
         onLogout={() => {
@@ -87,7 +87,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
         setSearchQuery={setSearchQuery}
         showSearch={true}
       />
-      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto lg:overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {children}
       </div>
     </div>
@@ -174,6 +174,7 @@ const AssessmentRoute = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const [course, setCourse] = useState(location.state?.course || null)
+  const [loading, setLoading] = useState(!course)
   const [accessDenied, setAccessDenied] = useState(false)
 
   const activeLesson = location.state?.activeLesson
@@ -182,32 +183,46 @@ const AssessmentRoute = () => {
 
   useEffect(() => {
     if (!course && id) {
+      setLoading(true)
       api.getCourseDetail(id)
         .then(res => setCourse(mapRagCourse(res)))
         .catch(err => {
-          console.error(err)
+          console.error('Failed to load course for assessment:', err)
           setAccessDenied(true)
         })
+        .finally(() => setLoading(false))
     }
   }, [id, course])
 
-  if (accessDenied) {
+  if (!sessionStorage.getItem('skillbridge_user')) {
+    return <Navigate to="/login" replace />
+  }
+
+  if (loading) {
     return (
-      <div className="min-h-svh bg-[#0b0e14] flex flex-col items-center justify-center text-white p-6 text-center">
+      <div className="min-h-screen bg-[#f4f7fc] flex flex-col items-center justify-center text-slate-800">
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#ff8c21]/20 border-t-[#ff8c21] mb-4" />
+        <p className="text-sm font-semibold text-slate-600">Preparing Assessment Questions...</p>
+      </div>
+    )
+  }
+
+  if (accessDenied || !course) {
+    return (
+      <div className="min-h-screen bg-[#f4f7fc] flex flex-col items-center justify-center text-slate-800 p-6 text-center">
         <span className="text-3xl mb-3">🔒</span>
-        <h2 className="text-lg font-bold mb-2">Access Denied</h2>
-        <p className="text-xs text-slate-400 mb-4">You are not assigned to this course assessment.</p>
+        <h2 className="text-lg font-bold text-slate-900 mb-2">Access Denied</h2>
+        <p className="text-xs text-slate-500 mb-4">You are not assigned to this course assessment.</p>
         <button
           type="button"
           onClick={() => navigate('/')}
-          className="rounded-xl bg-orange px-4 py-2 text-xs font-bold text-white border-0"
+          className="rounded-xl bg-[#ff8c21] hover:bg-[#e87a15] px-5 py-2.5 text-xs font-bold text-white border-0 cursor-pointer shadow-sm transition"
         >
           Back to Dashboard
         </button>
       </div>
     )
   }
-
 
   const isFinalAssessment = !nextLessonId || (course?.lessons && activeLesson?.id === course.lessons[course.lessons.length - 1]?.id)
 

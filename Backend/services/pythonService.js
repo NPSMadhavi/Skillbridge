@@ -21,7 +21,13 @@ class PythonService {
       return response.data.encrypted_embedding;
     } catch (error) {
       console.error('Error registering face in Python AI service:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.detail || 'Failed to generate face embeddings.');
+      const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND';
+      const message = isConnError
+        ? 'AI Microservice is not running. Please start the AI service on port 8000.'
+        : (error.response?.data?.detail || error.message || 'Failed to generate face embeddings.');
+      const err = new Error(message);
+      err.statusCode = error.response?.status || 500;
+      throw err;
     }
   }
 
@@ -51,7 +57,13 @@ class PythonService {
       };
     } catch (error) {
       console.error('Error verifying face in Python AI service:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.detail || 'Face verification failed.');
+      const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND';
+      const message = isConnError
+        ? 'AI Microservice is not running. Please start the AI service on port 8000.'
+        : (error.response?.data?.detail || error.message || 'Face verification failed.');
+      const err = new Error(message);
+      err.statusCode = error.response?.status || 500;
+      throw err;
     }
   }
 }

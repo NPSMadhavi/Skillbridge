@@ -397,8 +397,8 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
               {/* AI Explanation Feedback Box (Renders when user checks answer) */}
               {isChecked && (
                 <div className={`p-4 rounded-2xl text-left border animate-fade-in ${selected === question.answer
-                    ? 'bg-emerald-50/90 border-emerald-200/80 text-emerald-900'
-                    : 'bg-rose-50/90 border-rose-200/80 text-rose-900'
+                  ? 'bg-emerald-50/90 border-emerald-200/80 text-emerald-900'
+                  : 'bg-rose-50/90 border-rose-200/80 text-rose-900'
                   }`}>
                   <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold">
                     <span className="text-sm">🤖</span>
