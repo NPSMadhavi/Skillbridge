@@ -234,45 +234,73 @@ export class VectorChunkService {
     // 3. Store into PostgreSQL pgvector CourseChunk table
     const stored = await this.storeChunks(prisma, courseId, semanticChunks, embeddings);
 
-    // 4. Pre-populate lesson explanations directly from matching semantic chunks into Course.curriculum
+    // 4. Pre-populate unique lesson explanations directly from each corresponding semantic chunk into Course.curriculum
     try {
       const courseRecord = await prisma.course.findUnique({ where: { id: courseId } });
       if (courseRecord && courseRecord.curriculum) {
         let curr = typeof courseRecord.curriculum === 'string' ? JSON.parse(courseRecord.curriculum) : courseRecord.curriculum;
-        if (Array.isArray(curr?.lessons)) {
-          curr.lessons = curr.lessons.map(lesson => {
+        if (Array.isArray(curr?.lessons) && semanticChunks.length > 0) {
+          curr.lessons = curr.lessons.map((lesson, idx) => {
             const lessonSlides = Array.isArray(lesson.sourceSlides) ? lesson.sourceSlides : [];
-            const matchedChunks = semanticChunks.filter(c => {
-              if (lessonSlides.length > 0 && Array.isArray(c.sourceSlides)) {
-                return c.sourceSlides.some(s => lessonSlides.includes(s));
-              }
-              return c.concept && lesson.title && (
-                c.concept.toLowerCase().includes(lesson.title.toLowerCase()) ||
-                lesson.title.toLowerCase().includes(c.concept.toLowerCase())
-              );
+            
+            // 1. First try matching by concept/title
+            let targetChunk = semanticChunks.find(c => {
+              if (!c.concept || !lesson.title) return false;
+              const cConcept = c.concept.toLowerCase();
+              const lTitle = lesson.title.toLowerCase();
+              return cConcept === lTitle || lTitle.includes(cConcept) || cConcept.includes(lTitle);
             });
 
-            const chunksToUse = matchedChunks.length > 0 ? matchedChunks : semanticChunks.slice(0, 3);
-            const sections = [];
-            sections.push(`### 💡 Overview: ${lesson.title}\n${chunksToUse.map(c => c.semanticSummary).filter(Boolean).join(' ') || `In this lesson, we study the essential operational standards and procedures for ${lesson.title}.`}`);
-            
-            for (let i = 0; i < chunksToUse.length; i++) {
-              const chk = chunksToUse[i];
-              const header = chk.concept || `Key Concept ${i + 1}`;
-              const rawTxt = (chk.chunkText || chk.text || '').replace(/^###[^\n]+\n/g, '').replace(/^\*\*Topic:[^\n]+\n/g, '').trim();
-              const kps = chk.keyPoints || chk.key_points || [];
-              if (Array.isArray(kps) && kps.length > 0) {
-                sections.push(`#### 🎯 ${header}\n${rawTxt}\n\n**Key Protocols:**\n${kps.map(p => `- ${p}`).join('\n')}`);
-              } else if (rawTxt) {
-                sections.push(`#### 🎯 ${header}\n${rawTxt}`);
-              }
+            // 2. Second try matching by source slide intersection
+            if (!targetChunk && lessonSlides.length > 0) {
+              targetChunk = semanticChunks.find(c => {
+                const cSlides = Array.isArray(c.sourceSlides) ? c.sourceSlides : [];
+                return cSlides.some(s => lessonSlides.includes(s));
+              });
             }
-            sections.push(`#### ⚠️ Critical Precautions\n- Strictly adhere to verified safety standards and protocols.\n- Inspect all operational components prior to execution.\n- Immediately report any hazards or deviations.`);
-            sections.push(`#### 📌 Key Takeaways\n- Strict adherence to guidelines prevents errors and ensures safety.\n- Systematic execution ensures consistent quality and compliance.`);
+
+            // 3. Third: Fall back to 1-to-1 index matching (Lesson 1 -> Chunk 0, Lesson 2 -> Chunk 1, etc.)
+            if (!targetChunk) {
+              targetChunk = semanticChunks[idx % semanticChunks.length];
+            }
+
+            const concept = targetChunk.concept || lesson.title;
+            const topic = targetChunk.topic || lesson.chapterTitle || courseRecord.title;
+            const slides = targetChunk.sourceSlides || lesson.sourceSlides;
+
+            let cleanText = (targetChunk.chunkText || '')
+              .replace(/^###[^\n]+\n/g, '')
+              .replace(/^\*\*Topic:[^\n]+\n/g, '')
+              .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
+              .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
+              .trim();
+
+            let keyPoints = targetChunk.keyPoints || [];
+            if (typeof keyPoints === 'string') {
+              try { keyPoints = JSON.parse(keyPoints); } catch (e) { keyPoints = []; }
+            }
+
+            const sections = [];
+            const summary = targetChunk.semanticSummary || `This module focuses on the core principles, operational requirements, and safety protocols for ${concept}.`;
+            sections.push(`### 💡 ${concept}\n${summary}`);
+
+            if (cleanText && cleanText.length > 20) {
+              sections.push(`#### 🎯 Operational Standards & Instructions\n${cleanText}`);
+            }
+
+            if (Array.isArray(keyPoints) && keyPoints.length > 0) {
+              sections.push(`#### 📋 Key Action Items & Protocols\n${keyPoints.map(kp => `- ${kp}`).join('\n')}`);
+            }
+
+            sections.push(`#### ⚠️ Practical Compliance & Warnings\n- Implement ${concept} procedures strictly as outlined in the operational manual.\n- Verify workplace condition and inspect relevant equipment before commencing tasks.\n- Immediately report any hazards, deviations, or damaged equipment.`);
+
+            sections.push(`#### 📌 Key Takeaways\n- **Discipline & Safety:** Consistent execution of ${concept} prevents incidents and maintains high operational standards.\n- **Quality & Habit:** Master this standard to build safe, repeatable daily practices.`);
 
             const expText = sections.join('\n\n');
             return {
               ...lesson,
+              title: lesson.title === 'undefined' ? concept : lesson.title,
+              sourceSlides: Array.isArray(slides) && slides.length > 0 ? slides : lesson.sourceSlides,
               explanation: expText,
               explanations: { ...(lesson.explanations || {}), en: expText }
             };
@@ -282,11 +310,11 @@ export class VectorChunkService {
             where: { id: courseId },
             data: { curriculum: curr }
           });
-          console.log(`[pgvector] Pre-populated instant explanations for all ${curr.lessons.length} lessons in Course.curriculum.`);
+          console.log(`[pgvector] Pre-populated unique, authentic explanations for all ${curr.lessons.length} lessons in Course.curriculum.`);
         }
       }
     } catch (preErr) {
-      console.warn(`[pgvector] Notice on pre-populating lesson explanations:`, preErr.message);
+      console.warn(`[pgvector] Notice on pre-populating unique lesson explanations:`, preErr.message);
     }
 
     return stored;

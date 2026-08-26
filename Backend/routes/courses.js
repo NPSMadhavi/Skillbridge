@@ -244,50 +244,50 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
 
 function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', matchingLesson = null) {
-  const sections = [];
-  const mainConcept = matchingLesson?.title || chunks[0]?.concept || lessonTitle;
-
-  // 1. Overview & Objectives
-  const primarySummary = chunks.map(c => c.semanticSummary).filter(Boolean).slice(0, 2).join(' ') ||
-    `In this lesson on "${lessonTitle}", we examine the core principles, operational requirements, and safety protocols from ${courseTitle || 'the course material'}.`;
-
-  sections.push(`### 💡 Overview: ${mainConcept}\n${primarySummary}`);
-
-  // 2. Core Concepts & Slide Breakdowns
+  // Find the most relevant chunk for this specific lesson
+  let targetChunk = null;
   if (Array.isArray(chunks) && chunks.length > 0) {
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const header = chunk.concept && chunk.concept !== mainConcept ? chunk.concept : `Key Principle ${i + 1}`;
-      const sourceRef = chunk.source_slides?.length ? `*(Reference: Slide ${chunk.source_slides.join(', ')})*` : '';
-
-      let rawText = (chunk.text || chunk.chunkText || '')
-        .replace(/^###[^\n]+\n/g, '')
-        .replace(/^\*\*Topic:[^\n]+\n/g, '')
-        .replace(/\*\(Source:[^\)]+\)\*/g, '')
-        .trim();
-
-      const keyPoints = chunk.key_points || chunk.keyPoints || [];
-      if (Array.isArray(keyPoints) && keyPoints.length > 0) {
-        const bullets = keyPoints.map(kp => `- ${kp}`).join('\n');
-        sections.push(`#### 🎯 ${header} ${sourceRef}\n${rawText}\n\n**Key Protocols:**\n${bullets}`);
-      } else if (rawText) {
-        sections.push(`#### 🎯 ${header} ${sourceRef}\n${rawText}`);
-      }
-    }
+    targetChunk = chunks.find(c => {
+      const cConcept = (c.concept || '').toLowerCase();
+      const lTitle = (lessonTitle || '').toLowerCase();
+      return cConcept === lTitle || lTitle.includes(cConcept) || cConcept.includes(lTitle);
+    }) || chunks[0];
   }
 
-  // 3. Operational Protocols & Checklist
-  const allKeyPoints = chunks.flatMap(c => c.key_points || c.keyPoints || []).filter(Boolean);
-  if (allKeyPoints.length > 0) {
-    const steps = allKeyPoints.slice(0, 6).map((kp, idx) => `${idx + 1}. **Step ${idx + 1}:** ${kp}`).join('\n');
-    sections.push(`#### 🔍 Operational Checklist & Protocols\n${steps}`);
+  if (!targetChunk) {
+    return `### 💡 ${lessonTitle}\nIn this lesson, we study the core operational standards, protocols, and safety practices for ${lessonTitle}.\n\n#### 🎯 Key Protocols\n- Follow all standard operational procedures.\n- Verify all safety requirements before beginning tasks.\n\n#### 📌 Key Takeaways\n- Strict adherence to guidelines prevents errors and ensures safety.`;
   }
 
-  // 4. Critical Precautions & Compliance
-  sections.push(`#### ⚠️ Critical Precautions & Compliance\n- Always verify operational conditions and inspect relevant equipment before commencing tasks.\n- Adhere strictly to verified safety standards and training guidelines.\n- Immediately report any hazards, deviations, or damaged components to the supervisor.`);
+  const concept = targetChunk.concept || lessonTitle;
+  const topic = targetChunk.topic || matchingLesson?.chapterTitle || matchingLesson?.moduleTitle || courseTitle;
 
-  // 5. Key Safety Takeaways
-  sections.push(`#### 📌 Key Safety Takeaways\n- **Safety First:** Strict adherence to protocols prevents incidents and ensures reliable execution.\n- **Verification:** Regular checks and systematic procedures maintain operational integrity.\n- **Continuous Improvement:** Master each standard procedure to build dependable habits.`);
+  let rawText = (targetChunk.text || targetChunk.chunkText || '')
+    .replace(/^###[^\n]+\n/g, '')
+    .replace(/^\*\*Topic:[^\n]+\n/g, '')
+    .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
+    .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
+    .trim();
+
+  let keyPoints = targetChunk.key_points || targetChunk.keyPoints || [];
+  if (typeof keyPoints === 'string') {
+    try { keyPoints = JSON.parse(keyPoints); } catch(e) { keyPoints = []; }
+  }
+
+  const sections = [];
+  const summary = targetChunk.semanticSummary || `This lesson provides a comprehensive breakdown of ${concept} within ${topic}.`;
+  sections.push(`### 💡 ${concept}\n${summary}`);
+
+  if (rawText && rawText.length > 20) {
+    sections.push(`#### 🎯 Operational Principles & Standards\n${rawText}`);
+  }
+
+  if (Array.isArray(keyPoints) && keyPoints.length > 0) {
+    sections.push(`#### 📋 Key Action Items & Protocols\n${keyPoints.map(kp => `- ${kp}`).join('\n')}`);
+  }
+
+  sections.push(`#### ⚠️ Safety & Operational Compliance\n- Apply verified protocols for ${concept} systematically in your daily tasks.\n- Adhere strictly to equipment operation limits and safety boundaries.\n- Report any non-conformances, hazards, or equipment defects immediately.`);
+
+  sections.push(`#### 📌 Key Takeaways\n- **Safety & Discipline:** Consistent execution of ${concept} standards prevents incidents and ensures reliable operations.\n- **Quality:** Maintaining verified practices eliminates defects and ensures operational excellence.`);
 
   return sections.join('\n\n');
 }
@@ -400,10 +400,25 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
       }
     }
 
-    // Synthesize structured blackboard lesson notes directly from the rich semantic chunks stored in database
-    let explanation = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+    // Synthesize structured blackboard lesson notes in target language
+    let explanation;
+    if (targetLangInfo.code === 'en') {
+      explanation = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+    } else {
+      // Multilingual synthesis for Chinese, Malay, Tamil, Bangla
+      const baseEnglishExp = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+      try {
+        console.log(`[PERF:LLM_START] Generating lesson explanation in ${targetLanguage} (${targetLangInfo.code})...`);
+        explanation = await aiService.explainLesson(course.title, lessonTitle, baseEnglishExp, targetLanguage);
+        console.log(`[PERF:LLM_END] Multilingual explanation generated in ${targetLanguage}`);
+      } catch (err) {
+        console.warn(`[PERF:LLM_END] AI multilingual fallback triggered for ${targetLanguage}:`, err.message);
+        explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
+      }
+    }
+
     if (!explanation || explanation.length < 50) {
-      explanation = `### 💡 Overview: ${lessonTitle}\nIn this lesson on "${lessonTitle}", we study the essential operational standards, guidelines, and safety procedures.\n\n#### 🎯 Core Protocols\n- Follow all standard operating procedures and guidelines from the training material.\n- Maintain verified equipment condition and perform routine inspections.\n\n#### 📌 Key Takeaways\n- Strict adherence to guidelines ensures safety and quality.\n- Execute tasks systematically with complete attention to detail.`;
+      explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
     }
 
     // 3. PERSISTENCE: Save synthesized explanation into PostgreSQL Course.curriculum for instant future opens

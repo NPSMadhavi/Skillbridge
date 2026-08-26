@@ -209,6 +209,7 @@ const CoursePlayer = ({
   const handleLanguageChange = (newLangCode) => {
     const langObj = LANGUAGES.find(l => l.value === newLangCode) || LANGUAGES[0]
     setSelectedLanguageCode(langObj.value)
+    ttsUtterancePool.clear()
     try {
       sessionStorage.setItem('skillbridge_language', JSON.stringify({
         code: langObj.code,
@@ -1102,11 +1103,12 @@ const CoursePlayer = ({
   // Complete Unicode regex matching all emojis
   const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F000}-\u{1F02F}]|[\u{1F0A0}-\u{1F0FF}]|[\u{1F100}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{1FA70}-\u{1FAFF}]|[\u{2300}-\u{23FF}]|[\u{2B50}]|[\u{FE00}-\u{FE0F}]/gu
 
-  // Helper to clean raw text for Speech TTS (removes hashtags, markdown symbols, and emojis that TTS speaks out loud)
+  // Helper to clean raw text for Speech TTS (removes hashtags, references, markdown symbols, and emojis that TTS speaks out loud)
   const cleanForSpeech = (text) => {
     if (!text) return ''
     return text
       .replace(EMOJI_REGEX, '')
+      .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
       .replace(/#+/g, '')
       .replace(/[\*_~`]+/g, '')
       .replace(/^[-\*•➔>+:\s]+/, '')
@@ -1114,11 +1116,12 @@ const CoursePlayer = ({
       .trim()
   }
 
-  // Helper to clean raw text for Chalkboard Display (removes emojis, #, ###, markdown symbols)
+  // Helper to clean raw text for Chalkboard Display (removes emojis, references, #, ###, markdown symbols)
   const cleanForBoard = (text) => {
     if (!text) return ''
     return text
       .replace(EMOJI_REGEX, '')
+      .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
       .replace(/^[#*•➔>+-\s]+/, '')
       .replace(/#+/g, '')
       .replace(/[\*_~`]+/g, '')
@@ -1169,10 +1172,13 @@ const CoursePlayer = ({
     return list[0];
   }, [lessonVisuals, activeLesson?.visuals, sentences, currentSentenceIdx]);
 
-  const REAL_PLAY_DURATIONS = ['01:45', '02:10', '01:50', '02:15', '01:30'];
+  const getRealLessonDurationStr = (lesson, activeExp = null, idx = 0) => {
+    // Check active loaded explanation, or the lesson's stored explanation
+    const expText = (activeExp && activeExp.length > 30)
+      ? activeExp
+      : (lesson?.explanation || lesson?.explanations?.en || '');
 
-  const getRealLessonDurationStr = (lesson, expText, idx = 0) => {
-    if (expText && expText.length > 40) {
+    if (expText && expText.length > 30) {
       const words = expText.split(/\s+/).length;
       const secs = Math.max(60, Math.min(240, Math.round(words / 2.2)));
       const m = Math.floor(secs / 60).toString().padStart(2, '0');
@@ -1193,7 +1199,11 @@ const CoursePlayer = ({
       }
     }
 
-    return REAL_PLAY_DURATIONS[idx % REAL_PLAY_DURATIONS.length];
+    // Deterministic fallback
+    const baseSecs = 65 + ((idx * 17) % 55);
+    const m = Math.floor(baseSecs / 60).toString().padStart(2, '0');
+    const s = Math.floor(baseSecs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   };
 
   const parseDurationSeconds = (durationStr) => {
@@ -1389,13 +1399,18 @@ const CoursePlayer = ({
           window.speechSynthesis.resume();
 
           // Check if utterance is already pre-warmed in cache pool
-          const poolKey = `${course?.id}_${activeLesson?.id}_${idx}`;
+          const poolKey = `${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx}`;
           let utterance = ttsUtterancePool.get(poolKey);
           if (!utterance) {
             utterance = new SpeechSynthesisUtterance(spokenText);
             const voices = window.speechSynthesis.getVoices();
             const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
-            if (matchedVoice) utterance.voice = matchedVoice;
+            if (matchedVoice) {
+              utterance.voice = matchedVoice;
+              utterance.lang = matchedVoice.lang;
+            } else {
+              utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
+            }
             utterance.rate = 0.95 * (playbackRate || 1.0);
             utterance.pitch = 1.05;
           }
@@ -1420,10 +1435,15 @@ const CoursePlayer = ({
                 const nextUtterance = new SpeechSynthesisUtterance(nextSpoken);
                 const voices = window.speechSynthesis.getVoices();
                 const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
-                if (matchedVoice) nextUtterance.voice = matchedVoice;
+                if (matchedVoice) {
+                  nextUtterance.voice = matchedVoice;
+                  nextUtterance.lang = matchedVoice.lang;
+                } else {
+                  nextUtterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
+                }
                 nextUtterance.rate = 0.95 * (playbackRate || 1.0);
                 nextUtterance.pitch = 1.05;
-                ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${idx + 1}`, nextUtterance);
+                ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx + 1}`, nextUtterance);
                 const preDuration = Math.round(performance.now() - preStartTime);
                 console.log(`[PERF:AUDIO_LOAD_END] Concept ${idx + 2} pre-warmed in ${preDuration}ms`);
               }
