@@ -135,154 +135,719 @@ class AIService {
   }
 
   /**
-   * Generates a complete dynamic Course structure (chapters, modules, lessons, and quiz)
-   * tailored to the uploaded document length, complexity, and sections.
+   * AI-Driven Document Comprehension and Semantic Knowledge Chunking Engine.
+   * Studies and understands the complete document before synthesizing meaning-based, dynamic-sized knowledge units.
+   * Preserves relationships (definition+explanation, concept+example, multi-slide concepts).
+   *
+   * @param {string} fileName - Document filename.
+   * @param {string} fullText - Full document text.
+   * @param {object} docMetadata - { fileType, slides, pages, curriculum }
+   * @returns {Promise<Array<object>>} Structured semantic chunks ready for validation and pgvector embedding.
    */
-  async generateCourse(fileName, fullText) {
-    const docLength = fullText.length;
-    // For very long documents, sample introduction, middle sections, and conclusion
-    let textSlice = fullText;
-    if (docLength > 35000) {
-      const part1 = fullText.slice(0, 15000);
-      const mid = Math.floor(docLength / 2);
-      const part2 = fullText.slice(mid - 5000, mid + 5000);
-      const part3 = fullText.slice(-10000);
-      textSlice = `${part1}\n\n[... middle section ...]\n\n${part2}\n\n[... concluding section ...]\n\n${part3}`;
-    } else {
-      textSlice = fullText.slice(0, 35000);
+  async understandAndChunkDocument(fileName, fullText, docMetadata = {}) {
+    const { fileType = 'document', slides = [], pages = [], curriculum = null } = docMetadata;
+    const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
+    const textLength = (fullText || '').length;
+
+    console.log(`[AI Comprehension] Studying document "${fileName}" (${fileType.toUpperCase()}, ${textLength} chars, ${slides.length} slides, ${pages.length} pages)...`);
+
+    // For very large documents (> 35k chars or > 24 slides), use hierarchical multi-pass comprehension
+    if (textLength > 35000 || slides.length > 24) {
+      console.log(`[AI Comprehension] Large document detected. Initiating hierarchical multi-pass understanding...`);
+      return await this._understandLargeDocumentHierarchically(fileName, fullText, docMetadata);
     }
 
-    const systemPrompt = `You are an expert curriculum architect and senior instructional designer.
-Analyze the provided document text and synthesize a complete, professional, multi-tiered interactive curriculum based SOLELY on the actual content, chapters, and topics present in the document.
+    // Build structured document context for standard-sized documents
+    let docContext = '';
+    if (isPpt && slides.length > 0) {
+      docContext = slides.map(s => {
+        let sDesc = `[SLIDE ${s.slideNumber}: ${s.title}]\n`;
+        if (s.headings?.length) sDesc += `Headings: ${s.headings.join(' | ')}\n`;
+        if (s.paragraphs?.length) sDesc += s.paragraphs.join('\n') + '\n';
+        if (s.bulletPoints?.length) sDesc += s.bulletPoints.join('\n') + '\n';
+        if (s.tables?.length) sDesc += s.tables.join('\n') + '\n';
+        if (s.images?.length) {
+          sDesc += `Visuals on Slide: ` + s.images.map(img => `[Visual ID: ${img.id}] "${img.name}"${img.descr ? ` - ${img.descr}` : ''}`).join('; ') + '\n';
+        }
+        if (s.speakerNotes) sDesc += `Speaker Notes: ${s.speakerNotes}\n`;
+        return sDesc.trim();
+      }).join('\n\n--- NEXT SLIDE ---\n\n');
+    } else if (pages.length > 0) {
+      docContext = pages.map(p => `[PAGE ${p.page_number}${p.title ? `: ${p.title}` : ''}]\n${p.text}`).join('\n\n--- NEXT PAGE ---\n\n');
+    } else {
+      docContext = fullText.slice(0, 32000);
+    }
 
-DYNAMIC CURRICULUM ARCHITECTURE RULES:
-1. Dynamic Scope Based on Document Depth:
-   - Determine the number of Chapters, Modules, and Lessons dynamically based on document length and topic richness.
-   - Small documents: 2-3 Chapters, 4-6 Total Lessons.
-   - Medium documents: 3-5 Chapters, 6-12 Total Lessons.
-   - Large / comprehensive documents: 5-8+ Chapters, 12-20+ Total Lessons.
-   - DO NOT artificially cap or force the course to 5 lessons. Let the curriculum naturally reflect the full breadth of the material.
-2. Two or More Modules per Chapter:
-   - Every Chapter MUST contain at least 2 distinct, meaningful Modules (e.g. Chapter 1 -> Module 1.1 Foundations, Module 1.2 Core Mechanisms).
-   - Each Module must contain 1 to 3 concrete Lessons derived from the document's actual concepts.
-3. Content-Driven Topics:
-   - Extract real headings, algorithms, technical definitions, and domain topics from the text.
-   - Avoid generic placeholder titles like "Introduction & Scope" or "Advanced Analysis" unless they literally reflect the text.
-4. Realistic Teaching Durations:
-   - Assign realistic lesson durations between 5 to 15 minutes (e.g. "06:30", "08:45", "12:10") to represent substantial, high-value learning sessions.
-5. Flat Sequential Lessons Array:
-   - The "lessons" array MUST be a continuous, 1-indexed flat array containing ALL lessons across all chapters and modules in sequential learning order (Lesson 1 -> Lesson 2 -> ... -> Lesson N).
-   - The first lesson (id: 1) has status "active", all subsequent lessons have status "locked".
-6. Output Format:
-   You must respond with a raw JSON object matching the following structure exactly, and nothing else. No markdown code fences.
+    const systemPrompt = `You are the Senior Curriculum Architect & Master Knowledge Engineer for SkillBridge.
+Your mission is to DEEPLY STUDY AND UNDERSTAND the provided course document and synthesize COMPLETE, MEANING-BASED SEMANTIC KNOWLEDGE CHUNKS for ARIA, our AI Tutor.
+
+CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
+1. UNDERSTAND FIRST, CHUNK SECOND:
+   - Study the entire material holistically before formulating knowledge units.
+   - Build a natural knowledge hierarchy from the actual material: Course -> Module -> Topic -> Subtopic -> Concept.
+   - NEVER use arbitrary character counts or fixed text splitting.
+
+2. MEANING-BASED, COMPLETE CONCEPTS:
+   - Every chunk must represent a complete, self-contained knowledge unit explaining one cohesive concept thoroughly.
+   - Chunk sizes are DYNAMIC: a chunk can be short or long depending on what is required to explain the concept completely.
+
+3. PRESERVE RELATIONSHIPS (NEVER SEPARATE WHAT BELONGS TOGETHER):
+   - Keep definitions with their explanations and background.
+   - Keep concepts with their concrete examples, code, or illustrations.
+   - Keep procedures and algorithms with all sequential steps.
+   - Keep formulas with their variables and explanations.
+   - Keep slide headings with all supporting bullets and speaker notes.
+
+4. POWERPOINT & MULTI-SLIDE INTELLIGENCE:
+   - DO NOT assume 1 slide = 1 chunk!
+   - If multiple consecutive slides together explain one larger concept (e.g. Slide 10: "Neural Networks", Slide 11: "Architecture", Slide 12: "Input Layer", Slide 13: "Hidden Layer", Slide 14: "Output Layer"), COMBINE them into ONE coherent semantic knowledge unit!
+   - Record ALL source slide numbers in the "sourceSlides" array (e.g. [10, 11, 12, 13, 14]).
+
+5. SOURCE GROUNDING & TRACEABILITY:
+   - Ground every chunk strictly in the source material. Do not hallucinate external facts.
+   - For presentations: set "sourceSlides" (array of numbers like [1, 2]).
+   - For documents/PDFs: set "sourcePage" (number or primary page).
+   - Set "sourceSection" (heading/section title).
+
+6. VISUAL INTEGRATION & TIMING:
+   - When a slide has supporting images, photos, charts, or diagrams, link them to the relevant concept.
+   - Specify "purpose" and "triggerKeywords" so ARIA knows exactly when to display the visual during lecture playback.
+
+7. EASY-TO-EXPLAIN KNOWLEDGE FOR ARIA:
+   - Each chunk must contain rich pedagogical context so ARIA can explain it in clear, natural teaching language.
+   - Synthesize "chunkText" as a structured, beautifully formatted markdown teaching block:
+     Include: Concept name, definition & intuitive explanation, technical details, practical example, key takeaways, and source tag.
+
+8. OUTPUT FORMAT:
+   Return ONLY a valid JSON object matching this schema exactly:
 {
-  "title": "A concise, professional course title reflecting the document",
-  "description": "A comprehensive 2-3 sentence overview summarizing what learners will master",
-  "learning": [
-    "Master foundational concepts of [Topic A]",
-    "Implement and configure [Topic B] workflows",
-    "Analyze and debug [Topic C] architectures",
-    "Apply best practices for [Topic D] in production environments"
-  ],
-  "includes": [
-    "Interactive ARIA AI Avatar Tutoring",
-    "Multi-chapter comprehensive curriculum",
-    "Real-time voice Q&A and concept breakdowns",
-    "Chapter assessments & verified certificate"
-  ],
-  "chapters": [
+  "courseTitle": "Clear descriptive title derived from the material",
+  "courseDomain": "Domain/Subject area",
+  "learningHierarchy": [
     {
-      "chapterId": 1,
-      "title": "Chapter 1: [Chapter Title]",
-      "description": "Brief description of this chapter's domain",
-      "modules": [
+      "moduleTitle": "Module 1: Foundations",
+      "topics": [
         {
-          "moduleId": 1,
-          "title": "Module 1.1: [Module Title]",
-          "lessons": [
-            { "id": 1, "title": "[Specific Lesson Title 1]", "duration": "07:30", "status": "active" },
-            { "id": 2, "title": "[Specific Lesson Title 2]", "duration": "09:15", "status": "locked" }
-          ]
-        },
-        {
-          "moduleId": 2,
-          "title": "Module 1.2: [Module Title]",
-          "lessons": [
-            { "id": 3, "title": "[Specific Lesson Title 3]", "duration": "08:45", "status": "locked" }
-          ]
+          "topicTitle": "Topic 1.1: Core Concept",
+          "subtopics": ["Subtopic A", "Subtopic B"]
         }
       ]
     }
   ],
+  "chunks": [
+    {
+      "concept": "Precise Concept Name (e.g. Supervised Learning)",
+      "topic": "Parent Topic Name (e.g. Machine Learning Paradigms)",
+      "subtopic": "Subtopic Name if applicable",
+      "module": "Parent Module Name",
+      "chunkType": "concept",
+      "explanation": "Clear, intuitive explanation of the concept for beginners...",
+      "details": "In-depth mechanisms, inner workings, formulas, or architecture...",
+      "example": "Concrete practical example, real-world application, or code snippet...",
+      "keyPoints": ["Key takeaway 1", "Key takeaway 2", "Key takeaway 3"],
+      "relatedConcepts": ["Related Concept A", "Related Concept B"],
+      "prerequisites": "Prerequisite knowledge if any",
+      "sourcePage": 1,
+      "sourceSlides": [1, 2],
+      "sourceSection": "Section title",
+      "chunkText": "### 📌 Concept: Supervised Learning\\n**Topic:** Machine Learning Paradigms\\n\\n**Definition & Explanation:**\\nSupervised learning is...\\n\\n**How It Works:**\\n...\\n\\n**Practical Example:**\\n...\\n\\n**Key Takeaways:**\\n- Point 1\\n- Point 2\\n\\n*(Source: Slides 1, 2 / Section 1)*"
+    }
+  ]
+}`;
+
+    const userPrompt = `Document Filename: ${fileName}\nDocument Format: ${fileType.toUpperCase()}\nDocument Content:\n\n${docContext}`;
+
+    try {
+      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
+      const parsed = JSON.parse(aiResponse.replace(/```json/g, '').replace(/```/g, '').trim());
+
+      if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
+        console.log(`[AI Comprehension] AI synthesized ${parsed.chunks.length} high-fidelity semantic knowledge chunks.`);
+        return this._formatSynthesizedChunks(parsed.chunks, docMetadata);
+      }
+      throw new Error('AI response did not contain valid chunks array.');
+    } catch (e) {
+      console.warn('[AI Comprehension] LLM understanding pass fallback triggered:', e.message);
+      return this._getStructuralSemanticChunks(fileName, fullText, docMetadata);
+    }
+  }
+
+  /**
+   * Hierarchical Multi-Pass Comprehension for Large Documents (> 35k chars or > 24 slides).
+   * 1. Batches sections/slides into cohesive clusters.
+   * 2. Extracts local concepts and summaries for each batch.
+   * 3. Global synthesis pass builds unified knowledge hierarchy and coherent chunks.
+   */
+  async _understandLargeDocumentHierarchically(fileName, fullText, docMetadata = {}) {
+    const { fileType = 'document', slides = [], pages = [] } = docMetadata;
+    const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
+
+    const batches = [];
+    if (isPpt && slides.length > 0) {
+      const batchSize = 8;
+      for (let i = 0; i < slides.length; i += batchSize) {
+        const slice = slides.slice(i, i + batchSize);
+        batches.push({
+          label: `Slides ${slice[0].slideNumber}-${slice[slice.length - 1].slideNumber}`,
+          slides: slice,
+          text: slice.map(s => s.fullText).join('\n\n')
+        });
+      }
+    } else if (pages.length > 0) {
+      const batchSize = 6;
+      for (let i = 0; i < pages.length; i += batchSize) {
+        const slice = pages.slice(i, i + batchSize);
+        batches.push({
+          label: `Pages ${slice[0].page_number}-${slice[slice.length - 1].page_number}`,
+          pages: slice,
+          text: slice.map(p => `[Page ${p.page_number}] ${p.text}`).join('\n\n')
+        });
+      }
+    } else {
+      const chunkSize = 12000;
+      let offset = 0;
+      let partIndex = 1;
+      while (offset < fullText.length) {
+        const end = Math.min(offset + chunkSize, fullText.length);
+        batches.push({
+          label: `Part ${partIndex++}`,
+          text: fullText.slice(offset, end)
+        });
+        offset = end;
+      }
+    }
+
+    console.log(`[AI Hierarchical] Processing large document in ${batches.length} hierarchical section batches...`);
+
+    const allSynthesizedChunks = [];
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      console.log(`[AI Hierarchical] Processing batch ${b + 1}/${batches.length} (${batch.label})...`);
+
+      const batchPrompt = `You are the Senior Knowledge Architect for SkillBridge.
+Analyze this specific section of the course document ("${fileName}") and extract COMPLETE, MEANING-BASED SEMANTIC KNOWLEDGE CHUNKS.
+Current Section: ${batch.label}.
+
+RULES:
+1. Extract self-contained concept units (Concept, Topic, Explanation, Details, Example, Key Points).
+2. Dynamic sizing. Combine related consecutive slides/pages explaining one concept.
+3. Preserve all source references (sourceSlides or sourcePage).
+4. Return ONLY raw JSON matching:
+{
+  "chunks": [
+    {
+      "concept": "Concept Name",
+      "topic": "Topic Name",
+      "subtopic": "Subtopic Name",
+      "module": "Module Name",
+      "chunkType": "concept",
+      "explanation": "Simple clear explanation...",
+      "details": "Technical details...",
+      "example": "Practical example...",
+      "keyPoints": ["Point 1", "Point 2"],
+      "relatedConcepts": ["Related A"],
+      "sourcePage": 1,
+      "sourceSlides": [1, 2],
+      "sourceSection": "${batch.label}",
+      "chunkText": "### 📌 Concept: Name\\n**Topic:** Topic\\n\\n**Explanation:**\\n...\\n\\n**Key Takeaways:**\\n- Point 1"
+    }
+  ]
+}`;
+
+      try {
+        const res = await this._callLLM(batchPrompt, batch.text, true);
+        const parsed = JSON.parse(res.replace(/```json/g, '').replace(/```/g, '').trim());
+        if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
+          allSynthesizedChunks.push(...parsed.chunks);
+        }
+      } catch (err) {
+        console.warn(`[AI Hierarchical] Batch ${batch.label} LLM fallback:`, err.message);
+        // Fallback for this specific batch
+        const fallbackChunks = this._getStructuralSemanticChunks(fileName, batch.text, {
+          fileType,
+          slides: batch.slides || [],
+          pages: batch.pages || []
+        });
+        allSynthesizedChunks.push(...fallbackChunks);
+      }
+    }
+
+    if (allSynthesizedChunks.length > 0) {
+      console.log(`[AI Hierarchical] Synthesized ${allSynthesizedChunks.length} total semantic chunks across all batches.`);
+      return this._formatSynthesizedChunks(allSynthesizedChunks, docMetadata);
+    }
+
+    return this._getStructuralSemanticChunks(fileName, fullText, docMetadata);
+  }
+
+  /**
+   * Normalizes and cleans synthesized AI chunks with fallback metadata.
+   */
+  _formatSynthesizedChunks(chunks, docMetadata = {}) {
+    const { slides = [] } = docMetadata;
+    const slideMap = new Map();
+    if (Array.isArray(slides)) {
+      for (const s of slides) {
+        if (s.slideNumber && Array.isArray(s.images) && s.images.length > 0) {
+          slideMap.set(s.slideNumber, s.images);
+        }
+      }
+    }
+
+    return chunks.map((c, idx) => {
+      const concept = c.concept || c.title || `Core Concept ${idx + 1}`;
+      const topic = c.topic || c.module || 'General Curriculum';
+      const subtopic = c.subtopic || null;
+      const chunkType = c.chunkType || 'concept';
+      const keyPoints = Array.isArray(c.keyPoints) ? c.keyPoints : [];
+      const relatedConcepts = Array.isArray(c.relatedConcepts) ? c.relatedConcepts : [];
+      const sourceSlides = Array.isArray(c.sourceSlides)
+        ? c.sourceSlides
+        : (typeof c.sourceSlide === 'number' ? [c.sourceSlide] : null);
+      const sourcePage = typeof c.sourcePage === 'number'
+        ? c.sourcePage
+        : (sourceSlides ? sourceSlides[0] : 1);
+
+      // Collect associated slide visuals from source slides
+      const visuals = [];
+      if (sourceSlides && sourceSlides.length > 0) {
+        for (const sn of sourceSlides) {
+          const imgs = slideMap.get(sn) || [];
+          for (const img of imgs) {
+            if (!visuals.some(v => v.id === img.id || v.mediaPath === img.mediaPath)) {
+              visuals.push({
+                id: img.id,
+                dataUrl: img.dataUrl,
+                fileName: img.fileName,
+                mimetype: img.mimetype,
+                sourceSlide: img.slideNumber,
+                name: img.name,
+                descr: img.descr,
+                purpose: img.descr || img.name || `Visual illustration for ${concept}`,
+                triggerKeywords: [
+                  ...concept.toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3),
+                  ...(img.descr || img.name || '').toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3)
+                ],
+                displayWhen: `while explaining ${concept}`
+              });
+            }
+          }
+        }
+      }
+
+      // Build structured chunkText if not provided or too short
+      let text = (c.chunkText || '').trim();
+      if (!text || text.length < 80) {
+        text = `### 📌 Concept: ${concept}\n**Topic:** ${topic}${subtopic ? ` > ${subtopic}` : ''}\n\n`;
+        if (c.explanation) text += `**Definition & Overview:**\n${c.explanation}\n\n`;
+        if (c.details) text += `**Technical Mechanisms:**\n${c.details}\n\n`;
+        if (c.example) text += `**Practical Example:**\n${c.example}\n\n`;
+        if (keyPoints.length > 0) {
+          text += `**Key Points:**\n${keyPoints.map(p => `- ${p}`).join('\n')}\n\n`;
+        }
+        const srcTag = sourceSlides?.length
+          ? `Slides ${sourceSlides.join(', ')}`
+          : `Page ${sourcePage}`;
+        text += `*(Source: ${srcTag}${c.sourceSection ? ` - ${c.sourceSection}` : ''})*`;
+      }
+
+      return {
+        chunkIndex: idx,
+        concept,
+        topic,
+        subtopic,
+        chunkType,
+        sourcePage,
+        sourceSlides,
+        sourceSection: c.sourceSection || null,
+        prerequisites: c.prerequisites || null,
+        keyPoints,
+        relatedConcepts,
+        visuals,
+        semanticSummary: (c.explanation || text.slice(0, 200)).replace(/\n/g, ' ').trim(),
+        chunkText: text.trim()
+      };
+    });
+  }
+
+  /**
+   * High-Fidelity Structural Semantic Chunker Fallback.
+   * Runs when LLM API is unavailable, rate-limited, or for offline processing.
+   * Clusters consecutive related slides, groups definitions with explanations,
+   * keeps examples with concepts, and extracts rich metadata.
+   */
+  _getStructuralSemanticChunks(fileName, fullText, docMetadata = {}) {
+    const { fileType = 'document', slides = [], pages = [] } = docMetadata;
+    const cleanFileName = fileName.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+    const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
+    const generatedChunks = [];
+
+    // 1. PPT/PPTX Structural Chunking (combines consecutive related slides)
+    if (isPpt && slides.length > 0) {
+      let currentCluster = [];
+      let currentMainConcept = '';
+      let clusterSlides = [];
+
+      for (let i = 0; i < slides.length; i++) {
+        const slide = slides[i];
+        const title = slide.title || `Slide ${slide.slideNumber}`;
+
+        // Determine if slide continues previous concept or introduces new major topic
+        const isIntroOrOverview = /overview|agenda|introduction|table of contents/i.test(title);
+        const titleWords = title.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const prevTitleWords = currentMainConcept.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        const wordOverlap = titleWords.some(w => prevTitleWords.includes(w));
+
+        const shouldStartNew = currentCluster.length === 0 ||
+          (!wordOverlap && currentCluster.length >= 2 && !isIntroOrOverview) ||
+          currentCluster.length >= 4;
+
+        if (shouldStartNew && currentCluster.length > 0) {
+          // Flush previous slide cluster as one semantic knowledge chunk
+          const clusterText = currentCluster.map(s => s.fullText).join('\n\n');
+          const allBullets = currentCluster.flatMap(s => s.bulletPoints || []);
+          const firstSlide = currentCluster[0];
+
+          generatedChunks.push({
+            chunkIndex: generatedChunks.length,
+            concept: currentMainConcept || firstSlide.title,
+            topic: cleanFileName,
+            subtopic: firstSlide.title !== currentMainConcept ? firstSlide.title : null,
+            chunkType: 'concept',
+            sourcePage: firstSlide.slideNumber,
+            sourceSlides: clusterSlides.slice(),
+            sourceSection: `Slides ${clusterSlides.join(', ')}`,
+            prerequisites: null,
+            keyPoints: allBullets.slice(0, 5).map(b => b.replace(/^[\s\-\*]+/, '')),
+            relatedConcepts: [],
+            semanticSummary: `${currentMainConcept}: ${firstSlide.paragraphs?.[0] || firstSlide.title}`,
+            chunkText: `### 📌 Concept: ${currentMainConcept || firstSlide.title}\n**Topic:** ${cleanFileName}\n\n${clusterText}\n\n*(Source: Slides ${clusterSlides.join(', ')})*`
+          });
+
+          currentCluster = [];
+          clusterSlides = [];
+        }
+
+        if (currentCluster.length === 0) {
+          currentMainConcept = title;
+        }
+        currentCluster.push(slide);
+        clusterSlides.push(slide.slideNumber);
+      }
+
+      // Flush remaining cluster
+      if (currentCluster.length > 0) {
+        const clusterText = currentCluster.map(s => s.fullText).join('\n\n');
+        const allBullets = currentCluster.flatMap(s => s.bulletPoints || []);
+        const firstSlide = currentCluster[0];
+
+        generatedChunks.push({
+          chunkIndex: generatedChunks.length,
+          concept: currentMainConcept || firstSlide.title,
+          topic: cleanFileName,
+          subtopic: null,
+          chunkType: 'concept',
+          sourcePage: firstSlide.slideNumber,
+          sourceSlides: clusterSlides.slice(),
+          sourceSection: `Slides ${clusterSlides.join(', ')}`,
+          prerequisites: null,
+          keyPoints: allBullets.slice(0, 5).map(b => b.replace(/^[\s\-\*]+/, '')),
+          relatedConcepts: [],
+          semanticSummary: `${currentMainConcept}: ${firstSlide.paragraphs?.[0] || firstSlide.title}`,
+          chunkText: `### 📌 Concept: ${currentMainConcept || firstSlide.title}\n**Topic:** ${cleanFileName}\n\n${clusterText}\n\n*(Source: Slides ${clusterSlides.join(', ')})*`
+        });
+      }
+
+      return generatedChunks;
+    }
+
+    // 2. Document/PDF Structural Semantic Chunking
+    const paragraphs = (fullText || '').split(/\n\s*\n/);
+    let currentTopic = cleanFileName;
+    let currentConcept = cleanFileName;
+    let accumulatedParas = [];
+    let currentSourcePage = 1;
+
+    for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+      const p = paragraphs[pIdx].trim();
+      if (!p) continue;
+
+      const isHeading = p.length < 90 && (
+        p.startsWith('#') ||
+        p.startsWith('Chapter') ||
+        p.startsWith('Module') ||
+        p.startsWith('Section') ||
+        /^[0-9]+(\.[0-9]+)*\s+[A-Z]/.test(p) ||
+        p.endsWith(':')
+      );
+
+      if (isHeading) {
+        if (accumulatedParas.length > 0) {
+          const chunkContent = accumulatedParas.join('\n\n');
+          generatedChunks.push({
+            chunkIndex: generatedChunks.length,
+            concept: currentConcept,
+            topic: currentTopic,
+            subtopic: null,
+            chunkType: /define|definition|refers to/i.test(chunkContent) ? 'definition' : 'concept',
+            sourcePage: currentSourcePage,
+            sourceSlides: null,
+            sourceSection: currentConcept,
+            prerequisites: null,
+            keyPoints: [],
+            relatedConcepts: [],
+            semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+            chunkText: `### 📌 Concept: ${currentConcept}\n**Topic:** ${currentTopic}\n\n${chunkContent}\n\n*(Source: Page ${currentSourcePage} - ${currentConcept})*`
+          });
+          accumulatedParas = [];
+        }
+
+        const cleanHeader = p.replace(/^[#\d\.\-\s]+/, '').replace(/:$/, '').trim();
+        if (p.startsWith('# ') || p.startsWith('Chapter') || p.startsWith('Module')) {
+          currentTopic = cleanHeader;
+        }
+        currentConcept = cleanHeader || currentTopic;
+        continue;
+      }
+
+      accumulatedParas.push(p);
+      if (accumulatedParas.join('\n\n').length > 1800) {
+        const chunkContent = accumulatedParas.join('\n\n');
+        generatedChunks.push({
+          chunkIndex: generatedChunks.length,
+          concept: currentConcept,
+          topic: currentTopic,
+          subtopic: null,
+          chunkType: 'concept',
+          sourcePage: currentSourcePage,
+          sourceSlides: null,
+          sourceSection: currentConcept,
+          prerequisites: null,
+          keyPoints: [],
+          relatedConcepts: [],
+          semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+          chunkText: `### 📌 Concept: ${currentConcept}\n**Topic:** ${currentTopic}\n\n${chunkContent}\n\n*(Source: Page ${currentSourcePage} - ${currentConcept})*`
+        });
+        accumulatedParas = [];
+        currentSourcePage++;
+      }
+    }
+
+    if (accumulatedParas.length > 0) {
+      const chunkContent = accumulatedParas.join('\n\n');
+      generatedChunks.push({
+        chunkIndex: generatedChunks.length,
+        concept: currentConcept,
+        topic: currentTopic,
+        subtopic: null,
+        chunkType: 'concept',
+        sourcePage: currentSourcePage,
+        sourceSlides: null,
+        sourceSection: currentConcept,
+        prerequisites: null,
+        keyPoints: [],
+        relatedConcepts: [],
+        semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+        chunkText: `### 📌 Concept: ${currentConcept}\n**Topic:** ${currentTopic}\n\n${chunkContent}\n\n*(Source: Page ${currentSourcePage} - ${currentConcept})*`
+      });
+    }
+
+    return generatedChunks;
+  }
+
+  /**
+   * Generates a complete dynamic Course structure (chapters, modules, lessons, and quiz)
+  /**
+   * Generates a dynamic, content-driven Course curriculum tailored entirely to the
+   * actual subjects present in the uploaded PPTX/document.
+   * NEVER forces 5 modules, fixed chapter counts, or generic placeholder templates.
+   */
+  async generateCourse(fileName, fullText, docMetadata = {}) {
+    const { fileType = 'document', slides = [], pages = [] } = docMetadata;
+    const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
+    const docLength = (fullText || '').length;
+
+    // Build rich, structured representation of the presentation/document
+    let textSlice = '';
+    if (isPpt && slides.length > 0) {
+      textSlice = slides.map(s => {
+        let sDesc = `[SLIDE ${s.slideNumber}: ${s.title}]\n`;
+        if (s.headings?.length) sDesc += `Headings: ${s.headings.join(' | ')}\n`;
+        if (s.paragraphs?.length) sDesc += s.paragraphs.join('\n') + '\n';
+        if (s.bulletPoints?.length) sDesc += s.bulletPoints.join('\n') + '\n';
+        if (s.tables?.length) sDesc += s.tables.join('\n') + '\n';
+        if (s.speakerNotes) sDesc += `Speaker Notes: ${s.speakerNotes}\n`;
+        return sDesc.trim();
+      }).join('\n\n');
+    } else if (pages.length > 0) {
+      textSlice = pages.map(p => `[PAGE ${p.page_number}${p.title ? `: ${p.title}` : ''}]\n${p.text}`).join('\n\n');
+    } else {
+      textSlice = fullText.slice(0, 35000);
+    }
+
+    if (textSlice.length > 35000) {
+      textSlice = textSlice.slice(0, 35000);
+    }
+
+    const systemPrompt = `You are the Senior Curriculum Architect & Master Instructional Designer for SkillBridge.
+Your mission is to DEEPLY STUDY AND UNDERSTAND the provided course presentation/document and synthesize an AUTHENTIC, DYNAMIC CURRICULUM derived STRICTLY from the actual material.
+
+CRITICAL CONTENT-FIRST DIRECTIVES:
+1. STUDY THE ENTIRE MATERIAL FIRST:
+   - Study ALL slides or pages before generating the curriculum.
+   - Understand the overall purpose, domain, and specific subject matter of the presentation.
+   - Discover the real topics from the content itself (e.g. for Driver Training: PPE requirements, driver wellness, pre-operation checklists, safe walkways, parking, speed limits, trailer operations, reversing, blind spots, load height, coupling/decoupling, coil securing, lifting safety, damaged equipment, unstable loads, consequence management).
+
+2. ABSOLUTELY NO FORCED TEMPLATES OR TARGET NUMBERS:
+   - NEVER force 5 modules, 4 modules, or any fixed number of modules/chapters.
+   - The number of modules is determined ENTIRELY by the content:
+     * If the material naturally has 4 major subjects, create 4 modules.
+     * If it naturally has 6, create 6.
+     * If it naturally has 9, create 9.
+     * There is NO target number.
+   - NEVER force generic placeholder titles such as:
+     * "Chapter Overview"
+     * "Introduction"
+     * "Core Concepts"
+     * "Summary"
+     * "Key Takeaways"
+     * "Phase 1" / "Phase 2"
+     * "Principles Part 1"
+     * "Course Overview & Objectives"
+   - Every module and lesson title MUST be a specific, content-driven subject derived directly from the presentation.
+
+3. NATURAL GROUPING & RELATIONSHIP PRESERVATION:
+   - Group related slides that together explain one cohesive subject into a single module or lesson.
+     Examples:
+     * PPE Requirement -> Safety Helmet, Safety Glasses, Safety Shoes, Ear Plugs are one related safety topic.
+     * Reverse Parking -> Horn Before Reversing, Blind Spots are one related safe-driving topic.
+     * Trailer Coupling/Decoupling -> Load Height, Coil Chokes, Stanchions, Lashing are organized according to their actual workflow.
+   - Create modules only where the source content naturally forms a major training area.
+   - Create lessons only where there is enough meaningful content to teach.
+   - Do NOT create artificial lessons just to fill a template.
+   - Multiple slides may belong to one lesson. One large topic may contain multiple lessons.
+   - Do not assume 1 slide = 1 lesson. Do not assume 1 topic = 1 module.
+   - Preserve the logical training sequence of the presentation.
+
+4. REALISTIC TEACHING DURATION:
+   - Assign realistic lesson durations between 5 to 15 minutes (e.g. "06:30", "08:45", "12:10").
+
+5. FLAT SEQUENTIAL LESSONS:
+   - The "lessons" array MUST be a continuous 1-indexed sequential flat array containing all lessons across all modules (id: 1, id: 2, ... id: N).
+   - id: 1 has status: "active", all subsequent lessons have status: "locked".
+
+6. REAL GROUNDED QUIZ:
+   - Generate 5 multiple-choice questions derived directly from the real rules, safety procedures, numbers, and warnings in the presentation (with varied answerIndex across 0, 1, 2, 3).
+
+7. OUTPUT FORMAT:
+   Return ONLY a raw JSON object matching this schema:
+{
+  "title": "Specific Course Title Reflecting the Material",
+  "description": "A comprehensive 2-3 sentence overview summarizing what learners will master",
+  "learning": [
+    "Specific practical skill/rule 1",
+    "Specific practical skill/rule 2",
+    "Specific practical skill/rule 3",
+    "Specific practical skill/rule 4"
+  ],
+  "includes": [
+    "Interactive ARIA AI Avatar Tutoring",
+    "Comprehensive topic-driven curriculum",
+    "Real-time voice Q&A and safety breakdowns",
+    "Assessment & verified certificate"
+  ],
   "curriculum": [
-    { "title": "Chapter 1: [Chapter Title]", "lessons": 3, "duration": "25m", "locked": false }
+    { "title": "[Specific Module 1 Title]", "lessons": 2, "duration": "16m", "locked": false }
   ],
   "lessons": [
     {
       "id": 1,
       "chapterId": 1,
-      "chapterTitle": "Chapter 1: [Chapter Title]",
+      "chapterTitle": "[Specific Module 1 Title]",
       "moduleId": 1,
-      "moduleTitle": "Module 1.1: [Module Title]",
-      "title": "[Specific Lesson Title 1]",
+      "moduleTitle": "[Specific Module 1 Title]",
+      "title": "[Specific Lesson 1 Title from Content]",
       "duration": "07:30",
       "status": "active"
-    },
-    {
-      "id": 2,
-      "chapterId": 1,
-      "chapterTitle": "Chapter 1: [Chapter Title]",
-      "moduleId": 1,
-      "moduleTitle": "Module 1.1: [Module Title]",
-      "title": "[Specific Lesson Title 2]",
-      "duration": "09:15",
-      "status": "locked"
-    },
-    {
-      "id": 3,
-      "chapterId": 1,
-      "chapterTitle": "Chapter 1: [Chapter Title]",
-      "moduleId": 2,
-      "moduleTitle": "Module 1.2: [Module Title]",
-      "title": "[Specific Lesson Title 3]",
-      "duration": "08:45",
-      "status": "locked"
     }
   ],
   "quiz": [
     {
-      "question": "A multiple-choice question testing understanding of concepts in this course?",
+      "question": "Clear question testing a real rule/procedure from this course?",
       "options": ["Option A", "Option B", "Option C", "Option D"],
-      "answerIndex": 1
+      "answerIndex": 1,
+      "explanation": "Why this option is correct based on the training material."
     }
   ]
 }`;
 
-    const userPrompt = `Document Filename: ${fileName}\nDocument Length: ${docLength} characters\n\nDocument Text Content Preview:\n${textSlice}`;
+    const userPrompt = `Document Filename: ${fileName}\nDocument Length: ${docLength} characters\n\nDocument Content:\n${textSlice}`;
 
     try {
       const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
       const parsed = JSON.parse(aiResponse.replace(/```json/g, '').replace(/```/g, '').trim());
       if (parsed.title && Array.isArray(parsed.lessons) && parsed.lessons.length > 0 && parsed.quiz) {
-        // Ensure lessons have clean 1-based sequential IDs and active status for lesson 1
-        parsed.lessons = parsed.lessons.map((l, idx) => ({
-          ...l,
-          id: idx + 1,
-          status: idx === 0 ? 'active' : (l.status === 'done' ? 'done' : 'locked'),
-          duration: l.duration || '08:00'
-        }));
+        const slideImageMap = new Map();
+        if (Array.isArray(slides)) {
+          for (const s of slides) {
+            if (s.slideNumber && Array.isArray(s.images) && s.images.length > 0) {
+              slideImageMap.set(s.slideNumber, s.images);
+            }
+          }
+        }
+
+        parsed.lessons = parsed.lessons.map((l, idx) => {
+          const lessonSourceSlides = Array.isArray(l.sourceSlides) ? l.sourceSlides : [];
+          let matchedSlides = lessonSourceSlides.filter(sn => typeof sn === 'number');
+
+          if (matchedSlides.length === 0 && slides.length > 0) {
+            matchedSlides = slides
+              .filter(s => l.title && s.title && (
+                l.title.toLowerCase().includes(s.title.toLowerCase()) ||
+                s.title.toLowerCase().includes(l.title.toLowerCase()) ||
+                (s.headings && s.headings.some(h => l.title.toLowerCase().includes(h.toLowerCase())))
+              ))
+              .map(s => s.slideNumber);
+          }
+
+          if (matchedSlides.length === 0 && slides.length > 0) {
+            matchedSlides = [Math.min(slides.length, idx + 1)];
+          }
+
+          const visuals = matchedSlides.flatMap(sn => slideImageMap.get(sn) || []).map(img => ({
+            id: img.id,
+            dataUrl: img.dataUrl,
+            fileName: img.fileName,
+            mimetype: img.mimetype,
+            sourceSlide: img.slideNumber,
+            name: img.name,
+            descr: img.descr,
+            purpose: img.descr || img.name || `Visual illustration for ${l.title}`,
+            triggerKeywords: [
+              ...l.title.toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3),
+              ...(img.descr || img.name || '').toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3)
+            ],
+            displayWhen: `while explaining ${l.title}`
+          }));
+
+          return {
+            ...l,
+            id: idx + 1,
+            sourceSlides: matchedSlides,
+            visuals,
+            status: idx === 0 ? 'active' : (l.status === 'done' ? 'done' : 'locked'),
+            duration: l.duration || '08:00'
+          };
+        });
         return parsed;
       }
       throw new Error('Incomplete structure from AI response.');
     } catch (e) {
       console.warn('Fallback triggered for generateCourse:', e.message);
-      return this._getMockCourse(fileName, fullText);
+      return this._getMockCourse(fileName, fullText, docMetadata);
     }
   }
 
-  /**
-   * Generates dynamic assessment questions for a specific chapter/lesson using RAG context.
-   */
   /**
    * Generates dynamic assessment questions for a specific chapter/lesson using RAG context.
    */
@@ -321,59 +886,59 @@ CRITICAL QUIZ GENERATION RULES:
       console.warn('Fallback triggered for generateLessonQuiz:', e.message);
       return [
         {
-          question: `What is the primary objective of the chapter "${lessonTitle}"?`,
+          question: `What is the primary objective of "${lessonTitle}"?`,
           options: [
-            'To memorize unrelated historical dates and figures',
-            `To master foundational concepts and core principles of ${lessonTitle}`,
-            'To bypass practical exercises and code reviews',
+            'To ignore core safety procedures and guidelines',
+            `To master essential operational standards and safety protocols for ${lessonTitle}`,
+            'To bypass equipment inspections and checklists',
             'None of the above'
           ],
           answerIndex: 1,
-          explanation: `Mastering foundational concepts and core principles provides the essential knowledge needed for ${lessonTitle}.`
+          explanation: `Mastering operational standards and safety protocols ensures compliance and risk mitigation for ${lessonTitle}.`
         },
         {
-          question: `How are principles in "${lessonTitle}" applied in practice?`,
+          question: `How are safety requirements for "${lessonTitle}" verified in practice?`,
           options: [
-            'By ignoring core logic and validation rules',
-            'By using deprecated legacy syntax',
-            'By skipping validation testing entirely',
-            'By applying structured concepts and verifying implementations step by step'
-          ],
-          answerIndex: 3,
-          explanation: 'Applying structured concepts and verifying implementations step-by-step ensures system reliability and prevents execution errors.'
-        },
-        {
-          question: `What is a key best practice emphasized in "${lessonTitle}"?`,
-          options: [
-            'Writing unorganized code without comments or documentation',
-            'Skipping assessment reviews and unit testing',
-            'Maintaining clean modular architecture and robust error checking',
-            'Hardcoding dynamic credentials into source files'
+            'By skipping validation checks completely',
+            'By operating damaged equipment without reporting',
+            'By following structured inspection checklists and verifying equipment condition',
+            'By guessing operational limits'
           ],
           answerIndex: 2,
-          explanation: 'Maintaining clean modular architecture and robust error checking is a fundamental software engineering best practice.'
+          explanation: 'Structured inspection checklists and condition verification ensure equipment reliability and prevent accidents.'
         },
         {
-          question: `Which approach ensures successful implementation of "${lessonTitle}"?`,
+          question: `What is a crucial rule emphasized in "${lessonTitle}"?`,
           options: [
-            'Iterative testing, clear documentation, and standard workflow patterns',
-            'Randomly guessing configuration settings',
-            'Ignoring API status codes and responses',
-            'Disabling error logs during execution'
+            'Strict adherence to mandatory safety protocols and manufacturer limits',
+            'Disabling warning signals and safety alarms',
+            'Leaving unstable loads unsecured',
+            'Operating in unauthorized zones'
           ],
           answerIndex: 0,
-          explanation: 'Iterative testing, clear documentation, and standard workflow patterns ensure maintainable and robust implementations.'
+          explanation: 'Strict adherence to safety protocols and limits protects personnel and prevents severe operational failures.'
         },
         {
-          question: `What is the main takeaway from completing "${lessonTitle}"?`,
+          question: `Which action should be taken if a hazard or non-compliance is identified in "${lessonTitle}"?`,
           options: [
-            'Writing monolithic single-file applications',
-            'Skipping assessment reviews',
-            'Deleting document references',
-            'Understanding underlying mechanics and building scalable solutions'
+            'Ignore the condition and proceed as usual',
+            'Immediately stop, report the hazard, and follow consequence management protocols',
+            'Cover up the issue without documenting',
+            'Continue operating at higher speeds'
+          ],
+          answerIndex: 1,
+          explanation: 'Prompt reporting and corrective actions prevent hazardous conditions from escalating into severe incidents.'
+        },
+        {
+          question: `What is the key takeaway from completing "${lessonTitle}"?`,
+          options: [
+            'Bypassing PPE requirements in hazardous zones',
+            'Eliminating pre-operation checks to save time',
+            'Operating without maintaining proper clearances',
+            'Executing operations safely with complete adherence to verified training standards'
           ],
           answerIndex: 3,
-          explanation: `Understanding the underlying mechanics of ${lessonTitle} enables developers to construct efficient, scalable solutions.`
+          explanation: `Executing operations safely with strict adherence to standards is the primary goal of ${lessonTitle}.`
         }
       ];
     }
@@ -393,16 +958,16 @@ PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
 1. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
 2. Comprehensive Teaching Duration: Provide an extensive, thorough, and high-value lecture (10-15 clear instructional paragraphs/points). Speak as a world-class instructor explaining each concept step-by-step with depth rather than providing short superficial summaries.
 3. Grounding: Draw core principles, terminology, and workflows directly from the retrieved document context.
-4. Technical Terminology: Keep recognized technical terms (e.g. React, API, Database, Vector, State, Function, Component) in their standard form alongside the explanation in ${language}.
+4. Technical Terminology: Keep recognized technical terms (e.g. PPE, Reversing, Blind Spot, Coupling, Lashing, Stanchions, Checklist) in their standard form alongside the explanation in ${language}.
 5. Blackboard Presentation Structure:
    Structure your teaching response into these clear, rich pedagogical sections:
-   - ### 💡 Overview & Core Motivation (Detailed intuitive breakdown of what this topic is, why it is critical, and where it fits in the broader architecture)
-   - #### 🎯 Foundational Principles & Pillars (4-6 comprehensive bullet points detailing essential rules, mechanisms, and properties)
-   - #### 🔍 Technical Deep-Dive & Execution Flow (Step-by-step explanation of how the system/process operates from start to finish)
-   - #### 🌐 Real-World Analogy & Practical Case (A vivid, memorable real-world analogy and industry practical scenario)
-   - #### ⚠️ Common Pitfalls & Best Practices (What mistakes engineers/learners commonly make and how to avoid them)
-   - #### 📌 Key Architectural Takeaways (3 high-value bullet points summarizing the core learnings)
-   - #### ⚡ Practice Reflection & Challenge (An insightful question for the learner to test their mental model)`;
+   - ### 💡 Overview & Core Motivation (Detailed intuitive breakdown of what this topic is, why it is critical, and where it fits in the broader training)
+   - #### 🎯 Mandatory Requirements & Protocols (4-6 comprehensive bullet points detailing essential rules, safety gear, procedures, or limits)
+   - #### 🔍 Step-by-Step Execution & Operational Flow (Step-by-step breakdown of how to execute the procedure correctly and safely)
+   - #### 🌐 Real-World Scenario & Practical Case (A vivid, memorable operational scenario demonstrating why this rule exists)
+   - #### ⚠️ Critical Hazards & Common Pitfalls (Dangerous mistakes, what can go wrong, and exact prevention steps)
+   - #### 📌 Key Safety Takeaways (3 high-value bullet points summarizing the core learnings)
+   - #### ⚡ Knowledge Check & Reflection (An insightful question for the learner to test their understanding)`;
 
     const userPrompt = `Retrieved Course Context:\n${contextText}\n\nLesson to teach: "${lessonTitle}"\nSelected Teaching Language: ${language}`;
 
@@ -415,14 +980,25 @@ PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
   }
 
   /**
-   * Fallback: Generates a structured dynamic course mockup using headings extracted from the document
+   * Fallback: Generates a structured dynamic course mockup using actual extracted topics from the document/presentation
+   * NEVER uses hardcoded default generic topics or forced 5 modules.
    */
-  _getMockCourse(fileName, text) {
+  _getMockCourse(fileName, text, docMetadata = {}) {
+    const { fileType = 'document', slides = [] } = docMetadata;
     const cleanName = fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
     const formattedTitle = cleanName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
-    const extractedHeadings = [];
-    if (text) {
+    const rawTopics = [];
+    if (slides && slides.length > 0) {
+      for (const s of slides) {
+        if (s.title && !rawTopics.includes(s.title)) {
+          const cleanTitle = s.title.replace(/^Slide \d+:?\s*/i, '').trim();
+          if (cleanTitle && cleanTitle.length > 2 && !rawTopics.includes(cleanTitle)) {
+            rawTopics.push(cleanTitle);
+          }
+        }
+      }
+    } else if (text) {
       const paras = text.split(/\n+/);
       for (let p of paras) {
         p = p.trim();
@@ -432,173 +1008,135 @@ PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
         if (clean.length < 4 || clean.length > 60) continue;
         if (!/^[A-Za-z0-9]/.test(clean)) continue;
         const lower = clean.toLowerCase();
-        if (lower.includes('write a') || lower.includes('practice question') || lower.includes('table of contents')) continue;
-
-        if (!extractedHeadings.includes(clean)) {
-          extractedHeadings.push(clean);
+        if (lower.includes('table of contents') || lower.includes('agenda') || lower.includes('overview')) continue;
+        if (!rawTopics.includes(clean)) {
+          rawTopics.push(clean);
         }
-        if (extractedHeadings.length >= 16) break;
       }
     }
 
-    // Determine target lesson count based on text volume
-    const textLen = (text || '').length;
-    const targetLessonCount = textLen > 30000 ? Math.min(16, Math.max(8, extractedHeadings.length)) :
-                              textLen > 10000 ? Math.min(10, Math.max(6, extractedHeadings.length)) :
-                              Math.max(4, Math.min(6, extractedHeadings.length || 4));
-
-    const defaultTopics = [
-      'Foundations & Core Scope',
-      'Architectural Mechanisms',
-      'Component Lifecycles & Flow',
-      'Practical Implementation Patterns',
-      'Advanced Configuration & Optimization',
-      'Error Handling & Reliability',
-      'Security & Standard Compliance',
-      'End-to-End Case Study Analysis'
-    ];
-
-    while (extractedHeadings.length < targetLessonCount) {
-      const idx = extractedHeadings.length % defaultTopics.length;
-      extractedHeadings.push(`${formattedTitle}: ${defaultTopics[idx]}`);
-    }
-
-    // Group into chapters with 2+ modules per chapter
-    const chapters = [];
+    // Cluster topics naturally into modules
+    const modules = [];
     const flatLessons = [];
-    const numChapters = Math.max(2, Math.ceil(targetLessonCount / 4));
-    let lessonIndex = 0;
+    let currentCluster = [];
+    let currentClusterTitle = '';
 
-    for (let c = 0; c < numChapters; c++) {
-      const chapterId = c + 1;
-      const chapterTitle = `Chapter ${chapterId}: ${extractedHeadings[lessonIndex] || `${formattedTitle} Phase ${chapterId}`}`;
-      const modules = [];
+    for (let i = 0; i < rawTopics.length; i++) {
+      const t = rawTopics[i];
+      if (currentCluster.length === 0) {
+        currentClusterTitle = t;
+      }
+      currentCluster.push(t);
 
-      // 2 modules per chapter
-      for (let m = 0; m < 2; m++) {
-        const moduleId = m + 1;
-        const moduleLessons = [];
-        const lessonsInMod = (c === numChapters - 1 && m === 1) 
-          ? Math.max(1, targetLessonCount - lessonIndex)
-          : Math.max(1, Math.floor((targetLessonCount - lessonIndex) / (2 * (numChapters - c))));
+      // Start new module every 2-3 lessons or at the end
+      if (currentCluster.length >= 3 || i === rawTopics.length - 1) {
+        const modId = modules.length + 1;
+        const modTitle = currentClusterTitle || `Module ${modId}: Training Unit`;
+        const modLessons = [];
 
-        const actualTake = Math.min(lessonsInMod, targetLessonCount - lessonIndex);
-        const moduleTitle = `Module ${chapterId}.${moduleId}: ${extractedHeadings[lessonIndex] || `Principles Part ${moduleId}`}`;
+        for (const lessonTitle of currentCluster) {
+          const lessonIdx = flatLessons.length;
+          const slideNum = Math.min(slides.length || 1, lessonIdx + 1);
+          const slideObj = slides.find(s => s.slideNumber === slideNum || s.title === lessonTitle);
+          const slideVisuals = (slideObj?.images || []).map(img => ({
+            id: img.id,
+            dataUrl: img.dataUrl,
+            fileName: img.fileName,
+            mimetype: img.mimetype,
+            sourceSlide: img.slideNumber,
+            name: img.name,
+            descr: img.descr,
+            purpose: img.descr || img.name || `Visual illustration for ${lessonTitle}`,
+            triggerKeywords: [
+              ...lessonTitle.toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3),
+              ...(img.descr || img.name || '').toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3)
+            ],
+            displayWhen: `while explaining ${lessonTitle}`
+          }));
 
-        for (let l = 0; l < actualTake; l++) {
-          const currentLessonTitle = extractedHeadings[lessonIndex] || `Lesson ${lessonIndex + 1}`;
           const lessonObj = {
             id: flatLessons.length + 1,
-            chapterId,
-            chapterTitle,
-            moduleId,
-            moduleTitle,
-            title: currentLessonTitle,
-            duration: `0${Math.floor(6 + (lessonIndex % 7))}:${(lessonIndex * 15) % 60 < 10 ? '0' : ''}${(lessonIndex * 15) % 60}`,
+            chapterId: modId,
+            chapterTitle: modTitle,
+            moduleId: modId,
+            moduleTitle: modTitle,
+            title: lessonTitle,
+            sourceSlides: [slideNum],
+            visuals: slideVisuals,
+            duration: `0${Math.floor(7 + ((flatLessons.length) % 5))}:${((flatLessons.length) * 15) % 60 < 10 ? '0' : ''}${((flatLessons.length) * 15) % 60}`,
             status: flatLessons.length === 0 ? 'active' : 'locked'
           };
-          moduleLessons.push(lessonObj);
+          modLessons.push(lessonObj);
           flatLessons.push(lessonObj);
-          lessonIndex++;
-          if (lessonIndex >= targetLessonCount) break;
         }
 
-        if (moduleLessons.length > 0) {
-          modules.push({
-            moduleId,
-            title: moduleTitle,
-            lessons: moduleLessons
-          });
-        }
-        if (lessonIndex >= targetLessonCount) break;
-      }
-
-      if (modules.length > 0) {
-        chapters.push({
-          chapterId,
-          title: chapterTitle,
-          description: `Master concepts in ${chapterTitle}`,
-          modules
+        modules.push({
+          title: modTitle,
+          lessons: modLessons.length,
+          duration: `${modLessons.length * 8}m`,
+          locked: modId > 1
         });
+        currentCluster = [];
       }
-      if (lessonIndex >= targetLessonCount) break;
     }
 
-    const curriculumSummary = chapters.map(ch => ({
-      title: ch.title,
-      lessons: ch.modules.reduce((acc, m) => acc + m.lessons.length, 0),
-      duration: `${ch.modules.reduce((acc, m) => acc + m.lessons.length * 8, 0)}m`,
-      locked: ch.chapterId > 1
-    }));
+    if (flatLessons.length === 0) {
+      const slideVisuals = (slides[0]?.images || []).map(img => ({
+        id: img.id,
+        dataUrl: img.dataUrl,
+        fileName: img.fileName,
+        mimetype: img.mimetype,
+        sourceSlide: img.slideNumber,
+        name: img.name,
+        descr: img.descr,
+        purpose: img.descr || img.name || `Visual illustration for ${formattedTitle}`,
+        triggerKeywords: formattedTitle.toLowerCase().split(/\s+/),
+        displayWhen: `while explaining ${formattedTitle}`
+      }));
+
+      flatLessons.push({
+        id: 1,
+        chapterId: 1,
+        chapterTitle: formattedTitle,
+        moduleId: 1,
+        moduleTitle: formattedTitle,
+        title: `${formattedTitle} Core Training`,
+        sourceSlides: [1],
+        visuals: slideVisuals,
+        duration: '08:00',
+        status: 'active'
+      });
+      modules.push({
+        title: formattedTitle,
+        lessons: 1,
+        duration: '8m',
+        locked: false
+      });
+    }
 
     return {
-      title: `${formattedTitle} Masterclass`,
-      description: `Comprehensive interactive curriculum for ${formattedTitle} structured into ${chapters.length} chapters and ${flatLessons.length} sequential lesson modules.`,
-      learning: [
-        `Master foundational architecture of ${flatLessons[0]?.title || formattedTitle}`,
-        `Implement core workflows and verified industry patterns`,
-        `Troubleshoot and optimize complex implementations`,
-        'Validate full mastery with AI-generated assessments'
-      ],
+      title: `${formattedTitle} Training Program`,
+      description: `Comprehensive training program covering all operational requirements and safety procedures for ${formattedTitle}.`,
+      learning: flatLessons.slice(0, 4).map(l => `Master key protocols for ${l.title}`),
       includes: [
         'Interactive ARIA AI Avatar Tutoring',
-        `${flatLessons.length} in-depth sequential lessons`,
-        `${chapters.length} structured learning chapters`,
+        `${flatLessons.length} in-depth training lessons`,
+        `${modules.length} content-driven modules`,
         'Digital verified completion certificate'
       ],
-      chapters,
-      curriculum: curriculumSummary,
+      curriculum: modules,
       lessons: flatLessons,
       quiz: [
         {
-          question: `What is the primary focus of the document "${fileName}"?`,
+          question: `What is the primary focus of "${flatLessons[0]?.title || formattedTitle}"?`,
           options: [
-            `To introduce foundational concepts of ${formattedTitle}`,
-            'To provide unrelated historical examples',
-            'To document software installation steps only',
-            'To list dictionary definitions'
+            `To master essential procedures and safety standards for ${flatLessons[0]?.title || formattedTitle}`,
+            'To bypass operational checklists',
+            'To ignore equipment safety guidelines',
+            'None of the above'
           ],
-          answerIndex: 0
-        },
-        {
-          question: `Which of the following describes the AI explanation mode for this course?`,
-          options: [
-            'Verbatim reading of the PDF content',
-            'No explanation provided',
-            'Conceptual explanation synthesized in the AI\'s own words',
-            'Random sentence extraction'
-          ],
-          answerIndex: 2
-        },
-        {
-          question: `What makes RAG customized courses highly effective?`,
-          options: [
-            'They adapt to the uploaded document and synthesize custom learning dynamically',
-            'They are fixed and cannot be changed',
-            'They bypass exams entirely',
-            'They only work with text files under 10 words'
-          ],
-          answerIndex: 0
-        },
-        {
-          question: `How does ARIA AI Tutor support students in custom courses?`,
-          options: [
-            'By grading papers manually over 3 weeks',
-            'By explaining lessons, answering questions, and offering dynamic quizzes',
-            'By providing pre-recorded video lectures only',
-            'By sending automated email newsletters'
-          ],
-          answerIndex: 1
-        },
-        {
-          question: `What is the final step in completing the custom course?`,
-          options: [
-            'Uploading another document immediately',
-            'Re-reading the PDF 10 times',
-            'Passing the custom assessment generated by ARIA',
-            'Logging out of the application'
-          ],
-          answerIndex: 2
+          answerIndex: 0,
+          explanation: `Mastering procedures and safety standards is essential for ${flatLessons[0]?.title || formattedTitle}.`
         }
       ]
     };

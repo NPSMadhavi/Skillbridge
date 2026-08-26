@@ -158,12 +158,16 @@ const CoursePlayerRoute = () => {
       initialCompletedLessonId={location.state?.completedLessonId}
       initialAutoPlayNext={location.state?.autoPlayNext}
       initialNextLessonId={location.state?.nextLessonId}
-      onExit={() => navigate('/')}
-      onAssessment={(courseObj, activeLesson, quizQuestions, nextLessonId) =>
+      onExit={() => {
+        try { window.speechSynthesis?.cancel?.(); } catch (e) { }
+        navigate('/')
+      }}
+      onAssessment={(courseObj, activeLesson, quizQuestions, nextLessonId) => {
+        try { window.speechSynthesis?.cancel?.(); } catch (e) { }
         navigate(`/assessment/${id}`, {
           state: { course: courseObj || course, activeLesson, quizQuestions, nextLessonId }
         })
-      }
+      }}
     />
   )
 }

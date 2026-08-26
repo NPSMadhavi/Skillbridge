@@ -1220,7 +1220,7 @@ const UsersList = () => {
                 allCourses.map((c) => {
                   const isChecked = assignedCourseSelection.includes(c.id);
                   const curriculumData = typeof c.curriculum === 'string' ? JSON.parse(c.curriculum) : (c.curriculum || {});
-                  const totalLessons = curriculumData.lessons?.length || 5;
+                  const totalLessons = curriculumData.lessons?.length || (curriculumData.curriculum?.length || 1);
 
                   return (
                     <div

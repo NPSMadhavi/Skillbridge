@@ -29,9 +29,9 @@ const frontendPath = path.join(__dirname, '..', 'Frontend', 'dist');
 // Enable CORS
 app.use(cors());
 
-// Parse JSON request bodies
-app.use(express.json({ limit: '20mb' }));
-app.use(express.urlencoded({ limit: '20mb', extended: true }));
+// Parse JSON request bodies (supports large multi-slide documents)
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 // Request logging
 app.use((req, res, next) => {

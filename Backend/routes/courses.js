@@ -1,124 +1,27 @@
 import express from 'express';
 import multer from 'multer';
-import pdfParse from 'pdf-parse/lib/pdf-parse.js';
-import mammoth from 'mammoth';
 import axios from 'axios';
 import FormData from 'form-data';
 import prisma from '../config/prisma.js';
 import aiService from '../services/aiService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
+import documentExtractor from '../services/documentExtractor.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 
 const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024 }, // 30MB max
 });
 
 /**
- * Extracts text and segmented pages/sections from any supported document format.
- * Supported: PDF, DOCX, DOC, TXT, MD, CSV, JSON, RTF, HTML, XML, etc.
+ * Extracts text and segmented pages/slides from any supported document format.
+ * Supported: PPTX, PPT, PDF, DOCX, DOC, TXT, MD, CSV, JSON, RTF, HTML, etc.
  */
 async function extractDocumentContent(file) {
-  const { originalname, mimetype = '', buffer } = file;
-  const ext = originalname.split('.').pop()?.toLowerCase() || '';
-
-  let text = '';
-  const pages = [];
-
-  if (ext === 'pdf' || mimetype === 'application/pdf') {
-    const pdfData = await pdfParse(buffer);
-    text = pdfData.text || '';
-    const rawPages = text.split(/\f|\u000c/);
-    let pageNumber = 1;
-    for (const rawText of rawPages) {
-      const cleanText = rawText.trim();
-      if (cleanText.length > 10) {
-        pages.push({
-          page_number: pageNumber++,
-          text: cleanText,
-        });
-      }
-    }
-  } else if (
-    ext === 'docx' ||
-    ext === 'doc' ||
-    mimetype.includes('wordprocessingml') ||
-    mimetype.includes('msword')
-  ) {
-    try {
-      const result = await mammoth.extractRawText({ buffer });
-      text = result.value || '';
-    } catch (docxErr) {
-      console.warn(`[Doc Extraction] Mammoth parsing failed for ${originalname}, trying text fallback:`, docxErr.message);
-      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
-    }
-  } else if (
-    ['txt', 'text', 'md', 'markdown', 'csv', 'json', 'log', 'xml'].includes(ext) ||
-    mimetype.startsWith('text/') ||
-    mimetype.includes('json') ||
-    mimetype.includes('csv')
-  ) {
-    text = buffer.toString('utf-8');
-  } else if (ext === 'html' || ext === 'htm' || mimetype === 'text/html') {
-    const rawHtml = buffer.toString('utf-8');
-    text = rawHtml
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  } else if (ext === 'rtf' || mimetype.includes('rtf')) {
-    const rawRtf = buffer.toString('utf-8');
-    text = rawRtf
-      .replace(/\{\*?\\[^{}]+}|[{}]|\\\n?[A-Za-z]+\n?(?:-?\d+)?[ ]?/g, ' ')
-      .trim();
-  } else {
-    // Universal fallback: attempt docx parser first, then utf-8 text decoding
-    try {
-      const result = await mammoth.extractRawText({ buffer });
-      if (result.value && result.value.trim().length > 30) {
-        text = result.value;
-      }
-    } catch {
-      // Ignore
-    }
-    if (!text || text.trim().length === 0) {
-      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
-    }
-  }
-
-  // If pages weren't split by form feeds (e.g. Word or TXT), create structured page segments of ~1500 chars
-  if (pages.length === 0 && text.trim().length > 0) {
-    const paragraphs = text.split(/\n\s*\n/);
-    let currentPageText = '';
-    let pageNumber = 1;
-
-    for (const para of paragraphs) {
-      const trimmed = para.trim();
-      if (!trimmed) continue;
-      if (currentPageText.length + trimmed.length > 1500 && currentPageText.length > 0) {
-        pages.push({
-          page_number: pageNumber++,
-          text: currentPageText.trim(),
-        });
-        currentPageText = trimmed + '\n\n';
-      } else {
-        currentPageText += trimmed + '\n\n';
-      }
-    }
-    if (currentPageText.trim().length > 0) {
-      pages.push({
-        page_number: pageNumber++,
-        text: currentPageText.trim(),
-      });
-    }
-  }
-
-  return { text: text.trim(), pages };
+  return await documentExtractor.extractDocument(file);
 }
 
-// 1. Admin: Create course module by uploading a document (PDF, Word, TXT, etc.)
+// 1. Admin: Create course module by uploading a document (PDF, Word, PPTX, TXT, etc.)
 router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
   try {
     const { title, description } = req.body;
@@ -128,20 +31,22 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     }
 
     if (!req.file) {
-      return res.status(400).json({ error: 'Please upload a course document (PDF, DOCX, DOC, TXT, etc.).' });
+      return res.status(400).json({ error: 'Please upload a course document (PDF, DOCX, DOC, PPTX, PPT, TXT, etc.).' });
     }
 
     console.log(`[Document Extraction] Admin creating course: "${title}", parsing file: ${req.file.originalname}...`);
-    const { text: textContent, pages } = await extractDocumentContent(req.file);
+    const docResult = await extractDocumentContent(req.file);
+    const { text: textContent, pages, slides, fileType } = docResult;
 
     if (!textContent || textContent.length < 30) {
       return res.status(400).json({ error: 'Failed to extract text from document. The file might be empty, password-protected, or scanned images only.' });
     }
 
-    console.log(`[Document Extraction] Document extracted successfully. Extracted ${textContent.length} characters across ${pages.length} section(s).`);
+    const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
+    console.log(`[Document Extraction] Document extracted successfully. Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}).`);
 
-    console.log(`[Curriculum Design] Generating curriculum from document text...`);
-    const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent);
+    console.log(`[Curriculum Design] Generating dynamic content-driven curriculum from document...`);
+    const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
 
     // Override the title/description with Admin input if needed, but preserve structure
     generatedCourse.title = title.trim();
@@ -158,10 +63,10 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       },
     });
 
-    // Store chunks and generate vector embeddings directly in PostgreSQL pgvector
+    // Store semantic chunks and generate vector embeddings directly in PostgreSQL pgvector
     try {
-      console.log(`[pgvector] Indexing course ${newCourse.id} into PostgreSQL pgvector...`);
-      await vectorChunkService.indexCourse(prisma, newCourse.id, textContent, pages, generatedCourse);
+      console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension into PostgreSQL pgvector...`);
+      await vectorChunkService.indexCourse(prisma, newCourse.id, docResult, generatedCourse);
       console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
     } catch (vectorErr) {
       console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
@@ -204,18 +109,14 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
         category: category || 'General',
         level: level || 'Intermediate',
         curriculum: [
-          { title: 'Introduction & Setup', lessons: 3, duration: '30m', locked: false },
-          { title: 'Core Concepts & Fundamentals', lessons: 5, duration: '1h 15m', locked: true },
-          { title: 'Practical Hands-on Project', lessons: 4, duration: '1h 45m', locked: true },
-          { title: 'Advanced Topics & Best Practices', lessons: 4, duration: '1h 20m', locked: true },
-          { title: 'Course Assessment & Certification', lessons: 2, duration: '30m', locked: true }
+          { title: `${trimmedTitle} Fundamentals`, lessons: 2, duration: '15m', locked: false },
+          { title: `${trimmedTitle} Practical Application`, lessons: 2, duration: '20m', locked: true }
         ],
         lessons: [
-          { id: 1, title: 'Course Overview & Objectives', duration: '01:45', status: 'active' },
-          { id: 2, title: 'Key Fundamentals & Concepts', duration: '02:10', status: 'locked' },
-          { id: 3, title: 'Hands-on Implementation Guide', duration: '01:50', status: 'locked' },
-          { id: 4, title: 'Real-world Examples & Practice', duration: '02:15', status: 'locked' },
-          { id: 5, title: 'Final Review & Assessment', duration: '01:30', status: 'locked' }
+          { id: 1, chapterId: 1, chapterTitle: `${trimmedTitle} Fundamentals`, moduleId: 1, moduleTitle: `${trimmedTitle} Fundamentals`, title: `${trimmedTitle} Essentials`, duration: '07:30', status: 'active' },
+          { id: 2, chapterId: 1, chapterTitle: `${trimmedTitle} Fundamentals`, moduleId: 1, moduleTitle: `${trimmedTitle} Fundamentals`, title: 'Core Operating Guidelines', duration: '08:15', status: 'locked' },
+          { id: 3, chapterId: 2, chapterTitle: `${trimmedTitle} Practical Application`, moduleId: 2, moduleTitle: `${trimmedTitle} Practical Application`, title: 'Practical Execution & Safety Checks', duration: '09:45', status: 'locked' },
+          { id: 4, chapterId: 2, chapterTitle: `${trimmedTitle} Practical Application`, moduleId: 2, moduleTitle: `${trimmedTitle} Practical Application`, title: 'Operational Review & Verification', duration: '08:30', status: 'locked' }
         ],
         quiz: [
           {
@@ -342,6 +243,55 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 
+function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', matchingLesson = null) {
+  const sections = [];
+  const mainConcept = matchingLesson?.title || chunks[0]?.concept || lessonTitle;
+
+  // 1. Overview & Objectives
+  const primarySummary = chunks.map(c => c.semanticSummary).filter(Boolean).slice(0, 2).join(' ') ||
+    `In this lesson on "${lessonTitle}", we examine the core principles, operational requirements, and safety protocols from ${courseTitle || 'the course material'}.`;
+
+  sections.push(`### 💡 Overview: ${mainConcept}\n${primarySummary}`);
+
+  // 2. Core Concepts & Slide Breakdowns
+  if (Array.isArray(chunks) && chunks.length > 0) {
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const header = chunk.concept && chunk.concept !== mainConcept ? chunk.concept : `Key Principle ${i + 1}`;
+      const sourceRef = chunk.source_slides?.length ? `*(Reference: Slide ${chunk.source_slides.join(', ')})*` : '';
+
+      let rawText = (chunk.text || chunk.chunkText || '')
+        .replace(/^###[^\n]+\n/g, '')
+        .replace(/^\*\*Topic:[^\n]+\n/g, '')
+        .replace(/\*\(Source:[^\)]+\)\*/g, '')
+        .trim();
+
+      const keyPoints = chunk.key_points || chunk.keyPoints || [];
+      if (Array.isArray(keyPoints) && keyPoints.length > 0) {
+        const bullets = keyPoints.map(kp => `- ${kp}`).join('\n');
+        sections.push(`#### 🎯 ${header} ${sourceRef}\n${rawText}\n\n**Key Protocols:**\n${bullets}`);
+      } else if (rawText) {
+        sections.push(`#### 🎯 ${header} ${sourceRef}\n${rawText}`);
+      }
+    }
+  }
+
+  // 3. Operational Protocols & Checklist
+  const allKeyPoints = chunks.flatMap(c => c.key_points || c.keyPoints || []).filter(Boolean);
+  if (allKeyPoints.length > 0) {
+    const steps = allKeyPoints.slice(0, 6).map((kp, idx) => `${idx + 1}. **Step ${idx + 1}:** ${kp}`).join('\n');
+    sections.push(`#### 🔍 Operational Checklist & Protocols\n${steps}`);
+  }
+
+  // 4. Critical Precautions & Compliance
+  sections.push(`#### ⚠️ Critical Precautions & Compliance\n- Always verify operational conditions and inspect relevant equipment before commencing tasks.\n- Adhere strictly to verified safety standards and training guidelines.\n- Immediately report any hazards, deviations, or damaged components to the supervisor.`);
+
+  // 5. Key Safety Takeaways
+  sections.push(`#### 📌 Key Safety Takeaways\n- **Safety First:** Strict adherence to protocols prevents incidents and ensures reliable execution.\n- **Verification:** Regular checks and systematic procedures maintain operational integrity.\n- **Continuous Improvement:** Master each standard procedure to build dependable habits.`);
+
+  return sections.join('\n\n');
+}
+
 // 4. Generate AI concept explanation for a specific lesson/chapter using RAG Vector DB with Database Persistence Cache
 router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res) => {
   const fetchStartTime = Date.now();
@@ -388,7 +338,7 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
 
     console.log(`[PERF:LESSON_FETCH_START] Course: ${course.id}, Lesson: ${lessonIdStr} ("${lessonTitle}"), Lang: "${targetLanguage}" (${targetLangInfo.code})`);
 
-    // 1. FAST PATH: Check if lesson explanation is already stored in Course.curriculum database record
+    // 1. FAST PATH 1: Check if lesson explanation is already stored in Course.curriculum database record
     let curriculum = course.curriculum;
     if (typeof curriculum === 'string') {
       try { curriculum = JSON.parse(curriculum); } catch { curriculum = {}; }
@@ -406,9 +356,11 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
 
         if (cachedExplanation && typeof cachedExplanation === 'string' && cachedExplanation.trim().length > 30) {
           const fetchDuration = Date.now() - fetchStartTime;
-          console.log(`[PERF:LESSON_FETCH_END] Served lesson "${lessonTitle}" directly from PostgreSQL DB cache in ${fetchDuration}ms (0 LLM / 0 vector calls)`);
+          console.log(`[PERF:LESSON_FETCH_END] Served lesson "${lessonTitle}" directly from PostgreSQL DB cache in ${fetchDuration}ms (0 network / 0 LLM latency)`);
           return res.json({
             explanation: cachedExplanation,
+            visuals: existingLesson.visuals || [],
+            sourceSlides: existingLesson.sourceSlides || [],
             language: targetLangInfo,
             cached: true,
             fetchDurationMs: fetchDuration
@@ -417,9 +369,9 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
       }
     }
 
-    // 2. SLOW PATH: Run RAG Vector Search + LLM Generation once and persist for future opens
+    // 2. FAST PATH 2: Instant Database Retrieval from CourseChunk table (0 slow external LLM calls)
     const ragStartTime = Date.now();
-    console.log(`[PERF:RAG_START] Starting vector search query for lesson "${lessonTitle}" (Course ID: ${course.id})`);
+    console.log(`[PERF:RAG_START] Fetching semantic knowledge chunks directly from PostgreSQL for lesson "${lessonTitle}" (Course ID: ${course.id})`);
 
     let chunks = [];
     try {
@@ -429,25 +381,32 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
         topicFilter: lessonTitle
       });
       const ragDuration = Date.now() - ragStartTime;
-      console.log(`[PERF:RAG_END] Retrieved ${chunks.length} chunks from pgvector in ${ragDuration}ms.`);
+      console.log(`[PERF:RAG_END] Retrieved ${chunks.length} chunks directly from pgvector in ${ragDuration}ms.`);
     } catch (e) {
       const ragDuration = Date.now() - ragStartTime;
       console.warn(`[PERF:RAG_END] pgvector query notice (${ragDuration}ms):`, e.message);
     }
 
-    // Join retrieved chunks into prompt context text
-    const contextText = chunks.length > 0
-      ? chunks.map(c => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
-      : (course.fileText || '').slice(0, 15000);
+    // Collect visuals from matched chunks or curriculum
+    let matchingLesson = null;
+    if (Array.isArray(curriculum?.lessons)) {
+      matchingLesson = curriculum.lessons.find(l => String(l.id) === lessonIdStr || l.title === lessonTitle);
+    }
+    const retrievedVisuals = matchingLesson?.visuals || chunks.flatMap(c => c.metadata?.visuals || c.visuals || []);
+    const uniqueVisuals = [];
+    for (const v of retrievedVisuals) {
+      if (v && !uniqueVisuals.some(uv => uv.id === v.id || (uv.dataUrl && uv.dataUrl === v.dataUrl))) {
+        uniqueVisuals.push(v);
+      }
+    }
 
-    const llmStartTime = Date.now();
-    console.log(`[PERF:LLM_START] Generating lesson explanation with LLM for "${lessonTitle}" in ${targetLanguage}...`);
+    // Synthesize structured blackboard lesson notes directly from the rich semantic chunks stored in database
+    let explanation = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+    if (!explanation || explanation.length < 50) {
+      explanation = `### 💡 Overview: ${lessonTitle}\nIn this lesson on "${lessonTitle}", we study the essential operational standards, guidelines, and safety procedures.\n\n#### 🎯 Core Protocols\n- Follow all standard operating procedures and guidelines from the training material.\n- Maintain verified equipment condition and perform routine inspections.\n\n#### 📌 Key Takeaways\n- Strict adherence to guidelines ensures safety and quality.\n- Execute tasks systematically with complete attention to detail.`;
+    }
 
-    const explanation = await aiService.explainLesson(course.title, lessonTitle, contextText, targetLanguage);
-    const llmDuration = Date.now() - llmStartTime;
-    console.log(`[PERF:LLM_END] Generated explanation via LLM in ${llmDuration}ms.`);
-
-    // 3. PERSISTENCE: Save generated explanation into PostgreSQL Course.curriculum
+    // 3. PERSISTENCE: Save synthesized explanation into PostgreSQL Course.curriculum for instant future opens
     try {
       if (Array.isArray(curriculum.lessons)) {
         const targetLesson = curriculum.lessons.find(
@@ -471,15 +430,16 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
     }
 
     const totalDuration = Date.now() - fetchStartTime;
-    console.log(`[PERF:LESSON_FETCH_END] Total lesson fetch & generation completed in ${totalDuration}ms`);
+    console.log(`[PERF:LESSON_FETCH_END] Total instant lesson fetch completed in ${totalDuration}ms (0 slow external LLM delay)`);
 
     res.json({
       explanation,
+      visuals: uniqueVisuals,
+      sourceSlides: matchingLesson?.sourceSlides || [],
       language: targetLangInfo,
       cached: false,
       fetchDurationMs: totalDuration,
-      ragDurationMs: Date.now() - ragStartTime,
-      llmDurationMs: llmDuration
+      ragDurationMs: Date.now() - ragStartTime
     });
   } catch (error) {
     console.error('Failed to generate dynamic lesson guide:', error);
@@ -543,8 +503,14 @@ router.post('/:id/lessons/:lessonId/quiz', authenticateToken, async (req, res) =
     }
 
     const contextText = chunks.length > 0
-      ? chunks.map(c => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
-      : course.fileText.slice(0, 15000);
+      ? chunks.map(c => {
+          const src = c.source_slides?.length
+            ? `Slides ${c.source_slides.join(', ')}`
+            : `Page ${c.page_number || 1}${c.source_section ? ` - ${c.source_section}` : ''}`;
+          const conceptTag = c.concept ? `[Concept: ${c.concept}]` : '';
+          return `${conceptTag} (${src})\n${c.text}`;
+        }).join('\n\n')
+      : (course.fileText || '').slice(0, 15000);
 
     // Call AI Service to generate multiple-choice questions for this chapter in preferred language
     const quiz = await aiService.generateLessonQuiz(course.title, lessonTitle, contextText, targetLanguage);
@@ -757,7 +723,14 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
     }
 
     const contextText = chunks.length > 0
-      ? chunks.map(c => `[Page ${c.page_number}] ${c.text}`).join('\n\n')
+      ? chunks.map(c => {
+          const src = c.source_slides?.length
+            ? `Slides ${c.source_slides.join(', ')}`
+            : `Page ${c.page_number || 1}${c.source_section ? ` - ${c.source_section}` : ''}`;
+          const conceptTag = c.concept ? `[Concept: ${c.concept}]` : '';
+          const topicTag = c.topic ? `[Topic: ${c.topic}]` : '';
+          return `${conceptTag} ${topicTag} (${src})\n${c.text}`;
+        }).join('\n\n')
       : (course.fileText || '').slice(0, 15000);
 
     const systemPrompt = `You are ARIA, the intelligent AI Tutor for SkillBridge.
@@ -838,14 +811,16 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
 
     if (req.file) {
       console.log(`[Document Extraction] Admin updating course "${finalTitle}" with new file: ${req.file.originalname}...`);
-      const { text: textContent, pages } = await extractDocumentContent(req.file);
+      const docResult = await extractDocumentContent(req.file);
+      const { text: textContent, pages, slides, fileType } = docResult;
 
       if (!textContent || textContent.length < 30) {
         return res.status(400).json({ error: 'Failed to extract text from new document. File may be empty or unreadable.' });
       }
 
-      console.log(`[Document Extraction] Extracted ${textContent.length} characters. Generating updated curriculum...`);
-      const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent);
+      const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
+      console.log(`[Document Extraction] Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}). Generating updated dynamic curriculum...`);
+      const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
       generatedCourse.title = finalTitle;
       generatedCourse.description = finalDescription;
 
@@ -855,8 +830,8 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
 
       // Re-index vector chunks and embeddings for the new document
       try {
-        console.log(`[pgvector] Re-indexing course ${courseId} with new document embeddings...`);
-        await vectorChunkService.indexCourse(prisma, courseId, textContent, pages, generatedCourse);
+        console.log(`[pgvector] Re-indexing course ${courseId} with semantic comprehension...`);
+        await vectorChunkService.indexCourse(prisma, courseId, docResult, generatedCourse);
         console.log(`[pgvector] Vector embeddings updated successfully.`);
       } catch (vectorErr) {
         console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);

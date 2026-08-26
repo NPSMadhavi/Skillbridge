@@ -65,7 +65,7 @@ const mapRagCourse = (dbCourse) => {
     rating: 5.0,
     reviewCount: 'Dynamic',
     students: 'Published',
-    modules: curriculumData.curriculum?.length || 5,
+    modules: curriculumData.curriculum?.length || curriculumData.lessons?.length || 1,
     price: 0,
     free: true,
     badge: 'AI Course',
@@ -142,7 +142,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
             } else {
               const inProgress = mapped.find(c => {
                 const completed = getCompletedLessonIdsForCourse(c.id, userId);
-                const total = c.lessons?.length || 5;
+                const total = c.lessons?.length || c.modules || 1;
                 return completed.length > 0 && completed.length < total;
               });
               if (inProgress) {
@@ -214,7 +214,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
       const courseLessons = (Array.isArray(c.lessons) && c.lessons.length > 0)
         ? c.lessons
         : (Array.isArray(c.curriculum) && c.curriculum.length > 0 ? c.curriculum : []);
-      const lessonsCount = courseLessons.length > 0 ? courseLessons.length : (c.modules || 5);
+      const lessonsCount = courseLessons.length > 0 ? courseLessons.length : (c.modules || 1);
       totalModules += lessonsCount;
 
       const rawCompleted = userProgressMap[c.id] || [];
@@ -274,7 +274,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
     // Try finding an in-progress course first
     const inProgress = allAvailableCourses.find(c => {
       const completed = userProgressMap[c.id] || [];
-      const total = c.lessons?.length || 5;
+      const total = c.lessons?.length || c.modules || 1;
       return completed.length > 0 && completed.length < total;
     });
     if (inProgress) return inProgress;
@@ -290,7 +290,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
   const activeCourseLessons = activeCourseObj?.lessons || [];
   const activeCourseTotalLessons = activeCourseLessons.length > 0
     ? activeCourseLessons.length
-    : (activeCourseObj?.modules || 5);
+    : (activeCourseObj?.modules || 1);
 
   const activeCourseCompletedCount = useMemo(() => {
     const uniqueIds = new Set(activeCourseRaw.filter(id => id !== null && id !== undefined).map(String));
@@ -495,7 +495,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 const courseLessons = (Array.isArray(c.lessons) && c.lessons.length > 0)
                   ? c.lessons
                   : (Array.isArray(c.curriculum) && c.curriculum.length > 0 ? c.curriculum : []);
-                const totalCount = courseLessons.length > 0 ? courseLessons.length : (c.modules || 5);
+                const totalCount = courseLessons.length > 0 ? courseLessons.length : (c.modules || 1);
 
                 const rawCompleted = userProgressMap[c.id] || [];
                 const uniqueCompletedIds = new Set(

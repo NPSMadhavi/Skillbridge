@@ -68,10 +68,13 @@ model CourseChunk {
   concept         String?
   chunkType       String?
   sourcePage      Int?
+  sourceSlides    Json?    // Array of slide numbers e.g. [10, 11, 12]
   sourceSection   String?
   prerequisites   String?
   keyPoints       Json?
+  relatedConcepts Json?    // Array of related concept names
   semanticSummary String?  @db.Text
+  metadata        Json?    // Additional contextual metadata
   embedding       Unsupported("vector(768)")?
   createdAt       DateTime @default(now())
 

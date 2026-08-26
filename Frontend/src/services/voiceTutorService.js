@@ -500,6 +500,7 @@ export class VoiceTutorManager {
   }
 
   scheduleRestart() {
+    if (!this.isMounted) return;
     this.isRestarting = true;
     setTimeout(() => {
       if (!this.isMounted || this.isTutorSpeaking || Date.now() < this.ttsMutedUntil) {
@@ -509,11 +510,13 @@ export class VoiceTutorManager {
       try {
         if (this.recognition) {
           this.recognition.start();
-        } else {
+        } else if (this.isMounted) {
           this.initSpeechRecognition();
         }
       } catch (err) {
-        try { this.initSpeechRecognition(); } catch (e) { }
+        if (this.isMounted) {
+          try { this.initSpeechRecognition(); } catch (e) { }
+        }
       }
       this.isRestarting = false;
     }, 150);
@@ -771,6 +774,12 @@ export class VoiceTutorManager {
     }
 
     if (this.recognition) {
+      try {
+        this.recognition.onend = null;
+        this.recognition.onresult = null;
+        this.recognition.onerror = null;
+        this.recognition.abort();
+      } catch (e) { }
       try { this.recognition.stop(); } catch (e) { }
       this.recognition = null;
     }

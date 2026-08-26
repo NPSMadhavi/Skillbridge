@@ -2,7 +2,6 @@ import { useMemo, useState, useEffect, useRef } from 'react'
 import { api } from '../services/api'
 import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWakeWord, isNoiseOrHallucination } from '../services/voiceTutorService'
 import logo from '../assets/SkillBridge_AI.png'
-import ariaAvatarImg from '../assets/avatar.png'
 
 const CourseBookIcon = ({ className = "h-5 w-5" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -59,6 +58,20 @@ const CoursePlayer = ({
   onExit,
   onAssessment
 }) => {
+  // Retrieve user details from sessionStorage
+  const user = useMemo(() => {
+    try {
+      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
+      return data?.user || { fullName: 'James Lee', email: 'user@skillbridge.com' }
+    } catch {
+      return { fullName: 'James Lee', email: 'user@skillbridge.com' }
+    }
+  }, [])
+
+  const userId = useMemo(() => {
+    return user?.id || user?.finNumber || user?.email || 'guest';
+  }, [user]);
+
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef(null)
   const lessonOpenTimestampRef = useRef(performance.now())
@@ -91,15 +104,64 @@ const CoursePlayer = ({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Retrieve user details from sessionStorage
-  const user = useMemo(() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James Lee', email: 'user@skillbridge.com' }
-    } catch {
-      return { fullName: 'James Lee', email: 'user@skillbridge.com' }
-    }
-  }, [])
+  // Universal component unmount cleanup to guarantee zero background audio or speech synthesis and save playback
+  useEffect(() => {
+    return () => {
+      console.log('[CoursePlayer] Unmounting player: completely canceling speech synthesis and releasing audio resources.');
+      try {
+        window.speechSynthesis?.cancel?.();
+      } catch (e) { }
+
+      if (window._skillbridgeResumeInterval) {
+        clearInterval(window._skillbridgeResumeInterval);
+        window._skillbridgeResumeInterval = null;
+      }
+      if (followUpTimerRef.current) {
+        clearTimeout(followUpTimerRef.current);
+        followUpTimerRef.current = null;
+      }
+      if (awakeTimerRef.current) {
+        clearTimeout(awakeTimerRef.current);
+        awakeTimerRef.current = null;
+      }
+
+      if (voiceManagerRef.current) {
+        try {
+          voiceManagerRef.current.destroy();
+        } catch (e) { }
+        voiceManagerRef.current = null;
+      }
+
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        try { mediaRecorderRef.current.stop(); } catch (e) { }
+        mediaRecorderRef.current = null;
+      }
+
+      if (micStreamRef.current) {
+        try {
+          micStreamRef.current.getTracks().forEach(t => t.stop());
+        } catch (e) { }
+        micStreamRef.current = null;
+      }
+
+      if (activeLessonRef.current?.id && (currentSentenceIdxRef.current > 0 || elapsedSecondsRef.current > 0)) {
+        try {
+          const uId = user?.id || user?.finNumber || user?.email || 'guest';
+          const pbKey = `skillbridge_playback_${uId}_${course?.id}`;
+          const raw = localStorage.getItem(pbKey);
+          const data = raw ? JSON.parse(raw) : { lastActiveLessonId: activeLessonRef.current.id, lessons: {} };
+          if (!data.lessons) data.lessons = {};
+          data.lastActiveLessonId = activeLessonRef.current.id;
+          data.lessons[String(activeLessonRef.current.id)] = {
+            sentenceIdx: Math.max(0, currentSentenceIdxRef.current || 0),
+            elapsedSeconds: Math.max(0, elapsedSecondsRef.current || 0),
+            updatedAt: Date.now()
+          };
+          localStorage.setItem(pbKey, JSON.stringify(data));
+        } catch (e) { }
+      }
+    };
+  }, [course?.id, user]);
 
   // Selected teaching language state & persistence - user's preferred language is default
   const [selectedLanguageCode, setSelectedLanguageCode] = useState(() => {
@@ -189,13 +251,55 @@ const CoursePlayer = ({
     return user.fullName.substring(0, 2).toUpperCase()
   }, [user])
 
-  const userId = useMemo(() => {
-    return user?.id || user?.finNumber || user?.email || 'guest';
-  }, [user]);
-
   const storageKey = useMemo(() => {
     return `skillbridge_progress_${userId}_${course?.id}`
   }, [course?.id, userId])
+
+  const playbackStorageKey = useMemo(() => {
+    return `skillbridge_playback_${userId}_${course?.id}`
+  }, [course?.id, userId])
+
+  const getSavedPlayback = (lessonId) => {
+    if (!lessonId) return null;
+    try {
+      const raw = localStorage.getItem(playbackStorageKey);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      return data?.lessons?.[String(lessonId)] || data?.lessons?.[Number(lessonId)] || null;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const saveLessonPlayback = (lessonId, sentenceIdx, elapsedSec) => {
+    if (!lessonId || !course?.id) return;
+    try {
+      const raw = localStorage.getItem(playbackStorageKey);
+      const data = raw ? JSON.parse(raw) : { lastActiveLessonId: lessonId, lessons: {} };
+      if (!data.lessons) data.lessons = {};
+      data.lastActiveLessonId = lessonId;
+      data.lessons[String(lessonId)] = {
+        sentenceIdx: Math.max(0, sentenceIdx || 0),
+        elapsedSeconds: Math.max(0, elapsedSec || 0),
+        updatedAt: Date.now()
+      };
+      localStorage.setItem(playbackStorageKey, JSON.stringify(data));
+    } catch (e) { }
+  };
+
+  const clearLessonPlayback = (lessonId) => {
+    if (!lessonId || !course?.id) return;
+    try {
+      const raw = localStorage.getItem(playbackStorageKey);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (data.lessons) {
+        delete data.lessons[String(lessonId)];
+        delete data.lessons[Number(lessonId)];
+        localStorage.setItem(playbackStorageKey, JSON.stringify(data));
+      }
+    } catch (e) { }
+  };
 
   const [completedLessons, setCompletedLessons] = useState(() => {
     const init = {}
@@ -241,6 +345,7 @@ const CoursePlayer = ({
 
   const markLessonCompleted = (lessonId) => {
     if (!lessonId) return
+    clearLessonPlayback(lessonId)
     setCompletedLessons(prev => {
       const updated = {
         ...prev,
@@ -256,7 +361,7 @@ const CoursePlayer = ({
       } catch (e) { }
 
       if (course?.id) {
-        const lessonsCount = course.lessons?.length || 5;
+        const lessonsCount = course.lessons?.length || (course.curriculum?.length || 1);
         const calcPct = Math.min(100, Math.max(0, Math.round((uniqueLessonIds.length / lessonsCount) * 100)));
         const isDone = uniqueLessonIds.length >= lessonsCount;
         api.saveCourseProgress(course.id, {
@@ -275,6 +380,17 @@ const CoursePlayer = ({
       return initialNextLessonId
     }
     if (course?.lessons) {
+      // 1. Check if there was a saved active lesson with progress from last session
+      try {
+        const savedPb = localStorage.getItem(`skillbridge_playback_${userId}_${course?.id}`);
+        if (savedPb) {
+          const pbData = JSON.parse(savedPb);
+          if (pbData?.lastActiveLessonId && course.lessons.some(l => l.id === pbData.lastActiveLessonId)) {
+            return pbData.lastActiveLessonId;
+          }
+        }
+      } catch (e) { }
+
       const saved = localStorage.getItem(storageKey)
       let completedMap = {}
       try {
@@ -345,6 +461,8 @@ const CoursePlayer = ({
 
   const [playing, setPlaying] = useState(Boolean(initialAutoPlayNext))
   const [explanation, setExplanation] = useState('')
+  const [lessonVisuals, setLessonVisuals] = useState([])
+  const [enlargedVisual, setEnlargedVisual] = useState(null)
   const [loadingExplanation, setLoadingExplanation] = useState(false)
   const [loadingQuiz, setLoadingQuiz] = useState(false)
 
@@ -913,12 +1031,24 @@ const CoursePlayer = ({
       const langCode = selectedLanguageCode || 'en';
       const cacheKey = `${course.id}_${activeLesson.id}_${langCode}`;
 
-      setElapsedSeconds(0);
-      elapsedSecondsRef.current = 0;
-      setCurrentSentenceIdx(0);
       setIsAriaSpeaking(false);
       isAriaSpeakingRef.current = false;
       try { window.speechSynthesis.cancel(); } catch (e) { }
+
+      // Restore saved playback for this lesson if previously stopped
+      const savedPb = getSavedPlayback(activeLesson.id);
+      const isDone = isLessonDone(activeLesson.id);
+      const restoredSentence = (savedPb && typeof savedPb.sentenceIdx === 'number' && !isDone) ? savedPb.sentenceIdx : 0;
+      const restoredElapsed = (savedPb && typeof savedPb.elapsedSeconds === 'number' && !isDone) ? savedPb.elapsedSeconds : 0;
+
+      if (restoredSentence > 0 || restoredElapsed > 0) {
+        console.log(`[Playback Resume] Resumed Lesson ${activeLesson.id} ("${activeLesson.title}") at Concept ${restoredSentence + 1} (${restoredElapsed}s elapsed)`);
+      }
+
+      setElapsedSeconds(restoredElapsed);
+      elapsedSecondsRef.current = restoredElapsed;
+      setCurrentSentenceIdx(restoredSentence);
+      currentSentenceIdxRef.current = restoredSentence;
 
       // 1. Check in-memory instant client cache
       const memoryCached = lessonExplanationClientCache.get(cacheKey);
@@ -932,6 +1062,7 @@ const CoursePlayer = ({
       if (immediateScript) {
         console.log(`[PERF:LESSON_FETCH_START] [CLIENT_CACHE_HIT] Course: ${course.id}, Lesson: ${activeLesson.id} ("${activeLesson.title}"), Lang: ${langCode}`);
         setExplanation(immediateScript);
+        setLessonVisuals(activeLesson.visuals || []);
         setLoadingExplanation(false);
         setPipelineState('READY');
         const duration = Math.round(performance.now() - lessonOpenTimestampRef.current);
@@ -944,6 +1075,7 @@ const CoursePlayer = ({
       setLoadingExplanation(true);
       setPipelineState('PREPARING');
       setExplanation('');
+      setLessonVisuals(activeLesson.visuals || []);
 
       const fetchReqStartTime = performance.now();
       api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, preferredLanguage)
@@ -952,6 +1084,7 @@ const CoursePlayer = ({
           console.log(`[PERF:LESSON_FETCH_END] Received lesson script from backend in ${fetchReqDuration}ms (Backend DB Cached: ${res.cached ? 'YES' : 'NO'})`);
           lessonExplanationClientCache.set(cacheKey, res.explanation);
           setExplanation(res.explanation);
+          setLessonVisuals(res.visuals || activeLesson.visuals || []);
           setLoadingExplanation(false);
           setPipelineState('READY');
         })
@@ -959,6 +1092,7 @@ const CoursePlayer = ({
           console.error('Failed to load dynamic lesson explanation:', err);
           const fallbackText = 'Frontend: Client-side logic (React, HTML/CSS, JavaScript)\nBackend: Server-side logic (Node.js, Express, API routes)\nDatabase: Storing data (SQL vs NoSQL, schema design)';
           setExplanation(fallbackText);
+          setLessonVisuals(activeLesson.visuals || []);
           setLoadingExplanation(false);
           setPipelineState('READY');
         });
@@ -1001,6 +1135,39 @@ const CoursePlayer = ({
 
     return lines.length > 0 ? lines : ['Welcome to this lecture.']
   }, [explanation])
+
+  // Intelligently determine which visual to display for the active spoken sentence/concept
+  const activeVisual = useMemo(() => {
+    const list = (lessonVisuals && lessonVisuals.length > 0) ? lessonVisuals : (activeLesson?.visuals || []);
+    if (!list || list.length === 0) return null;
+    if (!sentences || sentences.length === 0) return list[0] || null;
+
+    const currentSentence = (sentences[currentSentenceIdx] || '').toLowerCase();
+
+    // 1. Check keyword and purpose match against active sentence
+    for (const vis of list) {
+      const keywords = Array.isArray(vis.triggerKeywords) ? vis.triggerKeywords : [];
+      const matched = keywords.some(kw => kw && kw.length > 2 && currentSentence.includes(kw.toLowerCase()));
+      if (matched) return vis;
+
+      if (vis.purpose && currentSentence.includes(vis.purpose.toLowerCase().slice(0, 18))) {
+        return vis;
+      }
+      if (vis.name && currentSentence.includes(vis.name.toLowerCase().slice(0, 15))) {
+        return vis;
+      }
+    }
+
+    // 2. If multiple visuals exist, distribute them proportionally across the sentences of the lesson
+    if (list.length > 1) {
+      const bucketSize = Math.ceil(sentences.length / list.length);
+      const visIdx = Math.min(list.length - 1, Math.floor(currentSentenceIdx / Math.max(1, bucketSize)));
+      return list[visIdx];
+    }
+
+    // 3. If single visual, display it throughout the lesson
+    return list[0];
+  }, [lessonVisuals, activeLesson?.visuals, sentences, currentSentenceIdx]);
 
   const REAL_PLAY_DURATIONS = ['01:45', '02:10', '01:50', '02:15', '01:30'];
 
@@ -1066,19 +1233,16 @@ const CoursePlayer = ({
     elapsedSecondsRef.current = elapsedSeconds;
   }, [elapsedSeconds]);
 
-  // Reset elapsed time when lesson changes
+  // Continuously persist current playback position when sentence or time advances
   useEffect(() => {
-    setElapsedSeconds(0);
-    elapsedSecondsRef.current = 0;
-    setCurrentSentenceIdx(0);
-    setIsAriaSpeaking(false);
-    isAriaSpeakingRef.current = false;
-    try { window.speechSynthesis.cancel(); } catch (e) { }
-  }, [activeLessonId]);
+    if (activeLesson?.id && !isLessonDone(activeLesson.id) && (currentSentenceIdx > 0 || elapsedSeconds > 0)) {
+      saveLessonPlayback(activeLesson.id, currentSentenceIdx, elapsedSeconds);
+    }
+  }, [activeLesson?.id, currentSentenceIdx, elapsedSeconds]);
 
-  // Align elapsedSeconds when concept index changes
+  // Align elapsedSeconds when concept index changes during active playback
   useEffect(() => {
-    if (!loadingExplanation && sentences.length > 0 && totalSeconds > 0) {
+    if (!loadingExplanation && sentences.length > 0 && totalSeconds > 0 && playing) {
       const sentenceSec = Math.min(
         totalSeconds,
         Math.round((currentSentenceIdx / Math.max(1, sentences.length)) * totalSeconds)
@@ -1086,7 +1250,7 @@ const CoursePlayer = ({
       setElapsedSeconds(sentenceSec);
       elapsedSecondsRef.current = sentenceSec;
     }
-  }, [currentSentenceIdx, loadingExplanation, sentences.length, totalSeconds]);
+  }, [currentSentenceIdx, loadingExplanation, sentences.length, totalSeconds, playing]);
 
   // Real-time second-by-second ticking ONLY when playing and actively speaking
   useEffect(() => {
@@ -1126,7 +1290,9 @@ const CoursePlayer = ({
     if (!playing) {
       if (currentSentenceIdx >= sentences.length - 1 && elapsedSeconds >= totalSeconds - 1) {
         setCurrentSentenceIdx(0);
+        currentSentenceIdxRef.current = 0;
         setElapsedSeconds(0);
+        elapsedSecondsRef.current = 0;
       }
       try {
         window.speechSynthesis.cancel();
@@ -1138,6 +1304,9 @@ const CoursePlayer = ({
         window.speechSynthesis.cancel();
       } catch (e) { }
       setPlaying(false);
+      if (activeLesson?.id && !isLessonDone(activeLesson.id)) {
+        saveLessonPlayback(activeLesson.id, currentSentenceIdxRef.current, elapsedSecondsRef.current);
+      }
     }
   };
 
@@ -1158,12 +1327,6 @@ const CoursePlayer = ({
       'Database: Storing data (SQL vs NoSQL, schema design)'
     ]
   }, [explanation])
-
-  // Reset indices when lesson changes
-  useEffect(() => {
-    window.speechSynthesis.cancel()
-    setCurrentSentenceIdx(0)
-  }, [activeLessonId])
 
   const handleTakeChapterAssessmentRef = useRef(null);
 
@@ -1268,12 +1431,14 @@ const CoursePlayer = ({
           };
 
           utterance.onend = () => {
-            if (isCancelled) return;
+            if (isCancelled || !playingRef.current) return;
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
             setCurrentSentenceIdx((prev) => {
               const next = prev + 1;
-              speak(next);
+              if (playingRef.current && !isCancelled) {
+                speak(next);
+              }
               return next;
             });
           };
@@ -1281,13 +1446,16 @@ const CoursePlayer = ({
           utterance.onerror = (e) => {
             if (e?.error === 'canceled' || e?.error === 'interrupted') return;
             console.warn('Speech synthesis error:', e);
-            if (isCancelled) return;
+            if (isCancelled || !playingRef.current) return;
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
             setTimeout(() => {
+              if (isCancelled || !playingRef.current) return;
               setCurrentSentenceIdx((prev) => {
                 const next = prev + 1;
-                speak(next);
+                if (playingRef.current && !isCancelled) {
+                  speak(next);
+                }
                 return next;
               });
             }, 400);
@@ -1439,6 +1607,60 @@ const CoursePlayer = ({
       })
   }
 
+  // Comprehensive Back button exit handler ensuring immediate speech cancellation
+  const handleExit = () => {
+    console.log('[CoursePlayer] Back button clicked: halting all speech synthesis and audio streams.');
+    try {
+      window.speechSynthesis?.cancel?.();
+    } catch (e) { }
+
+    if (window._skillbridgeResumeInterval) {
+      clearInterval(window._skillbridgeResumeInterval);
+      window._skillbridgeResumeInterval = null;
+    }
+    if (followUpTimerRef.current) {
+      clearTimeout(followUpTimerRef.current);
+      followUpTimerRef.current = null;
+    }
+    if (awakeTimerRef.current) {
+      clearTimeout(awakeTimerRef.current);
+      awakeTimerRef.current = null;
+    }
+
+    setPlaying(false);
+    playingRef.current = false;
+    setIsAriaSpeaking(false);
+    isAriaSpeakingRef.current = false;
+    isAnsweringRef.current = false;
+    wasLecturePlayingRef.current = false;
+
+    if (voiceManagerRef.current) {
+      try {
+        voiceManagerRef.current.destroy();
+      } catch (e) { }
+      voiceManagerRef.current = null;
+    }
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      try { mediaRecorderRef.current.stop(); } catch (e) { }
+      mediaRecorderRef.current = null;
+    }
+
+    if (micStreamRef.current) {
+      try {
+        micStreamRef.current.getTracks().forEach(t => t.stop());
+      } catch (e) { }
+      micStreamRef.current = null;
+    }
+
+    if (activeLessonRef.current?.id && !isLessonDone(activeLessonRef.current.id)) {
+      saveLessonPlayback(activeLessonRef.current.id, currentSentenceIdxRef.current, elapsedSecondsRef.current);
+      console.log(`[CoursePlayer] Saved progress on exit for Lesson ${activeLessonRef.current.id} at Concept ${currentSentenceIdxRef.current + 1} (${elapsedSecondsRef.current}s)`);
+    }
+
+    onExit?.();
+  };
+
   // Unified module grouping for course curriculum
   const moduleGroups = useMemo(() => {
     if (!course.lessons || !course.lessons.length) return []
@@ -1466,7 +1688,7 @@ const CoursePlayer = ({
       <div className="shrink-0 w-full px-3 sm:px-4 pt-1.5 sm:pt-2 pb-1 flex items-center justify-between gap-2">
         <button
           type="button"
-          onClick={onExit}
+          onClick={handleExit}
           className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-700 hover:text-slate-900 transition border-0 bg-transparent p-0 cursor-pointer"
         >
           <span className="text-base">←</span> Back
@@ -1697,7 +1919,7 @@ const CoursePlayer = ({
                     </span>
                   </div>
 
-                  {/* Interactive Board Notes List (Teacher explaining concept by concept with auto-scroll) */}
+                  {/* Interactive Board Notes List & PPT Visual Display */}
                   {loadingExplanation ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center p-4 sm:p-6 space-y-2.5 sm:space-y-3 select-none">
                       <div className="h-7 w-7 sm:h-8 sm:w-8 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
@@ -1706,74 +1928,103 @@ const CoursePlayer = ({
                       </p>
                     </div>
                   ) : (
-                    <div
-                      ref={notesScrollRef}
-                      className="flex-1 min-h-0 space-y-2 sm:space-y-2.5 overflow-y-auto pr-1 text-left my-0.5 sm:my-1 scroll-smooth no-scrollbar"
-                    >
-                      {sentences.map((sentenceText, sIdx) => {
-                        const isCurrent = sIdx === currentSentenceIdx
-                        const isPast = sIdx < currentSentenceIdx
-                        const cleanedText = cleanForBoard(sentenceText)
-
-                        return (
-                          <div
-                            key={sIdx}
-                            ref={isCurrent ? activeSentenceRef : null}
-                            className={`p-2.5 sm:p-3 rounded-xl transition-all duration-300 ${isCurrent
-                              ? 'bg-[#ff8c21]/20 border-l-4 border-[#ff8c21] shadow-xs text-white scale-[1.01]'
-                              : isPast
-                                ? 'bg-slate-800/50 border-l-2 border-slate-600/60 text-slate-300'
-                                : 'bg-slate-800/20 border-l-2 border-slate-700/30 text-slate-400 opacity-60'
-                              }`}
-                          >
-                            <p className="text-xs sm:text-[13px] lg:text-sm leading-relaxed font-medium flex items-start gap-2 sm:gap-2.5">
-                              <span className={`text-[9px] sm:text-[10px] mt-1 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
-                                {isCurrent ? '●' : '○'}
-                              </span>
-                              <span className="flex-1">{cleanedText}</span>
-                            </p>
+                    <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
+                      {/* PPT Slide Visual Display Card (When concept visual exists) */}
+                      {activeVisual && (activeVisual.dataUrl || activeVisual.url) && (
+                        <div className="shrink-0 mb-2 sm:mb-2.5 rounded-xl overflow-hidden border border-slate-700/70 bg-slate-900/90 shadow-md relative group transition-all duration-300 animate-fadeIn">
+                          <div className="relative flex items-center justify-center bg-black/50 p-1.5 max-h-[140px] sm:max-h-[170px] lg:max-h-[185px]">
+                            <img
+                              src={activeVisual.dataUrl || activeVisual.url}
+                              alt={activeVisual.descr || activeVisual.name || 'Lesson Diagram'}
+                              className="max-h-[130px] sm:max-h-[160px] lg:max-h-[175px] w-auto max-w-full object-contain rounded-lg shadow cursor-zoom-in hover:scale-[1.02] transition-transform duration-200"
+                              onClick={() => setEnlargedVisual(activeVisual)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setEnlargedVisual(activeVisual)}
+                              className="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded bg-slate-950/85 hover:bg-[#ff8c21] text-white text-[9px] font-bold flex items-center gap-1 backdrop-blur-md border border-white/20 transition cursor-pointer"
+                              title="Click to enlarge diagram"
+                            >
+                              <span className="hidden sm:inline">Enlarge</span>
+                            </button>
                           </div>
-                        )
-                      })}
+                          <div className="px-2.5 py-1 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between gap-2 text-[10px]">
+                            <span className="font-bold text-[#ff8c21] flex items-center gap-1.5 truncate">
+                              <span>Slide {activeVisual.sourceSlide || 'Visual'}</span>
+                              {activeVisual.purpose && <span className="text-slate-400 font-medium truncate">• {activeVisual.purpose}</span>}
+                            </span>
+                            <span className="text-[8px] text-slate-500 font-bold shrink-0 uppercase tracking-wider">PPT SLIDE GRAPHIC</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Interactive Board Notes List (Teacher explaining concept by concept with auto-scroll) */}
+                      <div
+                        ref={notesScrollRef}
+                        className="flex-1 min-h-0 space-y-1.5 sm:space-y-2 overflow-y-auto pr-1 text-left my-0.5 scroll-smooth no-scrollbar"
+                      >
+                        {sentences.map((sentenceText, sIdx) => {
+                          const isCurrent = sIdx === currentSentenceIdx
+                          const isPast = sIdx < currentSentenceIdx
+                          const cleanedText = cleanForBoard(sentenceText)
+
+                          return (
+                            <div
+                              key={sIdx}
+                              ref={isCurrent ? activeSentenceRef : null}
+                              onClick={() => {
+                                window.speechSynthesis?.cancel?.();
+                                setCurrentSentenceIdx(sIdx);
+                                currentSentenceIdxRef.current = sIdx;
+                                if (totalSeconds > 0 && sentences.length > 0) {
+                                  const newSec = Math.min(totalSeconds, Math.round((sIdx / Math.max(1, sentences.length)) * totalSeconds));
+                                  setElapsedSeconds(newSec);
+                                  elapsedSecondsRef.current = newSec;
+                                  if (activeLesson?.id && !isLessonDone(activeLesson.id)) {
+                                    saveLessonPlayback(activeLesson.id, sIdx, newSec);
+                                  }
+                                }
+                              }}
+                              className={`p-2 sm:p-2.5 rounded-xl transition-all duration-300 cursor-pointer ${isCurrent
+                                ? 'bg-[#ff8c21]/20 border-l-4 border-[#ff8c21] shadow-xs text-white scale-[1.01]'
+                                : isPast
+                                  ? 'bg-slate-800/50 border-l-2 border-slate-600/60 text-slate-300 hover:bg-slate-800/70'
+                                  : 'bg-slate-800/20 border-l-2 border-slate-700/30 text-slate-400 opacity-60 hover:opacity-90'
+                                }`}
+                              title="Click to jump to this concept"
+                            >
+                              <p className="text-xs sm:text-[13px] lg:text-sm leading-relaxed font-medium flex items-start gap-2 sm:gap-2.5">
+                                <span className={`text-[9px] sm:text-[10px] mt-1 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
+                                  {isCurrent ? '●' : '○'}
+                                </span>
+                                <span className="flex-1">{cleanedText}</span>
+                              </p>
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
 
-                {/* Right ARIA Tutor Circle Avatar */}
-                <div className="md:col-span-5 lg:col-span-4 h-full flex flex-col items-center justify-center text-center border-t md:border-t-0 md:border-l border-white/10 pt-2 sm:pt-3 md:pt-0 md:pl-3">
-                  <div className={`relative flex items-center justify-center h-20 w-20 sm:h-24 sm:w-24 md:h-28 md:w-28 lg:h-32 lg:w-32 rounded-full border-3 sm:border-4 ${isAriaSpeaking || tutorVoiceState === TutorState.TUTOR_SPEAKING || playing
-                    ? 'border-[#ff8c21] bg-[#ff8c21]/10 avatar-active'
-                    : tutorVoiceState === TutorState.USER_SPEAKING
-                      ? 'border-emerald-500 bg-emerald-500/10'
-                      : tutorVoiceState === TutorState.PROCESSING
-                        ? 'border-sky-500 bg-sky-500/10 animate-pulse'
-                        : 'border-slate-700 bg-slate-800/80'
-                    } transition-all duration-300 shadow-xl`}>
-                    <span className="text-4xl sm:text-5xl lg:text-6xl select-none">
-                      {tutorVoiceState === TutorState.USER_SPEAKING ? '🎙️' : (tutorVoiceState === TutorState.PROCESSING ? '🤔' : '🤖')}
+                {/* Right ARIA Tutor Circle Avatar with Robot AI Emoji */}
+                <div className="md:col-span-5 lg:col-span-4 h-full flex flex-col items-center justify-center text-center border-t md:border-t-0 md:border-l border-white/10 pt-3 md:pt-0 px-2 sm:px-4">
+                  {/* Circular Avatar Frame with Robot Emoji */}
+                  <div className={`relative flex items-center justify-center h-28 w-28 sm:h-36 sm:w-36 md:h-40 md:w-40 lg:h-44 lg:w-44 rounded-full bg-[#182337] border-2 sm:border-[2.5px] ${isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING
+                    ? 'border-[#ff8c21]/90 shadow-[0_0_30px_rgba(245,130,32,0.3)] avatar-active'
+                    : 'border-[#293c5d] shadow-2xl'
+                    } transition-all duration-300 select-none`}>
+                    <span className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl select-none filter drop-shadow-md">
+                      🤖
                     </span>
-                    {(playing || isAriaSpeaking || tutorVoiceState === TutorState.TUTOR_SPEAKING) && (
-                      <span className="absolute -inset-1.5 rounded-full border border-[#ff8c21]/50 animate-ping opacity-40 pointer-events-none" />
-                    )}
                   </div>
 
-                  <span className="mt-2 sm:mt-3 inline-flex rounded-full bg-slate-800/90 border border-slate-700 px-2.5 sm:px-3.5 py-0.5 sm:py-1 text-[10px] sm:text-[11px] font-bold text-[#ff8c21] uppercase tracking-wider">
-                    {tutorVoiceState === TutorState.USER_SPEAKING ? 'LISTENING TO YOU' : (tutorVoiceState === TutorState.PROCESSING ? 'ARIA IS THINKING' : (isAriaSpeaking ? 'ARIA IS SPEAKING' : 'ARIA AI TUTOR'))}
-                  </span>
-
-                  {(playing || isAriaSpeaking || tutorVoiceState === TutorState.TUTOR_SPEAKING) ? (
-                    <div className="flex items-end gap-1.5 h-5 sm:h-6 mt-2 sm:mt-3">
-                      <span className="w-1.5 bg-[#ff8c21] rounded-full wave-line h-2" />
-                      <span className="w-1.5 bg-[#ff8c21] rounded-full wave-line h-5" />
-                      <span className="w-1.5 bg-[#ff8c21] rounded-full wave-line h-2" />
-                      <span className="w-1.5 bg-[#ff8c21] rounded-full wave-line h-4" />
-                      <span className="w-1.5 bg-[#ff8c21] rounded-full wave-line h-2" />
-                    </div>
-                  ) : (
-                    <p className="mt-1.5 sm:mt-2 text-[11px] sm:text-xs text-slate-400 font-medium">
-                      {handsFreeVoice ? 'Always-on mic active' : 'Click play to start lecture'}
-                    </p>
-                  )}
+                  {/* ARIA AI TUTOR Pill Badge */}
+                  <div className="mt-4 sm:mt-5 px-5 py-1.5 rounded-full bg-[#131d2e] border border-[#2a3952] shadow-sm select-none">
+                    <span className="text-xs sm:text-[13px] font-extrabold text-[#ff8c21] tracking-wider uppercase">
+                      ARIA AI TUTOR
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1930,7 +2181,7 @@ const CoursePlayer = ({
                 className={`flex items-start gap-2.5 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 {msg.sender === 'aria' && (
-                  <div className="h-8 w-8 rounded-full bg-white border border-[#ff8c21] text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs">
+                  <div className="h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs select-none">
                     🤖
                   </div>
                 )}
@@ -1981,6 +2232,33 @@ const CoursePlayer = ({
           </form>
         </section>
       </main>
+
+      {/* Full-Screen High-Resolution PPT Diagram Lightbox Modal */}
+      {enlargedVisual && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-4 select-none animate-fadeIn cursor-pointer"
+          onClick={() => setEnlargedVisual(null)}
+        >
+          <div className="relative max-w-5xl max-h-[90vh] flex flex-col items-center" onClick={e => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() => setEnlargedVisual(null)}
+              className="absolute -top-10 right-0 text-white hover:text-[#ff8c21] text-xs sm:text-sm font-bold bg-slate-900/90 px-3 py-1 rounded-full border border-slate-700 cursor-pointer shadow-lg flex items-center gap-1.5 transition"
+            >
+              <span>✕</span>
+              <span>Close View</span>
+            </button>
+            <img
+              src={enlargedVisual.dataUrl || enlargedVisual.url}
+              alt={enlargedVisual.descr || 'Enlarged PPT Diagram'}
+              className="max-h-[76vh] w-auto max-w-full object-contain rounded-2xl shadow-2xl border-2 border-slate-700 bg-slate-950 p-2"
+            />
+            <div className="mt-3 px-4 py-1.5 rounded-full bg-slate-900/90 border border-slate-700 text-xs text-white font-medium text-center shadow-lg max-w-2xl truncate">
+              <span className="font-bold text-[#ff8c21]">Slide {enlargedVisual.sourceSlide}:</span> {enlargedVisual.purpose || enlargedVisual.descr || enlargedVisual.name || 'Visual Reference'}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

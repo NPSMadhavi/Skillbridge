@@ -33,9 +33,12 @@ ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "subtopic" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "concept" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "chunkType" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "sourcePage" INT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "sourceSlides" JSONB;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "sourceSection" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "prerequisites" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "keyPoints" JSONB;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "relatedConcepts" JSONB;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "semanticSummary" TEXT;
 
 -- Step 4: Create indexes for fast metadata lookup and HNSW vector similarity search

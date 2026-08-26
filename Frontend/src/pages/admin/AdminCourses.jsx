@@ -67,15 +67,8 @@ const AdminCourses = () => {
   const handleFileChange = (e) => {
     const file = e.target.files[0]
     if (file) {
-      if (file.size > 30 * 1024 * 1024) {
-        const msg = 'File size exceeds 30MB limit. Please upload a smaller file.'
-        setErrorMsg(msg)
-        toast.warn(msg)
-        setSelectedFile(null)
-      } else {
-        setErrorMsg('')
-        setSelectedFile(file)
-      }
+      setErrorMsg('')
+      setSelectedFile(file)
     }
   }
 
@@ -143,15 +136,8 @@ const AdminCourses = () => {
   const handleEditFileChange = (e) => {
     const file = e.target.files[0]
     if (file) {
-      if (file.size > 30 * 1024 * 1024) {
-        const msg = 'File size exceeds 30MB limit. Please upload a smaller file.'
-        setEditErrorMsg(msg)
-        toast.warn(msg)
-        setEditFile(null)
-      } else {
-        setEditErrorMsg('')
-        setEditFile(file)
-      }
+      setEditErrorMsg('')
+      setEditFile(file)
     }
   }
 
@@ -261,7 +247,7 @@ const AdminCourses = () => {
                 ? JSON.parse(course.curriculum)
                 : (course.curriculum || {})
               const lessons = curriculumData.lessons || []
-              const lessonCount = lessons.length || (curriculumData.curriculum?.length ? curriculumData.curriculum.length * 4 : 5)
+              const lessonCount = lessons.length || (curriculumData.curriculum?.length || 0)
 
               return (
                 <article
@@ -460,7 +446,7 @@ const AdminCourses = () => {
                     <span className="text-[11px] text-muted mt-0.5">
                       {selectedFile
                         ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
-                        : 'PDF, Word (DOCX/DOC), Text (TXT/MD), CSV • Max 30MB'}
+                        : 'PDF, PPTX, PPT, Word (DOCX/DOC), Text (TXT/MD), CSV • All file sizes supported'}
                     </span>
                   </label>
                 </div>
@@ -581,7 +567,7 @@ const AdminCourses = () => {
                   <span className="text-[10px] text-muted mt-0.5">
                     {editFile
                       ? `${(editFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
-                      : 'PDF, Word (DOCX), TXT, MD • Re-generates lessons & re-indexes knowledge'}
+                      : 'PDF, PPTX, PPT, Word (DOCX/DOC), Text, CSV • All file sizes supported'}
                   </span>
                   {editFile && (
                     <button

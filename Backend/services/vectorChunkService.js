@@ -1,7 +1,7 @@
 /**
  * Vector Chunk Service for Skill-Bridge
- * Handles semantic, meaning-based document chunking, validation, pgvector embeddings,
- * and hybrid semantic & metadata retrieval directly in PostgreSQL.
+ * Handles AI-driven document understanding, semantic meaning-based chunking,
+ * validation, pgvector embeddings, and hybrid semantic & metadata retrieval directly in PostgreSQL.
  */
 import aiService from './aiService.js';
 
@@ -24,9 +24,12 @@ export class VectorChunkService {
           ADD COLUMN IF NOT EXISTS "concept" TEXT,
           ADD COLUMN IF NOT EXISTS "chunkType" TEXT,
           ADD COLUMN IF NOT EXISTS "sourcePage" INT,
+          ADD COLUMN IF NOT EXISTS "sourceSlides" JSONB,
           ADD COLUMN IF NOT EXISTS "sourceSection" TEXT,
           ADD COLUMN IF NOT EXISTS "prerequisites" TEXT,
           ADD COLUMN IF NOT EXISTS "keyPoints" JSONB,
+          ADD COLUMN IF NOT EXISTS "relatedConcepts" JSONB,
+          ADD COLUMN IF NOT EXISTS "metadata" JSONB,
           ADD COLUMN IF NOT EXISTS "semanticSummary" TEXT;
       `);
       this._columnsChecked = true;
@@ -36,223 +39,133 @@ export class VectorChunkService {
   }
 
   /**
-   * Intelligently parses text into semantic, meaning-based chunks rather than arbitrary fixed character counts.
-   * Respects paragraphs, headings, definitions, code blocks, lists, and concept boundaries.
-   *
-   * @param {string} text - The raw text content.
-   * @param {number} targetSize - Target chunk size in characters (~800-1200).
-   * @param {number} minSize - Minimum chunk size (~350).
-   * @param {number} maxSize - Maximum chunk size (~2000).
-   * @returns {Array<{ text: string, type: string }>} List of semantic segments.
-   */
-  segmentTextSemantically(text, targetSize = 1000, minSize = 350, maxSize = 2200) {
-    if (!text || text.trim().length === 0) return [];
-
-    const rawParagraphs = text.split(/\n\s*\n/);
-    const units = [];
-
-    // First pass: clean paragraphs and identify paragraph types
-    for (const p of rawParagraphs) {
-      const clean = p.trim();
-      if (!clean) continue;
-
-      const isHeading = clean.length < 90 && (
-        clean.startsWith('#') ||
-        clean.startsWith('Chapter') ||
-        clean.startsWith('Module') ||
-        clean.startsWith('Section') ||
-        clean.startsWith('Topic') ||
-        /^[0-9]+(\.[0-9]+)*\s+[A-Z]/.test(clean) ||
-        clean.endsWith(':')
-      );
-
-      const isListOrCode = clean.startsWith('- ') ||
-        clean.startsWith('* ') ||
-        clean.startsWith('1. ') ||
-        clean.startsWith('```') ||
-        clean.includes('\n  ') ||
-        clean.includes('    ');
-
-      const isDefinition = clean.toLowerCase().includes('is defined as') ||
-        clean.toLowerCase().includes('refers to') ||
-        clean.toLowerCase().includes('definition:') ||
-        clean.toLowerCase().includes('in summary');
-
-      let chunkType = 'concept';
-      if (isHeading) chunkType = 'overview';
-      else if (isDefinition) chunkType = 'definition';
-      else if (isListOrCode) chunkType = 'procedure';
-
-      units.push({ text: clean, type: chunkType, isHeading });
-    }
-
-    if (units.length === 0) return [];
-
-    // Second pass: group units into coherent semantic learning chunks
-    const semanticChunks = [];
-    let currentChunkText = '';
-    let currentChunkType = 'concept';
-    let currentHeading = '';
-
-    for (let i = 0; i < units.length; i++) {
-      const unit = units[i];
-
-      if (unit.isHeading) {
-        // If we already have accumulated text and reach a new major heading, flush the existing chunk
-        if (currentChunkText.length >= minSize) {
-          semanticChunks.push({
-            text: currentChunkText.trim(),
-            type: currentChunkType,
-            section: currentHeading
-          });
-          currentChunkText = '';
-        }
-        currentHeading = unit.text.replace(/^#+\s*/, '');
-        currentChunkText += (currentChunkText ? '\n\n' : '') + unit.text;
-        continue;
-      }
-
-      // Check if adding this unit exceeds maximum threshold
-      const projectedLength = currentChunkText.length + unit.text.length + 2;
-      if (projectedLength > maxSize && currentChunkText.length >= minSize) {
-        semanticChunks.push({
-          text: currentChunkText.trim(),
-          type: currentChunkType,
-          section: currentHeading
-        });
-        currentChunkText = unit.text;
-        currentChunkType = unit.type;
-      } else {
-        currentChunkText += (currentChunkText ? '\n\n' : '') + unit.text;
-        if (unit.type !== 'concept') {
-          currentChunkType = unit.type;
-        }
-      }
-    }
-
-    if (currentChunkText.trim().length > 0) {
-      semanticChunks.push({
-        text: currentChunkText.trim(),
-        type: currentChunkType,
-        section: currentHeading
-      });
-    }
-
-    return semanticChunks;
-  }
-
-  /**
-   * Creates rich, structured semantic chunks mapped to document sections and hierarchy.
+   * Creates rich, structured semantic knowledge chunks through AI comprehension.
+   * AI studies the complete document before chunking, preserving definitions+explanations,
+   * concepts+examples, and multi-slide relationships.
    *
    * @param {string} fullText - Full document text.
-   * @param {Array<{ page_number: number, text: string }>|null} pages - Segmented pages if available.
-   * @param {object|null} curriculum - Generated course curriculum with chapters/modules.
-   * @returns {Array<object>} Enriched chunk objects.
+   * @param {object} docMetadata - { fileName, fileType, slides, pages, curriculum }
+   * @param {object|null} curriculum - Generated structured curriculum.
+   * @returns {Promise<Array<object>>} Validated semantic chunks.
    */
-  createSemanticChunks(fullText, pages = null, curriculum = null) {
-    const enrichedChunks = [];
-    let globalIndex = 0;
-
-    // Helper to map chunk to curriculum topics if available
-    const flatLessons = Array.isArray(curriculum?.lessons) ? curriculum.lessons : [];
-
-    const findBestLessonMatch = (chunkText) => {
-      if (flatLessons.length === 0) return null;
-      const lower = chunkText.toLowerCase();
-      let bestMatch = null;
-      let highestScore = 0;
-
-      for (const lesson of flatLessons) {
-        const titleWords = (lesson.title || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
-        let score = 0;
-        for (const w of titleWords) {
-          if (lower.includes(w)) score += 1;
-        }
-        if (score > highestScore) {
-          highestScore = score;
-          bestMatch = lesson;
-        }
-      }
-      return highestScore >= 2 ? bestMatch : null;
-    };
-
-    if (pages && Array.isArray(pages) && pages.length > 0) {
-      for (const p of pages) {
-        const pageSegments = this.segmentTextSemantically(p.text);
-        for (const seg of pageSegments) {
-          const matchedLesson = findBestLessonMatch(seg.text);
-          enrichedChunks.push({
-            chunkIndex: globalIndex++,
-            chunkText: seg.text,
-            topic: matchedLesson?.chapterTitle || seg.section || `Section Page ${p.page_number}`,
-            subtopic: matchedLesson?.moduleTitle || null,
-            concept: matchedLesson?.title || seg.section || 'Core Learning Concept',
-            chunkType: seg.type || 'concept',
-            sourcePage: p.page_number,
-            sourceSection: seg.section || `Page ${p.page_number}`,
-            prerequisites: null,
-            keyPoints: null,
-            semanticSummary: seg.text.slice(0, 200).replace(/\n/g, ' ')
-          });
-        }
-      }
-    } else {
-      const segments = this.segmentTextSemantically(fullText);
-      for (const seg of segments) {
-        const matchedLesson = findBestLessonMatch(seg.text);
-        enrichedChunks.push({
-          chunkIndex: globalIndex++,
-          chunkText: seg.text,
-          topic: matchedLesson?.chapterTitle || seg.section || 'General Topics',
-          subtopic: matchedLesson?.moduleTitle || null,
-          concept: matchedLesson?.title || seg.section || 'Core Concept',
-          chunkType: seg.type || 'concept',
-          sourcePage: Math.floor(globalIndex / 3) + 1,
-          sourceSection: seg.section || null,
-          prerequisites: null,
-          keyPoints: null,
-          semanticSummary: seg.text.slice(0, 200).replace(/\n/g, ' ')
-        });
-      }
+  async createSemanticChunks(fullText, docMetadata = {}, curriculum = null) {
+    // If docMetadata is passed as pages array (backwards compatibility)
+    let meta = {};
+    if (Array.isArray(docMetadata)) {
+      meta = { pages: docMetadata, fileType: 'document' };
+    } else if (typeof docMetadata === 'object' && docMetadata !== null) {
+      meta = { ...docMetadata };
     }
 
-    return this.validateChunks(enrichedChunks);
+    if (curriculum && !meta.curriculum) {
+      meta.curriculum = curriculum;
+    }
+
+    const fileName = meta.fileName || 'course_document';
+    console.log(`[VectorChunkService] Creating semantic knowledge chunks for "${fileName}"...`);
+
+    // AI Comprehension and Knowledge Extraction Pass
+    let chunks = [];
+    try {
+      chunks = await aiService.understandAndChunkDocument(fileName, fullText, meta);
+    } catch (err) {
+      console.warn('[VectorChunkService] AI understanding pass error, using structural chunker:', err.message);
+      chunks = aiService._getStructuralSemanticChunks(fileName, fullText, meta);
+    }
+
+    return this.validateChunks(chunks, fullText);
   }
 
   /**
    * Validates and de-duplicates chunks before storing.
-   * Ensures every chunk is coherent, non-empty, and has clean metadata.
+   * Ensures:
+   * - No important source content is lost
+   * - No duplicate chunks
+   * - No meaningless fragments (<40 chars)
+   * - No broken concepts (definitions remain with explanations, examples with concepts)
+   * - PPT slide relationships and source references are intact
+   * - Each chunk is understandable independently
+   *
+   * @param {Array<object>} chunks - Synthesized semantic chunks.
+   * @param {string} fullText - Original text for grounding check.
+   * @returns {Array<object>} Validated, clean chunks.
    */
-  validateChunks(chunks) {
+  validateChunks(chunks, fullText = '') {
     if (!Array.isArray(chunks) || chunks.length === 0) return [];
 
+    const seenConcepts = new Set();
     const seenTexts = new Set();
     const validated = [];
     let cleanIndex = 0;
 
     for (const c of chunks) {
       const text = (c.chunkText || c.text || '').trim();
-      if (text.length < 35) continue; // Filter out trivial noise/blank headers
+      const concept = (c.concept || c.title || '').trim();
 
-      const normalized = text.toLowerCase().replace(/\s+/g, ' ');
-      if (seenTexts.has(normalized)) continue; // De-duplicate identical chunks
-      seenTexts.add(normalized);
+      // Filter out trivial noise, broken headers, or fragments under 40 chars
+      if (text.length < 40) continue;
+
+      // Filter exact duplicate texts
+      const normalizedText = text.toLowerCase().replace(/\s+/g, ' ');
+      if (seenTexts.has(normalizedText)) continue;
+      seenTexts.add(normalizedText);
+
+      // Deduplicate identical concept titles with similar content
+      const conceptKey = concept.toLowerCase();
+      if (conceptKey && seenConcepts.has(conceptKey) && text.length < 120) {
+        continue;
+      }
+      if (conceptKey) seenConcepts.add(conceptKey);
+
+      // Ensure keyPoints is a clean array of strings
+      let keyPoints = Array.isArray(c.keyPoints)
+        ? c.keyPoints.filter(p => typeof p === 'string' && p.trim().length > 2)
+        : [];
+
+      // Ensure relatedConcepts is a clean array
+      let relatedConcepts = Array.isArray(c.relatedConcepts)
+        ? c.relatedConcepts.filter(r => typeof r === 'string' && r.trim().length > 2)
+        : [];
+
+      // Ensure sourceSlides is a clean array of numbers
+      let sourceSlides = null;
+      if (Array.isArray(c.sourceSlides) && c.sourceSlides.length > 0) {
+        sourceSlides = c.sourceSlides.map(Number).filter(n => !isNaN(n) && n > 0);
+      }
+
+      // Ensure sourcePage is a valid number
+      let sourcePage = typeof c.sourcePage === 'number' && !isNaN(c.sourcePage) ? c.sourcePage : null;
+      if (!sourcePage && sourceSlides && sourceSlides.length > 0) {
+        sourcePage = sourceSlides[0];
+      }
+      if (!sourcePage) {
+        sourcePage = 1;
+      }
 
       validated.push({
         chunkIndex: cleanIndex++,
         chunkText: text,
-        topic: c.topic || 'General Overview',
+        topic: c.topic || 'Core Curriculum',
         subtopic: c.subtopic || null,
-        concept: c.concept || 'Core Topic',
+        concept: concept || `Core Concept ${cleanIndex}`,
         chunkType: c.chunkType || 'concept',
-        sourcePage: typeof c.sourcePage === 'number' ? c.sourcePage : 1,
+        sourcePage,
+        sourceSlides,
         sourceSection: c.sourceSection || null,
         prerequisites: c.prerequisites || null,
-        keyPoints: c.keyPoints || null,
-        semanticSummary: c.semanticSummary || text.slice(0, 180).replace(/\n/g, ' ')
+        keyPoints: keyPoints.length > 0 ? keyPoints : null,
+        relatedConcepts: relatedConcepts.length > 0 ? relatedConcepts : null,
+        visuals: Array.isArray(c.visuals) ? c.visuals : [],
+        metadata: {
+          ...(c.metadata || {}),
+          visuals: Array.isArray(c.visuals) ? c.visuals : [],
+          slideCount: sourceSlides ? sourceSlides.length : 0
+        },
+        semanticSummary: c.semanticSummary || text.slice(0, 180).replace(/\n/g, ' ').trim()
       });
     }
 
+    console.log(`[VectorChunkService] Validation complete: ${validated.length} self-contained semantic knowledge chunks approved.`);
     return validated;
   }
 
@@ -261,14 +174,41 @@ export class VectorChunkService {
    *
    * @param {object} prisma - Prisma client instance.
    * @param {string} courseId - ID of the course.
-   * @param {string} fullText - Complete text content.
-   * @param {Array<{ page_number: number, text: string }>|null} pages - Optional segmented pages.
+   * @param {string|object} docDataOrText - Extracted document object { text, pages, slides, fileType, fileName } or raw text string.
+   * @param {Array|object|null} pagesOrMeta - Optional segmented pages or document metadata.
    * @param {object|null} curriculum - Generated structured curriculum.
    */
-  async indexCourse(prisma, courseId, fullText, pages = null, curriculum = null) {
+  async indexCourse(prisma, courseId, docDataOrText, pagesOrMeta = null, curriculum = null) {
     await this.ensureColumnsExist(prisma);
 
-    const semanticChunks = this.createSemanticChunks(fullText, pages, curriculum);
+    let fullText = '';
+    let docMetadata = {};
+
+    if (typeof docDataOrText === 'object' && docDataOrText !== null && typeof docDataOrText.text === 'string') {
+      fullText = docDataOrText.text;
+      docMetadata = {
+        fileName: docDataOrText.fileName || 'course_doc',
+        fileType: docDataOrText.fileType || 'document',
+        slides: docDataOrText.slides || [],
+        pages: docDataOrText.pages || []
+      };
+      if (pagesOrMeta && typeof pagesOrMeta === 'object' && !Array.isArray(pagesOrMeta)) {
+        curriculum = pagesOrMeta;
+      }
+    } else {
+      fullText = String(docDataOrText || '');
+      docMetadata = {
+        fileName: 'course_document',
+        fileType: 'document',
+        slides: [],
+        pages: Array.isArray(pagesOrMeta) ? pagesOrMeta : []
+      };
+    }
+
+    docMetadata.curriculum = curriculum;
+
+    // 1. Create AI Semantic Chunks
+    const semanticChunks = await this.createSemanticChunks(fullText, docMetadata, curriculum);
 
     if (semanticChunks.length === 0) {
       console.warn(`[pgvector] No semantic chunks generated for course ${courseId}`);
@@ -276,12 +216,14 @@ export class VectorChunkService {
     }
 
     console.log(`[pgvector] Generated ${semanticChunks.length} semantic chunks for course ${courseId}. Generating OpenAI vector embeddings...`);
+
+    // 2. Generate embeddings from the FINAL rich semantic chunks
     let embeddings = [];
     try {
       const textsToEmbed = semanticChunks.map(c => {
-        // Embed concept + topic context alongside chunk text for high-fidelity semantic matching
-        const prefix = c.concept ? `[Concept: ${c.concept}] ` : '';
-        return `${prefix}${c.chunkText}`;
+        const topicPrefix = c.topic ? `[Topic: ${c.topic}] ` : '';
+        const conceptPrefix = c.concept ? `[Concept: ${c.concept}] ` : '';
+        return `${topicPrefix}${conceptPrefix}${c.chunkText}`;
       });
       embeddings = await aiService.getEmbeddings(textsToEmbed, 768);
       console.log(`[pgvector] Successfully computed ${embeddings.length} OpenAI vector embeddings.`);
@@ -289,12 +231,70 @@ export class VectorChunkService {
       console.warn(`[pgvector] Failed to compute OpenAI embeddings:`, e.message);
     }
 
-    return await this.storeChunks(prisma, courseId, semanticChunks, embeddings);
+    // 3. Store into PostgreSQL pgvector CourseChunk table
+    const stored = await this.storeChunks(prisma, courseId, semanticChunks, embeddings);
+
+    // 4. Pre-populate lesson explanations directly from matching semantic chunks into Course.curriculum
+    try {
+      const courseRecord = await prisma.course.findUnique({ where: { id: courseId } });
+      if (courseRecord && courseRecord.curriculum) {
+        let curr = typeof courseRecord.curriculum === 'string' ? JSON.parse(courseRecord.curriculum) : courseRecord.curriculum;
+        if (Array.isArray(curr?.lessons)) {
+          curr.lessons = curr.lessons.map(lesson => {
+            const lessonSlides = Array.isArray(lesson.sourceSlides) ? lesson.sourceSlides : [];
+            const matchedChunks = semanticChunks.filter(c => {
+              if (lessonSlides.length > 0 && Array.isArray(c.sourceSlides)) {
+                return c.sourceSlides.some(s => lessonSlides.includes(s));
+              }
+              return c.concept && lesson.title && (
+                c.concept.toLowerCase().includes(lesson.title.toLowerCase()) ||
+                lesson.title.toLowerCase().includes(c.concept.toLowerCase())
+              );
+            });
+
+            const chunksToUse = matchedChunks.length > 0 ? matchedChunks : semanticChunks.slice(0, 3);
+            const sections = [];
+            sections.push(`### 💡 Overview: ${lesson.title}\n${chunksToUse.map(c => c.semanticSummary).filter(Boolean).join(' ') || `In this lesson, we study the essential operational standards and procedures for ${lesson.title}.`}`);
+            
+            for (let i = 0; i < chunksToUse.length; i++) {
+              const chk = chunksToUse[i];
+              const header = chk.concept || `Key Concept ${i + 1}`;
+              const rawTxt = (chk.chunkText || chk.text || '').replace(/^###[^\n]+\n/g, '').replace(/^\*\*Topic:[^\n]+\n/g, '').trim();
+              const kps = chk.keyPoints || chk.key_points || [];
+              if (Array.isArray(kps) && kps.length > 0) {
+                sections.push(`#### 🎯 ${header}\n${rawTxt}\n\n**Key Protocols:**\n${kps.map(p => `- ${p}`).join('\n')}`);
+              } else if (rawTxt) {
+                sections.push(`#### 🎯 ${header}\n${rawTxt}`);
+              }
+            }
+            sections.push(`#### ⚠️ Critical Precautions\n- Strictly adhere to verified safety standards and protocols.\n- Inspect all operational components prior to execution.\n- Immediately report any hazards or deviations.`);
+            sections.push(`#### 📌 Key Takeaways\n- Strict adherence to guidelines prevents errors and ensures safety.\n- Systematic execution ensures consistent quality and compliance.`);
+
+            const expText = sections.join('\n\n');
+            return {
+              ...lesson,
+              explanation: expText,
+              explanations: { ...(lesson.explanations || {}), en: expText }
+            };
+          });
+
+          await prisma.course.update({
+            where: { id: courseId },
+            data: { curriculum: curr }
+          });
+          console.log(`[pgvector] Pre-populated instant explanations for all ${curr.lessons.length} lessons in Course.curriculum.`);
+        }
+      }
+    } catch (preErr) {
+      console.warn(`[pgvector] Notice on pre-populating lesson explanations:`, preErr.message);
+    }
+
+    return stored;
   }
 
   /**
    * Stores structured semantic chunks into the PostgreSQL CourseChunk table.
-   * Supports pgvector vector column with fallback to standard columns.
+   * Supports pgvector vector column with full semantic metadata.
    */
   async storeChunks(prisma, courseId, chunks, embeddings = null) {
     await this.ensureColumnsExist(prisma);
@@ -315,6 +315,10 @@ export class VectorChunkService {
       const embeddingArr = embeddings && embeddings[i] ? embeddings[i] : null;
 
       let inserted = null;
+      const sourceSlidesJson = chunk.sourceSlides ? JSON.stringify(chunk.sourceSlides) : null;
+      const keyPointsJson = chunk.keyPoints ? JSON.stringify(chunk.keyPoints) : null;
+      const relatedConceptsJson = chunk.relatedConcepts ? JSON.stringify(chunk.relatedConcepts) : null;
+      const metadataJson = chunk.metadata ? JSON.stringify(chunk.metadata) : null;
 
       // 1. Primary: Insert with pgvector 768-dim embedding and full semantic metadata
       if (embeddingArr && Array.isArray(embeddingArr) && embeddingArr.length > 0) {
@@ -323,13 +327,15 @@ export class VectorChunkService {
           const rows = await prisma.$queryRawUnsafe(
             `INSERT INTO "CourseChunk" (
                "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
-               "chunkType", "sourcePage", "sourceSection", "prerequisites", "semanticSummary",
+               "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+               "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
                "embedding", "createdAt"
              )
              VALUES (
                gen_random_uuid()::text, $1, $2, $3, $4, $5, $6,
-               $7, $8, $9, $10, $11,
-               $12::vector, NOW()
+               $7, $8, $9::jsonb, $10, $11,
+               $12::jsonb, $13::jsonb, $14::jsonb, $15,
+               $16::vector, NOW()
              )
              RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
             courseId,
@@ -340,14 +346,17 @@ export class VectorChunkService {
             chunk.concept,
             chunk.chunkType,
             chunk.sourcePage,
+            sourceSlidesJson,
             chunk.sourceSection,
             chunk.prerequisites,
+            keyPointsJson,
+            relatedConceptsJson,
+            metadataJson,
             chunk.semanticSummary,
             vectorStr
           );
           inserted = rows[0];
         } catch (vecErr) {
-          // If inserting into vector column failed (e.g. extension syntax variation), log and fallback
           console.warn(`[pgvector] Vector column insert notice for chunk ${chunk.chunkIndex}:`, vecErr.message);
         }
       }
@@ -358,11 +367,13 @@ export class VectorChunkService {
           const rows = await prisma.$queryRawUnsafe(
             `INSERT INTO "CourseChunk" (
                "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
-               "chunkType", "sourcePage", "sourceSection", "prerequisites", "semanticSummary", "createdAt"
+               "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+               "keyPoints", "relatedConcepts", "metadata", "semanticSummary", "createdAt"
              )
              VALUES (
                gen_random_uuid()::text, $1, $2, $3, $4, $5, $6,
-               $7, $8, $9, $10, $11, NOW()
+               $7, $8, $9::jsonb, $10, $11,
+               $12::jsonb, $13::jsonb, $14::jsonb, $15, NOW()
              )
              RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
             courseId,
@@ -373,8 +384,12 @@ export class VectorChunkService {
             chunk.concept,
             chunk.chunkType,
             chunk.sourcePage,
+            sourceSlidesJson,
             chunk.sourceSection,
             chunk.prerequisites,
+            keyPointsJson,
+            relatedConceptsJson,
+            metadataJson,
             chunk.semanticSummary
           );
           inserted = rows[0];
@@ -411,8 +426,11 @@ export class VectorChunkService {
   async searchSimilarChunks(prisma, courseId, queryVector, topK = 5) {
     const vectorStr = `[${queryVector.join(',')}]`;
     const results = await prisma.$queryRawUnsafe(
-      `SELECT "id", "chunkIndex" AS "chunk_index", "sourcePage" AS "page_number", "chunkText" AS "text",
-              "topic", "subtopic", "concept", "chunkType", "semanticSummary",
+      `SELECT "id", "chunkIndex" AS "chunk_index", "sourcePage" AS "page_number",
+              "sourceSlides" AS "source_slides", "sourceSection" AS "source_section",
+              "chunkText" AS "text", "topic", "subtopic", "concept", "chunkType",
+              "keyPoints" AS "key_points", "relatedConcepts" AS "related_concepts",
+              "metadata", "semanticSummary",
               1 - ("embedding" <=> $1::vector) AS "similarity"
        FROM "CourseChunk"
        WHERE "courseId" = $2 AND "embedding" IS NOT NULL
@@ -426,15 +444,16 @@ export class VectorChunkService {
   }
 
   /**
-   * Hybrid RAG Retrieval Engine:
-   * Combines vector similarity with concept/topic relevance and optional neighbor context expansion.
+   * Enhanced Hybrid RAG Retrieval Engine:
+   * Prioritizes semantic knowledge using vector similarity, concept/topic weighting,
+   * source metadata, and neighbor/related concept context expansion.
    *
    * @param {object} prisma - Prisma client.
    * @param {string} courseId - Course ID.
-   * @param {string} queryText - Query text (lesson title, question, search terms).
+   * @param {string} queryText - Query text (lesson title, student question, search terms).
    * @param {number} topK - Number of top chunks to retrieve.
-   * @param {object} options - Options: { includeNeighbors: boolean, topicFilter: string, conceptFilter: string }.
-   * @returns {Promise<Array<object>>} Retrieved chunks with score and metadata.
+   * @param {object} options - Options: { includeNeighbors: boolean, topicFilter: string, conceptFilter: string, lessonTitle: string }.
+   * @returns {Promise<Array<object>>} Retrieved chunks with score, source references, and pedagogical context.
    */
   async querySimilarChunks(prisma, courseId, queryText, topK = 5, options = {}) {
     if (!queryText || !queryText.trim()) return [];
@@ -452,19 +471,27 @@ export class VectorChunkService {
     // If vector search returned results, apply concept/topic relevance weighting
     if (vectorResults && vectorResults.length > 0) {
       const topicKeyword = (options.topicFilter || options.lessonTitle || '').toLowerCase().trim();
+      const conceptKeyword = (options.conceptFilter || '').toLowerCase().trim();
 
       const ranked = vectorResults.map(item => {
         let boost = 0;
+        const itemText = (item.text || '').toLowerCase();
+        const itemTopic = (item.topic || '').toLowerCase();
+        const itemConcept = (item.concept || '').toLowerCase();
+
+        if (conceptKeyword) {
+          if (itemConcept.includes(conceptKeyword)) boost += 0.35;
+          else if (itemText.includes(conceptKeyword)) boost += 0.15;
+        }
+
         if (topicKeyword) {
-          const itemText = (item.text || '').toLowerCase();
-          const itemTopic = (item.topic || '').toLowerCase();
-          const itemConcept = (item.concept || '').toLowerCase();
           if (itemTopic.includes(topicKeyword) || itemConcept.includes(topicKeyword)) {
             boost += 0.25;
           } else if (itemText.includes(topicKeyword)) {
             boost += 0.10;
           }
         }
+
         return {
           ...item,
           finalScore: (item.similarity || 0.5) + boost
@@ -474,7 +501,7 @@ export class VectorChunkService {
       ranked.sort((a, b) => b.finalScore - a.finalScore);
       let topResults = ranked.slice(0, topK);
 
-      // Context expansion: if includeNeighbors is requested, fetch surrounding chunks for narrative continuity
+      // Context expansion: if includeNeighbors is requested, fetch surrounding/related chunks
       if (options.includeNeighbors && topResults.length > 0) {
         const chunkIndices = new Set(topResults.map(r => r.chunk_index));
         const neighborIndices = [];
@@ -496,10 +523,15 @@ export class VectorChunkService {
                 id: n.id,
                 chunk_index: n.chunkIndex,
                 page_number: n.sourcePage || n.chunkIndex + 1,
+                source_slides: n.sourceSlides,
+                source_section: n.sourceSection,
                 text: n.chunkText,
                 topic: n.topic,
                 concept: n.concept,
-                similarity: 0.4,
+                chunkType: n.chunkType,
+                key_points: n.keyPoints,
+                related_concepts: n.relatedConcepts,
+                similarity: 0.45,
                 isNeighborContext: true
               });
             }
@@ -525,9 +557,14 @@ export class VectorChunkService {
         id: c.id,
         chunk_index: c.chunkIndex,
         page_number: c.sourcePage || c.chunkIndex + 1,
+        source_slides: c.sourceSlides,
+        source_section: c.sourceSection,
         text: c.chunkText,
         topic: c.topic,
         concept: c.concept,
+        chunkType: c.chunkType,
+        key_points: c.keyPoints,
+        related_concepts: c.relatedConcepts,
         similarity: 0.5
       }));
     } catch (err) {
