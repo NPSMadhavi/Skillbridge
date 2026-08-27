@@ -747,30 +747,79 @@ const CoursePlayer = ({
     }
   }
 
-  // Interruption / Wake-Word trigger helper
   const interruptLectureAndWake = () => {
-    // If lecture is playing, pause and bookmark exact concept index
+    console.log('[VOICE:INTERRUPT] Wake command detected');
+
+    // ==========================================================
+    // SAVE COURSE POSITION + STOP COURSE
+    // ==========================================================
+
     if (playingRef.current) {
-      wasLecturePlayingRef.current = true
-      savedLecturePositionRef.current = currentSentenceIdxRef.current
-      window.speechSynthesis.cancel()
-      setPlaying(false)
-      console.log(`[VOICE] Lecture paused at Concept ${currentSentenceIdxRef.current + 1}. Position saved for auto-resume.`)
-    } else if (isAriaSpeakingRef.current) {
-      window.speechSynthesis.cancel()
-      isAriaSpeakingRef.current = false
-      console.log('[VOICE] ARIA response interrupted by student. Listening to new question...')
+      wasLecturePlayingRef.current = true;
+
+      savedLecturePositionRef.current =
+        currentSentenceIdxRef.current;
+
+      console.log(
+        `[VOICE:INTERRUPT] Pausing course at Concept ${currentSentenceIdxRef.current + 1
+        }`
+      );
+
+      // Immediately stop browser TTS.
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) { }
+
+      // Pause course.
+      setPlaying(false);
+
+      // Tell voice manager course is no longer actively speaking.
+      voiceManagerRef.current?.setLecturePlaying(false);
     }
 
-    voiceManagerRef.current?.setState(TutorState.ARIA_GREETING)
-    setVoiceStatusText('👋 ARIA: "Yes? Tell me."')
+    // ==========================================================
+    // INTERRUPT ARIA ANSWER
+    // ==========================================================
 
-    const ack = ACKNOWLEDGMENTS[selectedLanguageCode] || ACKNOWLEDGMENTS.en
-    speakAriaAnswer(ack, () => {
-      console.log('[VOICE] ARIA finished greeting. Transition handled safely by voice manager cooldown.')
-    })
-  }
+    else if (isAriaSpeakingRef.current) {
+      console.log(
+        '[VOICE:INTERRUPT] User interrupted ARIA answer'
+      );
 
+      try {
+        window.speechSynthesis.cancel();
+      } catch (e) { }
+
+      setIsAriaSpeaking(false);
+
+      isAriaSpeakingRef.current = false;
+    }
+
+    // ==========================================================
+    // ENTER GREETING
+    // ==========================================================
+
+    voiceManagerRef.current?.setState(
+      TutorState.ARIA_GREETING
+    );
+
+    setVoiceStatusText(
+      '👋 ARIA: "Yes? Tell me. I\'m listening."'
+    );
+
+    const ack =
+      ACKNOWLEDGMENTS[selectedLanguageCode] ||
+      ACKNOWLEDGMENTS.en;
+
+    speakAriaAnswer(
+      ack,
+      () => {
+        console.log(
+          '[VOICE] Wake acknowledgement finished. Listening for question.'
+        );
+      }
+    );
+  };
   const handleVoiceQuestion = async (userSpeech) => {
     if (!userSpeech || isAnsweringRef.current || isAriaSpeakingRef.current) return
     const rawSpeech = userSpeech.trim()

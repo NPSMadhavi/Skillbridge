@@ -1,30 +1,21 @@
 /**
  * SkillBridge Voice Tutor Interaction Manager
- * Strict 8-State Voice State Machine with Hardware/Software Echo Prevention,
- * Robust Wake-Word Detection, Web Audio VAD, and Multilingual Support.
  *
- * Supported Teaching Languages:
+ * Features:
+ * - Always-on microphone
+ * - Multilingual wake-word detection
  * - English
- * - Chinese (中文)
- * - Malay (Bahasa Melayu)
- * - Tamil (தமிழ்)
- * - Bangla (বাংলা)
- *
- * Wake examples:
- * - Hey Aria
- * - Aria
- * - Hey Arya
- * - Native-language ASR variants of Aria
- *
- * States:
- * 1. SLEEPING           - Passive mic monitoring, evaluating SOLELY for wake-word
- * 2. WAKE_DETECTED      - Wake-word confirmed, buffers purged, wake detection paused
- * 3. ARIA_GREETING      - ARIA speaks short acknowledgement
- * 4. ACTIVE_LISTENING   - VAD active, capturing user's question
- * 5. PROCESSING         - User speech finished, Whisper + RAG + LLM execution lock
- * 6. ARIA_SPEAKING      - TTS playback with complete mic/ASR suppression
- * 7. FOLLOW_UP_LISTENING - Post-speech window allowing natural follow-up
- * 8. RETURN_TO_SLEEP    - Timeout / user dismiss, returning to SLEEPING
+ * - Chinese
+ * - Malay
+ * - Tamil
+ * - Bangla
+ * - Course lecture interruption
+ * - Wake detection while course is playing
+ * - User question recording
+ * - Whisper/RAG/LLM pipeline callback
+ * - ARIA echo prevention
+ * - Automatic follow-up listening
+ * - Automatic course resume
  */
 
 export const TutorState = {
@@ -39,7 +30,6 @@ export const TutorState = {
   ERROR: 'ERROR'
 };
 
-// Configurable diagnostic logging categories
 export const LogCategory = {
   VOICE_STATE: 'VOICE_STATE',
   WAKE_DETECTION: 'WAKE_DETECTION',
@@ -57,190 +47,181 @@ export const LogCategory = {
   RETURN_TO_SLEEP: 'RETURN_TO_SLEEP'
 };
 
-/**
- * Supported teaching-language -> browser SpeechRecognition language.
- */
+
+/* ============================================================
+   SUPPORTED LANGUAGES
+============================================================ */
+
 export const VOICE_LANGUAGE_CODES = {
   English: 'en-US',
-  Chinese: 'zh-CN',
-  Malay: 'ms-MY',
-  Tamil: 'ta-IN',
-  Bangla: 'bn-BD',
-
-  // Also support common values that may be passed directly
   'English (US)': 'en-US',
   'English (UK)': 'en-GB',
+
+  Chinese: 'zh-CN',
   'Chinese (中文)': 'zh-CN',
+
+  Malay: 'ms-MY',
   'Malay (Bahasa Melayu)': 'ms-MY',
+
+  Tamil: 'ta-IN',
   'Tamil (தமிழ்)': 'ta-IN',
-  'Bangla (বাংলা)': 'bn-BD'
+
+  Bangla: 'bn-BD',
+  'Bangla (বাংলা)': 'bn-BD',
+  Bengali: 'bn-BD'
 };
 
-/**
- * Convert a UI teaching-language value to SpeechRecognition language code.
- *
- * Examples:
- * getSpeechLanguageCode('Tamil (தமிழ்)') -> 'ta-IN'
- * getSpeechLanguageCode('Bangla (বাংলা)') -> 'bn-BD'
- * getSpeechLanguageCode('en-US') -> 'en-US'
- */
+
 export const getSpeechLanguageCode = (language) => {
-  if (!language) return 'en-US';
+  if (!language) {
+    return 'en-US';
+  }
 
   if (VOICE_LANGUAGE_CODES[language]) {
     return VOICE_LANGUAGE_CODES[language];
   }
 
-  const normalized = String(language).trim().toLowerCase();
+  const value = String(language)
+    .trim()
+    .toLowerCase();
 
-  if (
-    normalized === 'english' ||
-    normalized.startsWith('english ')
-  ) {
+  if (value.includes('english')) {
     return 'en-US';
   }
 
   if (
-    normalized === 'chinese' ||
-    normalized.includes('中文')
+    value.includes('chinese') ||
+    value.includes('中文')
   ) {
     return 'zh-CN';
   }
 
   if (
-    normalized === 'malay' ||
-    normalized.includes('bahasa melayu')
+    value.includes('malay') ||
+    value.includes('bahasa melayu')
   ) {
     return 'ms-MY';
   }
 
   if (
-    normalized === 'tamil' ||
-    normalized.includes('தமிழ்')
+    value.includes('tamil') ||
+    value.includes('தமிழ்')
   ) {
     return 'ta-IN';
   }
 
   if (
-    normalized === 'bangla' ||
-    normalized === 'bengali' ||
-    normalized.includes('বাংলা')
+    value.includes('bangla') ||
+    value.includes('bengali') ||
+    value.includes('বাংলা')
   ) {
     return 'bn-BD';
   }
 
-  // If caller already provides a BCP-47 code
-  if (/^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(String(language))) {
+  // Already a BCP-47 language code
+  if (
+    /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(
+      String(language)
+    )
+  ) {
     return String(language);
   }
 
   return 'en-US';
 };
 
-/**
- * Multilingual wake-word patterns.
- *
- * IMPORTANT:
- * We are intentionally looking for ARIA/name variants only.
- * We do not wake for arbitrary user speech.
- */
+
+/* ============================================================
+   WAKE WORDS
+============================================================ */
+
 const WAKE_WORD_PATTERNS = [
 
-  // ============================================================
+  // ----------------------------------------------------------
   // ENGLISH
-  // ============================================================
+  // ----------------------------------------------------------
 
-  /\b(?:hey|hi|hello|ok|okay|ask|hay|heya|yo|dear|here|hear|hallo)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
+  /\b(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|hallo)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
 
   /\b(?:here\s+ya|hear\s+ya|hey\s+ya|heya|hiya|hi\s+ya|hariya|harya|haria)\b/i,
 
   /\b(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
 
 
-  // ============================================================
+  // ----------------------------------------------------------
   // CHINESE
-  // ============================================================
+  // ----------------------------------------------------------
 
-  /(?:嘿|嗨|你好|喂|请问|问一下)?\s*(?:阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu,
+  /(?:嘿|嗨|你好|喂|请问|问一下|小)?\s*(?:阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu,
 
   /(?:嘿|嗨|你好)?\s*(?:aria|arya|ariya)/iu,
 
 
-  // ============================================================
+  // ----------------------------------------------------------
   // MALAY
-  // ============================================================
+  // ----------------------------------------------------------
 
   /\b(?:hai|helo|hello|hey|haya|hei|tolong|boleh)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
 
   /\b(?:hai|helo|hello|hey)\s+(?:aria|arya|area|ariya)\b/i,
 
 
-  // ============================================================
+  // ----------------------------------------------------------
   // TAMIL
-  // ============================================================
+  // ----------------------------------------------------------
 
   /(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)?\s*(?:ஆரியா|ஆர்யா|அரியா|ஏரியா)/iu,
 
   /(?:ஹே|ஹாய்|ஹலோ)?\s*(?:aria|arya|ariya)/iu,
 
 
-  // ============================================================
+  // ----------------------------------------------------------
   // BANGLA
-  // ============================================================
+  // ----------------------------------------------------------
 
   /(?:হে|হেই|হাই|হ্যালো|নমস্কার|ওহে)?\s*(?:আরিয়া|আরিয়া|আর্য|এরিয়া|এরিয়া)/iu,
 
   /(?:হে|হাই|হ্যালো)?\s*(?:aria|arya|ariya)/iu,
 
 
-  // ============================================================
-  // GENERIC NATIVE-SCRIPT ARIA VARIANTS
-  // ============================================================
+  // ----------------------------------------------------------
+  // GENERIC NATIVE SCRIPT
+  // ----------------------------------------------------------
 
-  /(?:एरिया|आरिया|आर्या|ఆరియా|ఆర్య|ஏரியா|ஆரியா|ஆர்யா|அரியா|আরিয়া|আরিয়া|এরিয়া|এরিয়া|阿丽娅|阿莉娅|阿里亚|艾莉亚|艾丽娅)/iu
+  /(?:एरिया|आरिया|आर्या|ஆரியா|ஆர்யா|அரியா|ஏரியா|আরিয়া|আরিয়া|আর্য|এরিয়া|এরিয়া|阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu
 ];
 
 
-/**
- * ARIA's own acknowledgment and greeting phrases.
- *
- * These must NEVER be processed as user questions.
- */
+/* ============================================================
+   ARIA SELF-ECHO PHRASES
+============================================================ */
+
 export const KNOWN_SELF_ECHO_PATTERNS = [
 
   // English
   /\b(?:yes|yeah|ya)?\s*(?:tell\s+me|im\s+listening|i\s+am\s+listening|listening|please\s+tell\s+me)\b/i,
 
-  /\b(?:yes\s*\??\s*tell\s+me|i'm\s+listening|im\s+listening|i\s+am\s+listening|yes\s+tell\s+me\s+i'm\s+listening)\b/i,
-
-  /\b(?:yes\s*\??\s*tell\s+me|yes\s+tell\s+me|tell\s+me\s+i'm\s+listening)\b/i,
+  /\b(?:yes\s+tell\s+me|tell\s+me\s+i'm\s+listening|tell\s+me\s+im\s+listening)\b/i,
 
   /\b(?:hello\s+i\s+am\s+aria|i\s+am\s+aria|your\s+personal\s+ai\s+tutor)\b/i,
 
-
   // Chinese
-  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么)/i,
-
+  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么)/iu,
 
   // Malay
-  /\b(?:ya\s*\??\s*saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu)\b/i,
-
+  /\b(?:ya\s+saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu)\b/i,
 
   // Tamil
-  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்)/i,
-
+  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்)/iu,
 
   // Bangla
-  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি)/i
+  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি)/iu
 ];
 
 
-/**
- * All known ASR spellings / native-script spellings of ARIA.
- */
 const ARIA_VARIANTS_SET = new Set([
 
-  // English / Malay
+  // English
   'aria',
   'arya',
   'area',
@@ -276,133 +257,189 @@ const ARIA_VARIANTS_SET = new Set([
 ]);
 
 
-/**
- * Normalize ASR transcript without destroying Unicode characters.
- */
-export const normalizeTranscript = (text) => {
-  if (!text) return '';
+/* ============================================================
+   TEXT NORMALIZATION
+============================================================ */
 
-  return text
+export const normalizeTranscript = (text) => {
+
+  if (!text) {
+    return '';
+  }
+
+  return String(text)
     .toLowerCase()
-    .replace(/[.,/#!$%^&*;:{}=\-_`~()?'"“”‘’[\]\\/]/g, ' ')
+    .normalize('NFC')
+    .replace(
+      /[.,/#!$%^&*;:{}=\-_`~()?'"“”‘’[\]\\/]/g,
+      ' '
+    )
     .replace(/\s+/g, ' ')
     .trim();
 };
 
 
-/**
- * Check whether transcript contains an ARIA wake word.
- */
+/* ============================================================
+   WAKE WORD DETECTION
+============================================================ */
+
 export const containsWakeWord = (text) => {
-  if (!text) return false;
 
-  const normalized = normalizeTranscript(text);
+  if (!text) {
+    return false;
+  }
 
-  if (!normalized) return false;
+  const normalized =
+    normalizeTranscript(text);
+
+  if (!normalized) {
+    return false;
+  }
 
 
-  // Never wake from ARIA's own greeting.
+  // Never wake from ARIA's own speech.
   if (
-    KNOWN_SELF_ECHO_PATTERNS.some((pattern) =>
-      pattern.test(normalized)
+    KNOWN_SELF_ECHO_PATTERNS.some(
+      (pattern) =>
+        pattern.test(normalized)
     )
   ) {
     return false;
   }
 
 
-  // First check complete multilingual patterns.
+  // Complete phrase matching.
   if (
-    WAKE_WORD_PATTERNS.some((pattern) =>
-      pattern.test(normalized)
+    WAKE_WORD_PATTERNS.some(
+      (pattern) =>
+        pattern.test(normalized)
     )
   ) {
     return true;
   }
 
 
-  // Then check individual tokens.
-  const tokens = normalized.split(/\s+/);
+  // Individual token matching.
+  const tokens =
+    normalized.split(/\s+/);
 
-  return tokens.some((token) =>
-    ARIA_VARIANTS_SET.has(token)
+  return tokens.some(
+    (token) =>
+      ARIA_VARIANTS_SET.has(token)
   );
 };
 
 
-/**
- * Remove wake phrase from a transcript before sending the question.
- */
-export const extractQuestionFromWakeWord = (text) => {
-  if (!text) return '';
+/* ============================================================
+   REMOVE WAKE WORD FROM QUESTION
+============================================================ */
 
-  let clean = text.trim();
+export const extractQuestionFromWakeWord = (
+  text
+) => {
+
+  if (!text) {
+    return '';
+  }
+
+  let clean =
+    String(text).trim();
 
 
-  // Remove wake phrase from beginning.
+  // English / Malay
   clean = clean.replace(
-    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|yo|dear|here|hear|excuse\s+me|你好|嗨|hai|helo|halo|வணக்கம்|ஹாய்|ஹே|হ্যালো|হাই)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria|ya|ia|ஆரியா|ஆர்யா|அரியா|ஏரியா|আরিয়া|আরিয়া|এরিয়া|এরিয়া|阿莉娅|阿丽娅|阿里亚)[\s,.:!?-]*/iu,
+    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria)\s*[,.:!?-]*/iu,
     ''
-  ).trim();
+  );
 
 
-  // Remove wake name from end.
+  // Chinese
   clean = clean.replace(
-    /[\s,.:!?-]*(?:aria|area|arya|aarya|ariya|auria|oria|arria|ya|ஆரியா|ஆர்யா|அரியா|ஏரியா|আরিয়া|আরিয়া|এরিয়া|এরিয়া|阿莉娅|阿丽娅|阿里亚)$/iu,
+    /^(?:嘿|嗨|你好|喂|请问|问一下)?\s*(?:阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)\s*[,.:!?-]*/iu,
     ''
-  ).trim();
+  );
 
 
-  return clean;
+  // Tamil
+  clean = clean.replace(
+    /^(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)?\s*(?:ஆரியா|ஆர்யா|அரியா|ஏரியா)\s*[,.:!?-]*/iu,
+    ''
+  );
+
+
+  // Bangla
+  clean = clean.replace(
+    /^(?:হে|হেই|হাই|হ্যালো|নমস্কার)?\s*(?:আরিয়া|আরিয়া|আর্য|এরিয়া|এরিয়া)\s*[,.:!?-]*/iu,
+    ''
+  );
+
+
+  return clean.trim();
 };
 
 
-/**
- * Detect noise / hallucinated ASR.
- */
-export const isNoiseOrHallucination = (text) => {
-  if (!text) return true;
+/* ============================================================
+   NOISE / HALLUCINATION DETECTION
+============================================================ */
 
-  const t = text
-    .trim()
-    .toLowerCase()
-    .replace(/[.,/#!$%^&*;:{}=\-_`~()?'"“”‘’]/g, '')
-    .trim();
+export const isNoiseOrHallucination = (
+  text
+) => {
 
-  if (t.length < 2) return true;
+  if (!text) {
+    return true;
+  }
+
+  const t =
+    normalizeTranscript(text);
+
+  if (t.length < 2) {
+    return true;
+  }
 
 
   const noisePhrases = [
+
     'blank_audio',
     'silence',
     'music',
+
     'i am sorry',
     'im sorry',
     'sorry',
+
     'thank you',
     'thank you for watching',
     'thanks for watching',
     'thanks',
+
     'see you in the next video',
     'see you in the next one',
     'see you next time',
     'see you later',
-    'i will see you in the next',
+
     'i will see you',
+    'i will see you in the next',
+
     'subtitles by',
     'subscribe to',
     'subscribe',
     'like and subscribe',
+
     'translated by',
+
     'you',
     'so',
+
     'bye',
     'goodbye',
     'okay bye',
+
     'yes',
     'yeah',
     'ok',
     'okay',
+
     'tell me',
     'listening',
     'im listening',
@@ -411,16 +448,26 @@ export const isNoiseOrHallucination = (text) => {
 
 
   return noisePhrases.some(
-    (p) => t === p || (t.length < 20 && t.includes(p))
+    (phrase) =>
+      t === phrase ||
+      (
+        t.length < 20 &&
+        t.includes(phrase)
+      )
   );
 };
 
+
+/* ============================================================
+   VOICE TUTOR MANAGER
+============================================================ */
 
 export class VoiceTutorManager {
 
   constructor(options = {}) {
 
     this.options = {
+
       debug: true,
 
       followUpTimeoutMs: 7000,
@@ -437,12 +484,18 @@ export class VoiceTutorManager {
     };
 
 
-    this.state = TutorState.SLEEPING;
+    this.state =
+      TutorState.SLEEPING;
 
-    this.stateListeners = new Set();
+
+    this.stateListeners =
+      new Set();
 
 
-    // Audio & Pipeline handles
+    /* ----------------------------------------------------------
+       AUDIO
+    ---------------------------------------------------------- */
+
     this.micStream = null;
 
     this.audioContext = null;
@@ -458,10 +511,15 @@ export class VoiceTutorManager {
     this.recognition = null;
 
 
-    // Gating & Lifecycle flags
+    /* ----------------------------------------------------------
+       FLAGS
+    ---------------------------------------------------------- */
+
     this.isMounted = false;
 
     this.isTutorSpeaking = false;
+
+    this.isLecturePlaying = false;
 
     this.ttsMutedUntil = 0;
 
@@ -472,7 +530,10 @@ export class VoiceTutorManager {
     this.cooldownTimeoutId = null;
 
 
-    // VAD state variables
+    /* ----------------------------------------------------------
+       VAD
+    ---------------------------------------------------------- */
+
     this.speechFramesCount = 0;
 
     this.lastSpeechTime = 0;
@@ -482,52 +543,99 @@ export class VoiceTutorManager {
     this.isRecording = false;
 
 
-    // Deduplication tracking
+    /* ----------------------------------------------------------
+       DEDUP
+    ---------------------------------------------------------- */
+
     this.lastProcessedText = '';
 
     this.lastProcessedTime = 0;
 
+
+    /* ----------------------------------------------------------
+       RESTART
+    ---------------------------------------------------------- */
+
     this.isRestarting = false;
 
+    this.restartTimer = null;
 
-    // Current speech language
+
+    /* ----------------------------------------------------------
+       LANGUAGE
+    ---------------------------------------------------------- */
+
     this.langCode = 'en-US';
   }
 
 
-  log(category, message, data = null) {
+  /* ==========================================================
+     LOGGING
+  ========================================================== */
 
-    if (!this.options.debug) return;
+  log(
+    category,
+    message,
+    data = null
+  ) {
 
-    const prefix = `[VOICE:${category}]`;
+    if (!this.options.debug) {
+      return;
+    }
 
-    if (data !== null && data !== undefined) {
+    const prefix =
+      `[VOICE:${category}]`;
 
-      console.log(`${prefix} ${message}`, data);
+    if (
+      data !== null &&
+      data !== undefined
+    ) {
+
+      console.log(
+        `${prefix} ${message}`,
+        data
+      );
 
     } else {
 
-      console.log(`${prefix} ${message}`);
-
+      console.log(
+        `${prefix} ${message}`
+      );
     }
   }
 
 
+  /* ==========================================================
+     STATE LISTENER
+  ========================================================== */
+
   onStateChange(listener) {
 
-    this.stateListeners.add(listener);
+    this.stateListeners.add(
+      listener
+    );
 
-    return () => this.stateListeners.delete(listener);
+    return () =>
+      this.stateListeners.delete(
+        listener
+      );
   }
 
 
   setState(newState) {
 
-    if (this.state === newState) return;
+    if (
+      this.state === newState
+    ) {
+      return;
+    }
 
-    const oldState = this.state;
+    const oldState =
+      this.state;
 
-    this.state = newState;
+    this.state =
+      newState;
+
 
     this.log(
       LogCategory.VOICE_STATE,
@@ -535,33 +643,66 @@ export class VoiceTutorManager {
     );
 
 
-    this.stateListeners.forEach((listener) => {
+    this.stateListeners.forEach(
+      (listener) => {
 
-      try {
+        try {
 
-        listener(newState);
+          listener(newState);
 
-      } catch (e) {
+        } catch (error) {
 
-        console.error(
-          '[VOICE] Error in state listener:',
-          e
-        );
+          console.error(
+            '[VOICE] State listener error:',
+            error
+          );
+
+        }
 
       }
-
-    });
+    );
   }
 
 
-  /**
-   * Set lecture playback state.
-   */
+  /* ==========================================================
+     COURSE PLAYBACK STATE
+  ========================================================== */
+
   setLecturePlaying(isPlaying) {
 
-    this.isLecturePlaying = isPlaying;
+    this.isLecturePlaying =
+      Boolean(isPlaying);
 
-    if (isPlaying && this.isRecording) {
+
+    this.log(
+      LogCategory.VOICE_STATE,
+      `Course lecture playing: ${this.isLecturePlaying}`
+    );
+
+
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT stop SpeechRecognition here.
+     *
+     * During course playback:
+     *
+     *     microphone = ON
+     *     wake recognition = ON
+     *
+     * The user can say:
+     *
+     *     "Hey Aria"
+     *     "Aria"
+     *
+     * and interrupt the lesson.
+     */
+
+
+    if (
+      isPlaying &&
+      this.isRecording
+    ) {
 
       this.stopMediaRecording();
 
@@ -571,14 +712,18 @@ export class VoiceTutorManager {
   }
 
 
-  /**
-   * Manually set awake state.
-   */
+  /* ==========================================================
+     AWAKE
+  ========================================================== */
+
   setAwake(awake) {
 
     if (awake) {
 
-      if (this.state === TutorState.SLEEPING) {
+      if (
+        this.state ===
+        TutorState.SLEEPING
+      ) {
 
         this.setState(
           TutorState.ACTIVE_LISTENING
@@ -588,24 +733,37 @@ export class VoiceTutorManager {
 
       this.resetFollowUpTimeout();
 
-    } else if (!this.isTutorSpeaking) {
+    } else {
 
-      this.returnToSleep();
+      if (
+        !this.isTutorSpeaking
+      ) {
 
+        this.returnToSleep();
+
+      }
     }
   }
 
 
-  /**
-   * Set conversation mode.
-   */
-  setConversationMode(inConv) {
+  /* ==========================================================
+     CONVERSATION MODE
+  ========================================================== */
 
-    this.inConversationMode = inConv;
+  setConversationMode(
+    inConversation
+  ) {
 
-    if (inConv) {
+    this.inConversationMode =
+      inConversation;
 
-      if (this.state === TutorState.SLEEPING) {
+
+    if (inConversation) {
+
+      if (
+        this.state ===
+        TutorState.SLEEPING
+      ) {
 
         this.setState(
           TutorState.ACTIVE_LISTENING
@@ -615,77 +773,60 @@ export class VoiceTutorManager {
 
       this.resetFollowUpTimeout();
 
-    } else if (!this.isTutorSpeaking) {
+    } else {
 
-      this.returnToSleep();
+      if (
+        !this.isTutorSpeaking
+      ) {
 
+        this.returnToSleep();
+
+      }
     }
   }
 
 
-  /**
-   * Start voice manager.
-   *
-   * Important:
-   * If the language changes while the manager is already mounted,
-   * SpeechRecognition is recreated using the new language.
-   */
-  async start(langCode = 'en-US') {
+  /* ==========================================================
+     START
+  ========================================================== */
 
-    this.langCode = getSpeechLanguageCode(langCode);
+  async start(
+    langCode = 'en-US'
+  ) {
+
+    const newLang =
+      getSpeechLanguageCode(
+        langCode
+      );
 
 
-    // Already mounted:
-    // update only SpeechRecognition language.
+    this.langCode =
+      newLang;
+
+
     if (this.isMounted) {
 
       this.log(
         LogCategory.WAKE_DETECTION,
-        `Updating SpeechRecognition language to ${this.langCode}`
+        `Updating wake language to ${newLang}`
       );
 
 
-      if (this.recognition) {
-
-        try {
-
-          this.recognition.onend = null;
-
-          this.recognition.onresult = null;
-
-          this.recognition.onerror = null;
-
-          this.recognition.abort();
-
-        } catch (e) { }
-
-        this.recognition = null;
-      }
-
-
-      this.isRestarting = false;
-
-
-      if (
-        !this.isTutorSpeaking &&
-        Date.now() >= this.ttsMutedUntil
-      ) {
-
-        this.initSpeechRecognition();
-
-      }
-
+      this.restartSpeechRecognition(
+        true
+      );
 
       return;
     }
 
 
-    this.isMounted = true;
+    this.isMounted =
+      true;
 
 
     this.log(
       LogCategory.VOICE_STATE,
-      `Initializing Voice Tutor Manager (Lang: ${this.langCode})...`
+      `Initializing Voice Tutor Manager (${newLang})`
     );
 
 
@@ -695,83 +836,70 @@ export class VoiceTutorManager {
 
       this.initSpeechRecognition();
 
-      this.setState(TutorState.SLEEPING);
+      this.setState(
+        TutorState.SLEEPING
+      );
 
-    } catch (err) {
+    } catch (error) {
 
       console.error(
         '[VOICE] Initialization error:',
-        err
+        error
       );
 
-      this.setState(TutorState.ERROR);
-
+      this.setState(
+        TutorState.ERROR
+      );
     }
   }
 
 
-  /**
-   * Change language without recreating microphone/VAD.
-   */
+  /* ==========================================================
+     CHANGE LANGUAGE
+  ========================================================== */
+
   setLanguage(language) {
 
-    const newLangCode =
-      getSpeechLanguageCode(language);
+    const newLang =
+      getSpeechLanguageCode(
+        language
+      );
 
 
-    if (newLangCode === this.langCode) {
+    if (
+      newLang ===
+      this.langCode
+    ) {
 
       return;
-
     }
 
 
     this.log(
       LogCategory.WAKE_DETECTION,
-      `Changing voice language: ${this.langCode} -> ${newLangCode}`
+      `Language changed: ${this.langCode} -> ${newLang}`
     );
 
 
-    this.langCode = newLangCode;
-
-
-    if (this.recognition) {
-
-      try {
-
-        this.recognition.onend = null;
-
-        this.recognition.onresult = null;
-
-        this.recognition.onerror = null;
-
-        this.recognition.abort();
-
-      } catch (e) { }
-
-      this.recognition = null;
-
-    }
-
-
-    this.isRestarting = false;
+    this.langCode =
+      newLang;
 
 
     if (
-      this.isMounted &&
-      !this.isTutorSpeaking &&
-      Date.now() >= this.ttsMutedUntil
+      this.isMounted
     ) {
 
-      this.initSpeechRecognition();
-
+      this.restartSpeechRecognition(
+        true
+      );
     }
   }
 
 
-  /**
-   * Initializes microphone stream with hardware echo cancellation.
-   */
+  /* ==========================================================
+     MICROPHONE PIPELINE
+  ========================================================== */
+
   async initMicrophonePipeline() {
 
     try {
@@ -786,7 +914,6 @@ export class VoiceTutorManager {
             noiseSuppression: true,
 
             autoGainControl: true
-
           }
 
         });
@@ -796,19 +923,22 @@ export class VoiceTutorManager {
 
         stream
           .getTracks()
-          .forEach((t) => t.stop());
+          .forEach(
+            (track) =>
+              track.stop()
+          );
 
         return;
-
       }
 
 
-      this.micStream = stream;
+      this.micStream =
+        stream;
 
 
       this.log(
         LogCategory.VOICE_STATE,
-        'Microphone stream initialized with Echo Cancellation + Noise Suppression.'
+        'Microphone initialized with echo cancellation'
       );
 
 
@@ -817,35 +947,57 @@ export class VoiceTutorManager {
         window.webkitAudioContext;
 
 
-      const audioCtx = new AudioCtx();
+      if (!AudioCtx) {
+
+        throw new Error(
+          'Web Audio API not supported'
+        );
+      }
 
 
-      if (audioCtx.state === 'suspended') {
+      const audioContext =
+        new AudioCtx();
 
-        await audioCtx.resume();
+
+      if (
+        audioContext.state ===
+        'suspended'
+      ) {
+
+        await audioContext.resume();
 
       }
 
 
       const source =
-        audioCtx.createMediaStreamSource(stream);
+        audioContext.createMediaStreamSource(
+          stream
+        );
 
 
       const analyser =
-        audioCtx.createAnalyser();
+        audioContext.createAnalyser();
 
 
-      analyser.fftSize = 512;
-
-      analyser.smoothingTimeConstant = 0.3;
-
-
-      source.connect(analyser);
+      analyser.fftSize =
+        512;
 
 
-      this.audioContext = audioCtx;
+      analyser.smoothingTimeConstant =
+        0.3;
 
-      this.analyser = analyser;
+
+      source.connect(
+        analyser
+      );
+
+
+      this.audioContext =
+        audioContext;
+
+
+      this.analyser =
+        analyser;
 
 
       const bufferLength =
@@ -853,197 +1005,234 @@ export class VoiceTutorManager {
 
 
       const dataArray =
-        new Uint8Array(bufferLength);
-
-
-      // Continuous VAD loop (~40ms tick)
-      if (this.vadInterval) {
-
-        clearInterval(this.vadInterval);
-
-      }
-
-
-      this.vadInterval = setInterval(() => {
-
-        if (
-          !this.isMounted ||
-          !this.analyser
-        ) {
-
-          return;
-
-        }
-
-
-        if (
-          this.audioContext &&
-          this.audioContext.state === 'suspended'
-        ) {
-
-          this.audioContext
-            .resume()
-            .catch(() => { });
-
-        }
-
-
-        // Strict echo suppression
-        if (
-
-          this.isTutorSpeaking ||
-
-          Date.now() < this.ttsMutedUntil ||
-
-          this.state === TutorState.ARIA_GREETING ||
-
-          this.state === TutorState.ARIA_SPEAKING ||
-
-          this.state === TutorState.PROCESSING
-
-        ) {
-
-          this.speechFramesCount = 0;
-
-          return;
-
-        }
-
-
-        this.analyser.getByteFrequencyData(
-          dataArray
+        new Uint8Array(
+          bufferLength
         );
 
 
-        let sumSquares = 0;
+      if (
+        this.vadInterval
+      ) {
+
+        clearInterval(
+          this.vadInterval
+        );
+      }
 
 
-        for (
-          let i = 0;
-          i < bufferLength;
-          i++
-        ) {
+      this.vadInterval =
+        setInterval(() => {
 
-          sumSquares +=
-            dataArray[i] *
-            dataArray[i];
+          if (
+            !this.isMounted ||
+            !this.analyser
+          ) {
 
-        }
+            return;
+          }
 
 
-        const rms =
-          Math.sqrt(
-            sumSquares / bufferLength
+          if (
+            this.audioContext &&
+            this.audioContext.state ===
+            'suspended'
+          ) {
+
+            this.audioContext
+              .resume()
+              .catch(() => { });
+
+          }
+
+
+          /*
+           * ARIA answer / greeting.
+           *
+           * Do not record user audio.
+           */
+
+          if (
+
+            this.isTutorSpeaking ||
+
+            Date.now() <
+            this.ttsMutedUntil ||
+
+            this.state ===
+            TutorState.ARIA_GREETING ||
+
+            this.state ===
+            TutorState.ARIA_SPEAKING ||
+
+            this.state ===
+            TutorState.PROCESSING
+
+          ) {
+
+            this.speechFramesCount =
+              0;
+
+            return;
+          }
+
+
+          this.analyser.getByteFrequencyData(
+            dataArray
           );
 
 
-        const now = Date.now();
+          let sumSquares =
+            0;
 
 
-        // Active recording:
-        // evaluate silence completion.
-        if (this.isRecording) {
-
-          if (
-            rms >=
-            this.options.silenceRmsThreshold
+          for (
+            let i = 0;
+            i < bufferLength;
+            i++
           ) {
 
-            this.lastSpeechTime = now;
+            sumSquares +=
+              dataArray[i] *
+              dataArray[i];
 
           }
 
 
-          const silenceDuration =
-            now - this.lastSpeechTime;
-
-
-          const totalDuration =
-            now - this.recordingStartTime;
-
-
-          if (
-
-            (
-              silenceDuration >=
-              this.options.silenceDurationMs &&
-              totalDuration >= 800
-            ) ||
-
-            totalDuration >=
-            this.options.maxRecordingMs
-
-          ) {
-
-            this.log(
-              LogCategory.VAD_END,
-              `Speech ended (Silence: ${silenceDuration}ms, Duration: ${totalDuration}ms)`
+          const rms =
+            Math.sqrt(
+              sumSquares /
+              bufferLength
             );
 
 
-            this.stopMediaRecording();
-
-          }
-
-
-          return;
-
-        }
+          const now =
+            Date.now();
 
 
-        // Active listening / follow-up listening
-        if (
-
-          this.state === TutorState.ACTIVE_LISTENING ||
-
-          this.state === TutorState.FOLLOW_UP_LISTENING
-
-        ) {
+          /*
+           * Recording user question.
+           */
 
           if (
-            rms >=
-            this.options.speechRmsThreshold
+            this.isRecording
           ) {
 
-            this.speechFramesCount += 1;
-
-
             if (
-              this.speechFramesCount >= 2
+              rms >=
+              this.options.silenceRmsThreshold
             ) {
 
-              this.speechFramesCount = 0;
-
-
-              this.log(
-                LogCategory.VAD_START,
-                `User speech detected (RMS: ${rms.toFixed(1)})`
-              );
-
-
-              this.clearFollowUpTimeout();
-
-
-              this.startMediaRecording();
+              this.lastSpeechTime =
+                now;
 
             }
 
-          } else {
 
-            this.speechFramesCount = 0;
+            const silenceDuration =
+              now -
+              this.lastSpeechTime;
 
+
+            const totalDuration =
+              now -
+              this.recordingStartTime;
+
+
+            if (
+
+              (
+                silenceDuration >=
+                this.options.silenceDurationMs &&
+
+                totalDuration >= 800
+              ) ||
+
+              totalDuration >=
+              this.options.maxRecordingMs
+
+            ) {
+
+              this.log(
+                LogCategory.VAD_END,
+                `User speech ended (${totalDuration}ms)`
+              );
+
+
+              this.stopMediaRecording();
+
+            }
+
+
+            return;
           }
 
-        }
 
-      }, 40);
+          /*
+           * IMPORTANT:
+           *
+           * Course playing does NOT cause VAD
+           * to stop the wake detector.
+           *
+           * SpeechRecognition handles wake detection.
+           */
+
+          if (
+
+            this.state ===
+            TutorState.ACTIVE_LISTENING ||
+
+            this.state ===
+            TutorState.FOLLOW_UP_LISTENING
+
+          ) {
+
+            if (
+              rms >=
+              this.options.speechRmsThreshold
+            ) {
+
+              this.speechFramesCount +=
+                1;
 
 
-    } catch (err) {
+              if (
+                this.speechFramesCount >=
+                2
+              ) {
+
+                this.speechFramesCount =
+                  0;
+
+
+                this.log(
+                  LogCategory.VAD_START,
+                  `User speech detected RMS=${rms.toFixed(1)}`
+                );
+
+
+                this.clearFollowUpTimeout();
+
+
+                this.startMediaRecording();
+
+              }
+
+            } else {
+
+              this.speechFramesCount =
+                0;
+
+            }
+          }
+
+        }, 40);
+
+
+    } catch (error) {
 
       console.error(
-        '[VOICE] Microphone permission error or device unavailable:',
-        err
+        '[VOICE] Microphone initialization failed:',
+        error
       );
 
 
@@ -1052,15 +1241,15 @@ export class VoiceTutorManager {
       );
 
 
-      throw err;
-
+      throw error;
     }
   }
 
 
-  /**
-   * Start user speech recording.
-   */
+  /* ==========================================================
+     START RECORDING
+  ========================================================== */
+
   startMediaRecording() {
 
     if (
@@ -1069,7 +1258,23 @@ export class VoiceTutorManager {
     ) {
 
       return;
+    }
 
+
+    /*
+     * While course is playing and manager is sleeping,
+     * DO NOT record normal speech.
+     *
+     * Wake command must come first.
+     */
+
+    if (
+      this.isLecturePlaying &&
+      this.state ===
+      TutorState.SLEEPING
+    ) {
+
+      return;
     }
 
 
@@ -1077,7 +1282,8 @@ export class VoiceTutorManager {
 
       if (
         this.mediaRecorder &&
-        this.mediaRecorder.state !== 'inactive'
+        this.mediaRecorder.state !==
+        'inactive'
       ) {
 
         try {
@@ -1085,11 +1291,11 @@ export class VoiceTutorManager {
           this.mediaRecorder.stop();
 
         } catch (e) { }
-
       }
 
 
-      this.audioChunks = [];
+      this.audioChunks =
+        [];
 
 
       const mimeType =
@@ -1108,132 +1314,171 @@ export class VoiceTutorManager {
             : '';
 
 
-      const recorder = mimeType
+      const recorder =
+        mimeType
 
-        ? new MediaRecorder(
-          this.micStream,
-          { mimeType }
-        )
-
-        : new MediaRecorder(
-          this.micStream
-        );
-
-
-      recorder.ondataavailable = (e) => {
-
-        if (
-          e.data &&
-          e.data.size > 0
-        ) {
-
-          this.audioChunks.push(
-            e.data
-          );
-
-        }
-
-      };
-
-
-      recorder.onstop = async () => {
-
-        this.isRecording = false;
-
-
-        // Strict TTS guard
-        if (
-
-          this.isTutorSpeaking ||
-
-          Date.now() < this.ttsMutedUntil
-
-        ) {
-
-          this.log(
-            LogCategory.ECHO_REJECTED,
-            'Audio chunk discarded because TTS was active'
-          );
-
-
-          this.audioChunks = [];
-
-
-          return;
-
-        }
-
-
-        const audioBlob =
-          new Blob(
-            this.audioChunks,
+          ? new MediaRecorder(
+            this.micStream,
             {
-              type:
-                recorder.mimeType ||
-                'audio/webm'
+              mimeType
             }
+          )
+
+          : new MediaRecorder(
+            this.micStream
           );
 
 
-        this.audioChunks = [];
+      recorder.ondataavailable =
+        (event) => {
+
+          if (
+            event.data &&
+            event.data.size > 0
+          ) {
+
+            this.audioChunks.push(
+              event.data
+            );
+          }
+        };
 
 
-        const duration =
-          Date.now() -
-          this.recordingStartTime;
+      recorder.onstop =
+        async () => {
+
+          this.isRecording =
+            false;
 
 
-        this.log(
-          LogCategory.AUDIO_DURATION,
-          `Captured audio blob (${audioBlob.size}B, ${duration}ms)`
-        );
+          /*
+           * Never submit audio recorded
+           * during ARIA speech.
+           */
+
+          if (
+
+            this.isTutorSpeaking ||
+
+            Date.now() <
+            this.ttsMutedUntil
+
+          ) {
+
+            this.log(
+              LogCategory.ECHO_REJECTED,
+              'Discarding recording because ARIA is speaking'
+            );
 
 
-        if (
-          audioBlob.size < 2500 ||
-          duration < 600
-        ) {
+            this.audioChunks =
+              [];
+
+
+            return;
+          }
+
+
+          const audioBlob =
+            new Blob(
+              this.audioChunks,
+              {
+                type:
+                  recorder.mimeType ||
+                  'audio/webm'
+              }
+            );
+
+
+          this.audioChunks =
+            [];
+
+
+          const duration =
+            Date.now() -
+            this.recordingStartTime;
+
 
           this.log(
-            LogCategory.TRANSCRIPTION,
-            'Audio slice too short / noise-only. Resetting to active listening.'
+            LogCategory.AUDIO_DURATION,
+            `Audio captured: ${audioBlob.size} bytes / ${duration}ms`
           );
 
 
           if (
 
-            this.state === TutorState.ACTIVE_LISTENING ||
+            audioBlob.size <
+            2500 ||
 
-            this.state === TutorState.FOLLOW_UP_LISTENING
+            duration < 600
 
           ) {
 
-            this.resetFollowUpTimeout();
+            this.log(
+              LogCategory.TRANSCRIPTION,
+              'Audio too short; ignored'
+            );
 
+
+            if (
+
+              this.state ===
+              TutorState.ACTIVE_LISTENING ||
+
+              this.state ===
+              TutorState.FOLLOW_UP_LISTENING
+
+            ) {
+
+              this.resetFollowUpTimeout();
+
+            }
+
+
+            return;
           }
 
 
-          return;
+          if (
+            this.options.onAudioCaptured
+          ) {
 
-        }
-
-
-        if (
-          this.options.onAudioCaptured
-        ) {
-
-          this.setState(
-            TutorState.PROCESSING
-          );
+            this.setState(
+              TutorState.PROCESSING
+            );
 
 
-          this.options.onAudioCaptured(
-            audioBlob
-          );
+            try {
 
-        }
+              await this.options
+                .onAudioCaptured(
+                  audioBlob
+                );
 
-      };
+            } catch (error) {
+
+              console.error(
+                '[VOICE] onAudioCaptured failed:',
+                error
+              );
+
+
+              if (
+                this.state ===
+                TutorState.PROCESSING
+              ) {
+
+                this.setState(
+                  TutorState.FOLLOW_UP_LISTENING
+                );
+
+                this.resetFollowUpTimeout();
+              }
+
+            }
+          }
+
+        };
 
 
       recorder.start(250);
@@ -1243,7 +1488,8 @@ export class VoiceTutorManager {
         recorder;
 
 
-      this.isRecording = true;
+      this.isRecording =
+        true;
 
 
       this.recordingStartTime =
@@ -1254,58 +1500,55 @@ export class VoiceTutorManager {
         Date.now();
 
 
-    } catch (err) {
+    } catch (error) {
 
       console.error(
-        '[VOICE] Failed to start MediaRecorder:',
-        err
+        '[VOICE] MediaRecorder error:',
+        error
       );
 
 
-      this.isRecording = false;
-
+      this.isRecording =
+        false;
     }
-
   }
 
 
-  /**
-   * Stop user speech recording.
-   */
+  /* ==========================================================
+     STOP RECORDING
+  ========================================================== */
+
   stopMediaRecording() {
 
-    this.isRecording = false;
+    this.isRecording =
+      false;
 
 
     if (
       this.mediaRecorder &&
-      this.mediaRecorder.state === 'recording'
+      this.mediaRecorder.state ===
+      'recording'
     ) {
 
       try {
 
         this.mediaRecorder.stop();
 
-      } catch (e) {
+      } catch (error) {
 
         console.warn(
           '[VOICE] Error stopping recorder:',
-          e
+          error
         );
-
       }
-
     }
-
   }
 
 
-  /**
-   * Initializes lightweight browser SpeechRecognition
-   * solely for fast wake-phrase recognition.
-   *
-   * The language follows the selected teaching language.
-   */
+  /* ==========================================================
+     SPEECH RECOGNITION
+  ========================================================== */
+
   initSpeechRecognition() {
 
     const SpeechRec =
@@ -1317,18 +1560,19 @@ export class VoiceTutorManager {
 
       this.log(
         LogCategory.WAKE_DETECTION,
-        'Browser SpeechRecognition API not supported. Relying on VAD + Whisper backend.'
+        'SpeechRecognition unavailable. Wake detection requires Whisper/backend fallback.'
       );
 
 
       return;
-
     }
 
 
     try {
 
-      if (this.recognition) {
+      if (
+        this.recognition
+      ) {
 
         try {
 
@@ -1343,574 +1587,834 @@ export class VoiceTutorManager {
         new SpeechRec();
 
 
-      rec.continuous = true;
-
-      rec.interimResults = true;
-
-      rec.maxAlternatives = 5;
+      rec.continuous =
+        true;
 
 
-      // IMPORTANT:
-      // Uses current teaching language.
+      rec.interimResults =
+        true;
+
+
+      rec.maxAlternatives =
+        5;
+
+
       rec.lang =
         this.langCode ||
         'en-US';
 
 
-      rec.onstart = () => {
+      rec.onstart =
+        () => {
 
-        this.log(
-          LogCategory.WAKE_DETECTION,
-          `SpeechRecognition wake detector active (${rec.lang})`
-        );
-
-
-        this.isRestarting = false;
-
-      };
+          this.isRestarting =
+            false;
 
 
-      rec.onresult = (event) => {
-
-        if (!this.isMounted) {
-
-          return;
-
-        }
+          this.log(
+            LogCategory.WAKE_DETECTION,
+            `Wake listener active: ${rec.lang}`
+          );
+        };
 
 
-        const lastIdx =
-          event.results.length - 1;
+      rec.onresult =
+        (event) => {
+
+          if (
+            !this.isMounted
+          ) {
+
+            return;
+          }
 
 
-        const result =
-          event.results[lastIdx];
+          /*
+           * Process ALL new recognition results.
+           *
+           * This is important for:
+           *
+           * "Hey"
+           *
+           * followed by:
+           *
+           * "Aria"
+           */
+
+          for (
+            let i = event.resultIndex;
+            i < event.results.length;
+            i++
+          ) {
+
+            const result =
+              event.results[i];
 
 
-        if (
-          !result ||
-          !result[0]
-        ) {
+            if (
+              !result ||
+              !result[0]
+            ) {
 
-          return;
-
-        }
-
-
-        const transcript =
-          result[0]
-            .transcript
-            .trim();
+              continue;
+            }
 
 
-        if (!transcript) {
-
-          return;
-
-        }
-
-
-        const isFinal =
-          result.isFinal;
+            const transcript =
+              result[0]
+                .transcript
+                .trim();
 
 
-        this.log(
-          LogCategory.TRANSCRIPTION,
-          `ASR (${rec.lang})${isFinal ? ' final' : ' interim'}: "${transcript}"`
-        );
+            if (!transcript) {
+              continue;
+            }
 
 
-        this.handleTranscriptEvent(
-          transcript,
-          isFinal
-        );
-
-      };
+            const isFinal =
+              result.isFinal;
 
 
-      rec.onerror = (e) => {
+            this.log(
+              LogCategory.TRANSCRIPTION,
+              `Wake ASR ${isFinal ? 'FINAL' : 'INTERIM'} (${rec.lang}): "${transcript}"`
+            );
 
-        if (
-          e.error !== 'no-speech' &&
-          e.error !== 'aborted'
-        ) {
 
-          console.warn(
-            '[VOICE] SpeechRecognition notice:',
-            e.error
+            this.handleTranscriptEvent(
+              transcript,
+              isFinal
+            );
+          }
+        };
+
+
+      rec.onerror =
+        (event) => {
+
+          if (
+            event.error !==
+            'no-speech' &&
+
+            event.error !==
+            'aborted'
+          ) {
+
+            console.warn(
+              '[VOICE] SpeechRecognition:',
+              event.error
+            );
+          }
+
+
+          if (
+            this.isMounted &&
+            !this.isTutorSpeaking
+          ) {
+
+            if (
+              event.error ===
+              'network' ||
+
+              event.error ===
+              'service-not-allowed' ||
+
+              event.error ===
+              'audio-capture'
+            ) {
+
+              this.scheduleRestart();
+            }
+          }
+        };
+
+
+      rec.onend =
+        () => {
+
+          this.log(
+            LogCategory.WAKE_DETECTION,
+            `Wake listener ended | Lecture=${this.isLecturePlaying} | TutorSpeaking=${this.isTutorSpeaking}`
           );
 
-        }
 
-      };
+          /*
+           * Course playback is NOT a reason
+           * to stop wake recognition.
+           */
 
+          if (
 
-      rec.onend = () => {
+            this.isMounted &&
 
-        if (
+            !this.isTutorSpeaking &&
 
-          this.isMounted &&
+            Date.now() >=
+            this.ttsMutedUntil
 
-          !this.isRestarting &&
+          ) {
 
-          !this.isTutorSpeaking &&
-
-          Date.now() >=
-          this.ttsMutedUntil
-
-        ) {
-
-          this.scheduleRestart();
-
-        }
-
-      };
-
-
-      rec.start();
+            this.scheduleRestart();
+          }
+        };
 
 
       this.recognition =
         rec;
 
 
-    } catch (err) {
+      rec.start();
+
+
+    } catch (error) {
 
       console.warn(
-        '[VOICE] SpeechRecognition init notice:',
-        err
+        '[VOICE] SpeechRecognition initialization:',
+        error
       );
 
-    }
 
+      this.recognition =
+        null;
+
+
+      if (
+        this.isMounted
+      ) {
+
+        this.scheduleRestart();
+      }
+    }
   }
 
 
-  /**
-   * Restart browser SpeechRecognition.
-   */
+  /* ==========================================================
+     RESTART SPEECH RECOGNITION
+  ========================================================== */
+
+  restartSpeechRecognition(
+    force = false
+  ) {
+
+    if (
+      !this.isMounted
+    ) {
+
+      return;
+    }
+
+
+    if (
+      this.isRestarting &&
+      !force
+    ) {
+
+      return;
+    }
+
+
+    this.isRestarting =
+      true;
+
+
+    if (
+      this.restartTimer
+    ) {
+
+      clearTimeout(
+        this.restartTimer
+      );
+    }
+
+
+    if (
+      this.recognition
+    ) {
+
+      try {
+
+        this.recognition.onend =
+          null;
+
+        this.recognition.onerror =
+          null;
+
+        this.recognition.onresult =
+          null;
+
+        this.recognition.abort();
+
+      } catch (e) { }
+
+
+      this.recognition =
+        null;
+    }
+
+
+    this.restartTimer =
+      setTimeout(() => {
+
+        this.restartTimer =
+          null;
+
+
+        if (
+          !this.isMounted
+        ) {
+
+          this.isRestarting =
+            false;
+
+          return;
+        }
+
+
+        /*
+         * If ARIA is speaking,
+         * don't start recognition yet.
+         */
+
+        if (
+          this.isTutorSpeaking ||
+          Date.now() <
+          this.ttsMutedUntil
+        ) {
+
+          this.isRestarting =
+            false;
+
+          return;
+        }
+
+
+        try {
+
+          this.initSpeechRecognition();
+
+        } catch (error) {
+
+          console.warn(
+            '[VOICE] Recognition restart failed:',
+            error
+          );
+
+        }
+
+
+        this.isRestarting =
+          false;
+
+      }, force ? 100 : 250);
+  }
+
+
   scheduleRestart() {
 
-    if (!this.isMounted) {
+    if (
+      !this.isMounted
+    ) {
 
       return;
-
     }
 
 
-    if (this.isRestarting) {
+    if (
+      this.isRestarting
+    ) {
 
       return;
-
     }
 
 
-    this.isRestarting = true;
+    this.isRestarting =
+      true;
 
 
     setTimeout(() => {
 
       if (
-
-        !this.isMounted ||
-
-        this.isTutorSpeaking ||
-
-        Date.now() <
-        this.ttsMutedUntil
-
+        !this.isMounted
       ) {
 
-        this.isRestarting = false;
+        this.isRestarting =
+          false;
 
         return;
+      }
 
+
+      if (
+        this.isTutorSpeaking ||
+        Date.now() <
+        this.ttsMutedUntil
+      ) {
+
+        this.isRestarting =
+          false;
+
+        return;
       }
 
 
       try {
 
-        if (this.recognition) {
+        if (
+          this.recognition
+        ) {
 
-          this.recognition.start();
+          try {
 
-        } else if (this.isMounted) {
+            this.recognition.start();
+
+          } catch (error) {
+
+            if (
+              error?.name !==
+              'InvalidStateError'
+            ) {
+
+              this.initSpeechRecognition();
+
+            }
+
+          }
+
+        } else {
 
           this.initSpeechRecognition();
 
         }
 
-      } catch (err) {
+      } catch (error) {
 
-        if (this.isMounted) {
+        console.warn(
+          '[VOICE] Recognition restart failed:',
+          error
+        );
 
-          try {
-
-            this.initSpeechRecognition();
-
-          } catch (e) { }
-
-        }
+        this.recognition =
+          null;
 
       }
 
 
-      this.isRestarting = false;
+      this.isRestarting =
+        false;
 
-    }, 150);
-
+    }, 200);
   }
 
 
-  /**
-   * Handle every browser SpeechRecognition transcript.
-   */
-  handleTranscriptEvent(
-    transcript,
-    isFinal
-  ) {
-
-    // ============================================================
-    // 1. STRICT TTS / PROCESSING GATING
-    // ============================================================
-
-    if (
-
-      this.isTutorSpeaking ||
-
-      Date.now() <
-      this.ttsMutedUntil ||
-
-      this.state === TutorState.ARIA_GREETING ||
-
-      this.state === TutorState.ARIA_SPEAKING ||
-
-      this.state === TutorState.PROCESSING
-
-    ) {
-
-      this.log(
-        LogCategory.ECHO_REJECTED,
-        `Rejected transcript during speaking/cooldown/processing: "${transcript}"`
-      );
-
-
+  /* ==========================================================
+     HANDLE TRANSCRIPT
+  ========================================================== */
+  handleTranscriptEvent(transcript, isFinal) {
+    if (!transcript) {
       return;
-
     }
 
+    const text = transcript.trim();
 
-    // ============================================================
-    // 2. SELF-ECHO REJECTION
-    // ============================================================
-
-    if (
-      this.isTranscriptSelfEcho(
-        transcript
-      )
-    ) {
-
-      this.log(
-        LogCategory.ECHO_REJECTED,
-        `Rejected self-echo matching ARIA utterance: "${transcript}"`
-      );
-
-
+    if (!text) {
       return;
-
     }
 
+    this.log(
+      LogCategory.TRANSCRIPTION,
+      `Heard: "${text}" | State: ${this.state} | Lecture: ${this.isLecturePlaying}`
+    );
 
-    // ============================================================
-    // 3. SLEEPING = WAKE WORD ONLY
-    // ============================================================
+    /*
+     * ==========================================================
+     * COURSE PLAYING / SLEEPING
+     *
+     * Siri-style interruption mode.
+     *
+     * While course is teaching:
+     * - microphone remains ON
+     * - SpeechRecognition remains ON
+     * - normal speech is ignored
+     * - only multilingual ARIA wake words are accepted
+     * ==========================================================
+     */
+
+    if (
+      this.isLecturePlaying &&
+      this.state === TutorState.SLEEPING
+    ) {
+      if (containsWakeWord(text)) {
+        this.log(
+          LogCategory.WAKE_MATCH,
+          `🔥 COURSE INTERRUPTION WAKE (${this.langCode}): "${text}"`
+        );
+
+        this.triggerWakeSequence(text);
+      }
+
+      return;
+    }
+
+    /*
+     * Normal sleeping mode.
+     *
+     * Course is NOT playing.
+     *
+     * Still listen for wake word.
+     */
 
     if (
       this.state === TutorState.SLEEPING
     ) {
-
-      if (
-        containsWakeWord(
-          transcript
-        )
-      ) {
-
+      if (containsWakeWord(text)) {
         this.log(
           LogCategory.WAKE_MATCH,
-          `Wake phrase detected (${this.langCode}): "${transcript}"`
+          `🔥 WAKE DETECTED (${this.langCode}): "${text}"`
         );
 
-
-        this.triggerWakeSequence(
-          transcript
-        );
-
+        this.triggerWakeSequence(text);
       }
 
-
-      // Never process normal speech while sleeping.
       return;
-
     }
 
-
-    // ============================================================
-    // 4. ACTIVE / FOLLOW-UP LISTENING
-    // ============================================================
+    /*
+     * ==========================================================
+     * ARIA GREETING / SPEAKING / PROCESSING
+     * ==========================================================
+     */
 
     if (
-
-      this.state === TutorState.ACTIVE_LISTENING ||
-
-      this.state === TutorState.FOLLOW_UP_LISTENING
-
+      this.isTutorSpeaking ||
+      Date.now() < this.ttsMutedUntil ||
+      this.state === TutorState.ARIA_GREETING ||
+      this.state === TutorState.ARIA_SPEAKING ||
+      this.state === TutorState.PROCESSING
     ) {
+      this.log(
+        LogCategory.ECHO_REJECTED,
+        `Ignoring while ARIA is speaking/processing: "${text}"`
+      );
 
-      if (isFinal) {
-
-        const clean =
-          extractQuestionFromWakeWord(
-            transcript
-          );
-
-
-        const finalQuestion =
-          clean ||
-          transcript;
-
-
-        if (
-
-          finalQuestion &&
-
-          finalQuestion.length >= 2 &&
-
-          !isNoiseOrHallucination(
-            finalQuestion
-          ) &&
-
-          !this.isTranscriptSelfEcho(
-            finalQuestion
-          )
-
-        ) {
-
-          this.log(
-            LogCategory.TRANSCRIPTION,
-            `User question captured: "${finalQuestion}"`
-          );
-
-
-          this.processUserQuestion(
-            finalQuestion
-          );
-
-        }
-
-      }
-
+      return;
     }
 
+    /*
+     * ==========================================================
+     * SELF ECHO
+     * ==========================================================
+     */
+
+    if (
+      this.isTranscriptSelfEcho(text)
+    ) {
+      this.log(
+        LogCategory.ECHO_REJECTED,
+        `Self echo rejected: "${text}"`
+      );
+
+      return;
+    }
+
+    /*
+     * ==========================================================
+     * ACTIVE / FOLLOW-UP LISTENING
+     * ==========================================================
+     */
+
+    if (
+      this.state === TutorState.ACTIVE_LISTENING ||
+      this.state === TutorState.FOLLOW_UP_LISTENING
+    ) {
+      if (!isFinal) {
+        return;
+      }
+
+      const clean =
+        extractQuestionFromWakeWord(text);
+
+      const question =
+        clean || text;
+
+      if (!question) {
+        return;
+      }
+
+      if (question.length < 2) {
+        return;
+      }
+
+      if (
+        isNoiseOrHallucination(question)
+      ) {
+        return;
+      }
+
+      if (
+        this.isTranscriptSelfEcho(question)
+      ) {
+        return;
+      }
+
+      this.log(
+        LogCategory.TRANSCRIPTION,
+        `User question: "${question}"`
+      );
+
+      this.processUserQuestion(
+        question
+      );
+    }
   }
 
 
-  /**
-   * Compares transcript against recent ARIA utterances
-   * and known greeting patterns.
-   */
+  /* ==========================================================
+     SELF ECHO
+  ========================================================== */
+
   isTranscriptSelfEcho(
     transcript
   ) {
 
     if (!transcript) {
-
       return false;
-
     }
 
 
-    const cleanTrans =
+    const normalized =
       normalizeTranscript(
         transcript
       );
 
 
     if (
-      !cleanTrans ||
-      cleanTrans.length < 2
+      !normalized ||
+      normalized.length < 2
     ) {
 
       return true;
-
     }
 
 
-    // Known acknowledgment patterns
+    /*
+     * Known ARIA phrases.
+     */
+
     if (
       KNOWN_SELF_ECHO_PATTERNS.some(
-        (p) =>
-          p.test(transcript) ||
-          p.test(cleanTrans)
+        (pattern) =>
+          pattern.test(
+            normalized
+          )
       )
     ) {
 
       return true;
-
     }
 
 
-    // Generic acknowledgment words
+    /*
+     * Generic short acknowledgements.
+     */
+
     if (
 
-      cleanTrans === 'yes' ||
+      normalized === 'yes' ||
 
-      cleanTrans === 'yeah' ||
+      normalized === 'yeah' ||
 
-      cleanTrans === 'listening' ||
+      normalized === 'ok' ||
 
-      cleanTrans === 'im listening' ||
+      normalized === 'okay' ||
 
-      cleanTrans === 'i am listening' ||
+      normalized === 'listening' ||
 
-      cleanTrans === 'tell me' ||
+      normalized === 'im listening' ||
 
-      cleanTrans === 'yes tell me'
+      normalized === 'i am listening' ||
+
+      normalized === 'tell me' ||
+
+      normalized === 'yes tell me'
 
     ) {
 
       return true;
-
     }
 
 
-    // Compare with recent ARIA utterances.
+    /*
+     * Compare with recent ARIA speech.
+     */
+
     for (
       const phrase of
       this.recentAriaUtterances
     ) {
 
-      const cleanPhrase =
+      const normalizedPhrase =
         normalizeTranscript(
           phrase
         );
 
 
-      if (!cleanPhrase) {
+      if (
+        !normalizedPhrase
+      ) {
 
         continue;
-
       }
 
 
       if (
 
-        cleanPhrase.includes(
-          cleanTrans
+        normalizedPhrase.includes(
+          normalized
         ) ||
 
-        cleanTrans.includes(
-          cleanPhrase
+        normalized.includes(
+          normalizedPhrase
         )
 
       ) {
 
         return true;
-
       }
 
 
       const phraseWords =
-        cleanPhrase
-          .split(' ')
+        normalizedPhrase
+          .split(/\s+/)
           .filter(
-            (w) => w.length > 2
+            (word) =>
+              word.length > 2
           );
 
 
-      const transWords =
-        cleanTrans
-          .split(' ')
+      const transcriptWords =
+        normalized
+          .split(/\s+/)
           .filter(
-            (w) => w.length > 2
+            (word) =>
+              word.length > 2
           );
 
 
       if (
-
-        transWords.length > 0 &&
-
-        transWords.every(
-          (w) =>
-            phraseWords.includes(w)
+        transcriptWords.length > 0 &&
+        transcriptWords.every(
+          (word) =>
+            phraseWords.includes(
+              word
+            )
         )
-
       ) {
 
         return true;
-
       }
-
     }
 
 
     return false;
-
   }
 
 
-  /**
-   * Trigger wake sequence:
-   *
-   * SLEEPING
-   *    ->
-   * WAKE_DETECTED
-   */
-  triggerWakeSequence(
-    wakeTranscript
-  ) {
+  /* ==========================================================
+     WAKE SEQUENCE
+  ========================================================== */
 
+  triggerWakeSequence(wakeTranscript) {
+    /*
+     * Prevent duplicate wake triggers.
+     */
+    if (
+      this.state === TutorState.WAKE_DETECTED ||
+      this.state === TutorState.ARIA_GREETING ||
+      this.state === TutorState.ACTIVE_LISTENING ||
+      this.state === TutorState.PROCESSING ||
+      this.state === TutorState.ARIA_SPEAKING
+    ) {
+      return;
+    }
+
+    this.log(
+      LogCategory.WAKE_MATCH,
+      `Wake sequence started (${this.langCode}): "${wakeTranscript}"`
+    );
+
+    /*
+     * ----------------------------------------------------------
+     * IMPORTANT
+     *
+     * SLEEPING + lecture playing is VALID.
+     *
+     * This is the Siri-style interruption mode.
+     *
+     * We must NOT return here.
+     * ----------------------------------------------------------
+     */
+
+    const wasLecturePlaying = this.isLecturePlaying;
+
+    /*
+     * Tell React/CoursePlayer immediately.
+     *
+     * CoursePlayer will:
+     * - save exact position
+     * - cancel course TTS
+     * - pause playing
+     * - show ARIA greeting
+     */
     this.setState(
       TutorState.WAKE_DETECTED
     );
 
-
+    /*
+     * Stop any stale question recording.
+     */
+    this.stopMediaRecording();
     this.clearBuffers();
-
 
     this.clearFollowUpTimeout();
 
-
-    // Stop current recognition immediately.
-    if (this.recognition) {
-
+    /*
+     * Notify CoursePlayer.
+     */
+    if (this.options.onWakeWordDetected) {
       try {
+        this.options.onWakeWordDetected(
+          wakeTranscript,
+          {
+            lectureInterrupted: wasLecturePlaying,
+            language: this.langCode
+          }
+        );
+      } catch (error) {
+        console.error(
+          '[VOICE] Wake callback failed:',
+          error
+        );
 
-        this.recognition.abort();
-
-      } catch (e) { }
-
+        this.setState(
+          TutorState.ACTIVE_LISTENING
+        );
+      }
     }
-
-
-    if (
-      this.options.onWakeWordDetected
-    ) {
-
-      this.options.onWakeWordDetected(
-        wakeTranscript
-      );
-
-    }
-
   }
 
 
-  /**
-   * Process finalized user question.
-   */
+  /* ==========================================================
+     USER QUESTION
+  ========================================================== */
+
   processUserQuestion(
     questionText
   ) {
+
+    if (!questionText) {
+      return;
+    }
+
 
     const normalized =
       normalizeTranscript(
@@ -1922,31 +2426,33 @@ export class VoiceTutorManager {
       Date.now();
 
 
-    // Guard against self echo.
-    if (
+    /*
+     * Echo/noise protection.
+     */
 
+    if (
       this.isTranscriptSelfEcho(
         questionText
       ) ||
-
       isNoiseOrHallucination(
         questionText
       )
-
     ) {
 
       this.log(
         LogCategory.ECHO_REJECTED,
-        `Dropped question as self-echo/noise: "${questionText}"`
+        `Question rejected: "${questionText}"`
       );
 
 
       return;
-
     }
 
 
-    // Deduplicate within 2.5 seconds.
+    /*
+     * Duplicate protection.
+     */
+
     if (
 
       this.lastProcessedText ===
@@ -1959,7 +2465,6 @@ export class VoiceTutorManager {
     ) {
 
       return;
-
     }
 
 
@@ -1983,25 +2488,42 @@ export class VoiceTutorManager {
       this.options.onQuestionReady
     ) {
 
-      this.options.onQuestionReady(
-        questionText
-      );
+      try {
 
+        this.options.onQuestionReady(
+          questionText
+        );
+
+      } catch (error) {
+
+        console.error(
+          '[VOICE] Question callback failed:',
+          error
+        );
+
+
+        this.setState(
+          TutorState.FOLLOW_UP_LISTENING
+        );
+
+
+        this.resetFollowUpTimeout();
+      }
     }
-
   }
 
 
-  /**
-   * Set ARIA speaking state.
-   */
+  /* ==========================================================
+     ARIA SPEAKING
+  ========================================================== */
+
   setTutorSpeaking(
     speaking,
     spokenText = ''
   ) {
 
     this.isTutorSpeaking =
-      speaking;
+      Boolean(speaking);
 
 
     if (speaking) {
@@ -2014,34 +2536,50 @@ export class VoiceTutorManager {
           this.cooldownTimeoutId
         );
 
-
         this.cooldownTimeoutId =
           null;
-
       }
 
 
       this.clearFollowUpTimeout();
 
-
       this.clearBuffers();
 
 
-      // Pause browser recognition
-      // while ARIA is speaking.
-      if (this.recognition) {
+      /*
+       * STOP wake recognition while ARIA is answering.
+       *
+       * This protects against ARIA echo.
+       *
+       * IMPORTANT:
+       *
+       * Course lecture should use setLecturePlaying()
+       * and should NOT use setTutorSpeaking() as its
+       * wake-listener gate.
+       */
+
+      if (
+        this.recognition
+      ) {
 
         try {
+
+          this.recognition.onend =
+            null;
 
           this.recognition.abort();
 
         } catch (e) { }
-
       }
 
 
-      // Store TTS text for echo rejection.
-      if (spokenText) {
+      /*
+       * Store ARIA speech for echo protection.
+       */
+
+      if (
+        spokenText
+      ) {
 
         this.recentAriaUtterances.push(
           spokenText
@@ -2049,37 +2587,42 @@ export class VoiceTutorManager {
 
 
         if (
-          this.recentAriaUtterances.length > 8
+          this.recentAriaUtterances.length >
+          10
         ) {
 
           this.recentAriaUtterances.shift();
 
         }
-
       }
 
 
-      // Mute until TTS finishes.
       this.ttsMutedUntil =
-        Date.now() + 60000;
+        Date.now() +
+        60000;
 
 
       this.log(
         LogCategory.TTS_START,
-        'ARIA speaking started. Mic recognition aborted & 100% gated.'
+        'ARIA speaking: microphone gated'
       );
+
 
     } else {
 
+      /*
+       * TTS finished.
+       */
+
       this.log(
         LogCategory.TTS_END,
-        'ARIA speaking ended. Entering 1000ms acoustic cooldown.'
+        'ARIA speaking ended'
       );
 
 
-      // 1000ms acoustic cooldown.
       this.ttsMutedUntil =
-        Date.now() + 1000;
+        Date.now() +
+        1000;
 
 
       this.clearBuffers();
@@ -2092,7 +2635,6 @@ export class VoiceTutorManager {
         clearTimeout(
           this.cooldownTimeoutId
         );
-
       }
 
 
@@ -2102,68 +2644,60 @@ export class VoiceTutorManager {
           this.clearBuffers();
 
 
-          const nextState =
+          /*
+           * Greeting finished.
+           */
+
+          if (
             this.state ===
-              TutorState.ARIA_GREETING
+            TutorState.ARIA_GREETING
+          ) {
 
-              ? TutorState.ACTIVE_LISTENING
+            this.setState(
+              TutorState.ACTIVE_LISTENING
+            );
 
-              : TutorState.FOLLOW_UP_LISTENING;
+          }
 
+          /*
+           * Answer finished.
+           */
 
-          this.setState(
-            nextState
-          );
+          else {
+
+            this.setState(
+              TutorState.FOLLOW_UP_LISTENING
+            );
+          }
 
 
           this.resetFollowUpTimeout();
 
 
-          // Fresh SpeechRecognition restart.
+          /*
+           * Recreate recognition after ARIA speech.
+           */
+
           if (
-
             this.isMounted &&
-
             !this.isTutorSpeaking
-
           ) {
 
-            try {
-
-              if (
-                this.recognition
-              ) {
-
-                this.recognition.start();
-
-              } else {
-
-                this.initSpeechRecognition();
-
-              }
-
-            } catch (e) {
-
-              try {
-
-                this.initSpeechRecognition();
-
-              } catch (err) { }
-
-            }
+            this.restartSpeechRecognition(
+              true
+            );
 
           }
 
         }, 1000);
-
     }
-
   }
 
 
-  /**
-   * Follow-up conversational window.
-   */
+  /* ==========================================================
+     FOLLOW-UP TIMER
+  ========================================================== */
+
   resetFollowUpTimeout() {
 
     this.clearFollowUpTimeout();
@@ -2183,7 +2717,7 @@ export class VoiceTutorManager {
 
           this.log(
             LogCategory.RETURN_TO_SLEEP,
-            'Follow-up listening timeout. Returning to SLEEPING.'
+            'Follow-up timeout'
           );
 
 
@@ -2204,22 +2738,34 @@ export class VoiceTutorManager {
               );
 
 
+              /*
+               * CoursePlayer receives this callback
+               * and resumes the saved course position.
+               */
+
               if (
                 this.options.onReturnToSleep
               ) {
 
-                this.options.onReturnToSleep();
+                try {
 
+                  this.options.onReturnToSleep();
+
+                } catch (error) {
+
+                  console.error(
+                    '[VOICE] onReturnToSleep failed:',
+                    error
+                  );
+
+                }
               }
-
             }
 
           }, 300);
-
         }
 
       }, this.options.followUpTimeoutMs);
-
   }
 
 
@@ -2236,33 +2782,34 @@ export class VoiceTutorManager {
 
       this.followUpTimeoutId =
         null;
-
     }
-
   }
 
 
-  /**
-   * Clear audio buffers.
-   */
+  /* ==========================================================
+     CLEAR AUDIO
+  ========================================================== */
+
   clearBuffers() {
 
-    this.audioChunks = [];
+    this.audioChunks =
+      [];
 
-    this.speechFramesCount = 0;
+    this.speechFramesCount =
+      0;
 
-    this.lastSpeechTime = 0;
-
+    this.lastSpeechTime =
+      0;
   }
 
 
-  /**
-   * Explicitly return to sleeping.
-   */
+  /* ==========================================================
+     RETURN TO SLEEP
+  ========================================================== */
+
   returnToSleep() {
 
     this.clearFollowUpTimeout();
-
 
     this.clearBuffers();
 
@@ -2274,33 +2821,72 @@ export class VoiceTutorManager {
 
     setTimeout(() => {
 
-      this.setState(
-        TutorState.SLEEPING
-      );
+      if (
+        this.state ===
+        TutorState.RETURN_TO_SLEEP
+      ) {
+
+        this.setState(
+          TutorState.SLEEPING
+        );
+
+
+        if (
+          this.options.onReturnToSleep
+        ) {
+
+          try {
+
+            this.options.onReturnToSleep();
+
+          } catch (error) {
+
+            console.error(
+              '[VOICE] Return-to-sleep callback failed:',
+              error
+            );
+
+          }
+        }
+      }
 
     }, 200);
-
   }
 
 
-  /**
-   * Destroy all voice resources.
-   */
+  /* ==========================================================
+     DESTROY
+  ========================================================== */
+
   destroy() {
 
     this.log(
       LogCategory.VOICE_STATE,
-      'Releasing voice manager resources...'
+      'Destroying VoiceTutorManager'
     );
 
 
-    this.isMounted = false;
+    this.isMounted =
+      false;
 
 
     this.stateListeners.clear();
 
 
     this.clearFollowUpTimeout();
+
+
+    if (
+      this.restartTimer
+    ) {
+
+      clearTimeout(
+        this.restartTimer
+      );
+
+      this.restartTimer =
+        null;
+    }
 
 
     if (
@@ -2311,37 +2897,41 @@ export class VoiceTutorManager {
         this.cooldownTimeoutId
       );
 
-
       this.cooldownTimeoutId =
         null;
-
     }
 
 
-    if (this.vadInterval) {
+    if (
+      this.vadInterval
+    ) {
 
       clearInterval(
         this.vadInterval
       );
 
-
       this.vadInterval =
         null;
-
     }
 
 
-    if (this.recognition) {
+    /*
+     * Destroy SpeechRecognition.
+     */
+
+    if (
+      this.recognition
+    ) {
 
       try {
 
         this.recognition.onend =
           null;
 
-        this.recognition.onresult =
+        this.recognition.onerror =
           null;
 
-        this.recognition.onerror =
+        this.recognition.onresult =
           null;
 
         this.recognition.abort();
@@ -2358,13 +2948,17 @@ export class VoiceTutorManager {
 
       this.recognition =
         null;
-
     }
 
 
+    /*
+     * Destroy MediaRecorder.
+     */
+
     if (
       this.mediaRecorder &&
-      this.mediaRecorder.state !== 'inactive'
+      this.mediaRecorder.state !==
+      'inactive'
     ) {
 
       try {
@@ -2372,15 +2966,20 @@ export class VoiceTutorManager {
         this.mediaRecorder.stop();
 
       } catch (e) { }
-
-
-      this.mediaRecorder =
-        null;
-
     }
 
 
-    if (this.audioContext) {
+    this.mediaRecorder =
+      null;
+
+
+    /*
+     * Destroy AudioContext.
+     */
+
+    if (
+      this.audioContext
+    ) {
 
       try {
 
@@ -2391,18 +2990,24 @@ export class VoiceTutorManager {
 
       this.audioContext =
         null;
-
     }
 
 
-    if (this.micStream) {
+    /*
+     * Stop microphone tracks.
+     */
+
+    if (
+      this.micStream
+    ) {
 
       try {
 
         this.micStream
           .getTracks()
           .forEach(
-            (t) => t.stop()
+            (track) =>
+              track.stop()
           );
 
       } catch (e) { }
@@ -2410,16 +3015,13 @@ export class VoiceTutorManager {
 
       this.micStream =
         null;
-
     }
 
 
     this.setState(
       TutorState.SLEEPING
     );
-
   }
-
 }
 
 
