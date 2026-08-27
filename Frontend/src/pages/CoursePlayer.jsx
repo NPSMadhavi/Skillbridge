@@ -658,11 +658,19 @@ const CoursePlayer = ({
   }
 
   const ACKNOWLEDGMENTS = {
-    en: "Yes? Tell me. I'm listening.",
+    en: "Yes, I'm listening.",
     zh: "我在听，请问有什么可以帮您？",
-    ms: "Ya? Saya mendengar. Sila beritahu saya.",
-    ta: "சொல்லுங்கள், நான் கேட்கிறேன்!",
-    bn: "হ্যাঁ? বলুন, আমি শুনছি।"
+    ms: "Ya, saya mendengar.",
+    ta: "சொல்லுங்கள், நான் கேட்கிறேன்.",
+    bn: "হ্যাঁ, বলুন আমি শুনছি।"
+  }
+
+  const RESUME_COURSE_PHRASES = {
+    en: "Continuing to the course.",
+    zh: "正在继续课程。",
+    ms: "Menyambung semula kursus.",
+    ta: "பாடத்தைத் தொடர்கிறேன்.",
+    bn: "কোর্সে ফিরে যাচ্ছি।"
   }
 
   const speakAriaAnswer = (text, onEndCallback) => {
@@ -693,7 +701,7 @@ const CoursePlayer = ({
       const utterance = new SpeechSynthesisUtterance(cleanText)
       utterance.lang = speechRecognitionLang
       const voices = window.speechSynthesis.getVoices()
-      const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode)
+      const matchedVoice = selectVoiceForLanguage(voices, selectedLanguageCode)
       if (matchedVoice) utterance.voice = matchedVoice
       utterance.rate = 0.95
       utterance.pitch = 1.05
@@ -716,7 +724,10 @@ const CoursePlayer = ({
       }
 
       utterance.onend = finishTTS
-      utterance.onerror = finishTTS
+      utterance.onerror = (err) => {
+        console.warn('[VOICE] Speech utterance error:', err)
+        finishTTS()
+      }
 
       // Keep Chrome TTS alive during playback
       if (window._skillbridgeResumeInterval) clearInterval(window._skillbridgeResumeInterval)
@@ -737,7 +748,14 @@ const CoursePlayer = ({
         }
       }, safetyTimeoutMs)
 
-      window.speechSynthesis.speak(utterance)
+      setTimeout(() => {
+        try {
+          window.speechSynthesis.speak(utterance)
+        } catch (speakErr) {
+          console.warn('[VOICE] Speech synthesis speak error:', speakErr)
+          finishTTS()
+        }
+      }, 60)
     } catch (e) {
       console.warn('[VOICE] Speech synthesis failed:', e)
       setIsAriaSpeaking(false)
@@ -748,7 +766,7 @@ const CoursePlayer = ({
   }
 
   const interruptLectureAndWake = () => {
-    console.log('[VOICE:INTERRUPT] Wake command detected');
+    console.log('[VOICE:INTERRUPT] Wake command detected - interrupting lecture and greeting');
 
     // ==========================================================
     // SAVE COURSE POSITION + STOP COURSE
@@ -756,60 +774,38 @@ const CoursePlayer = ({
 
     if (playingRef.current) {
       wasLecturePlayingRef.current = true;
+      savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      console.log(`[VOICE:INTERRUPT] Pausing course at Concept ${currentSentenceIdxRef.current + 1}`);
 
-      savedLecturePositionRef.current =
-        currentSentenceIdxRef.current;
-
-      console.log(
-        `[VOICE:INTERRUPT] Pausing course at Concept ${currentSentenceIdxRef.current + 1
-        }`
-      );
-
-      // Immediately stop browser TTS.
-      try {
-        window.speechSynthesis.cancel();
-      } catch (e) { }
-
-      // Pause course.
+      // Pause course
       setPlaying(false);
-
-      // Tell voice manager course is no longer actively speaking.
       voiceManagerRef.current?.setLecturePlaying(false);
-    }
-
-    // ==========================================================
-    // INTERRUPT ARIA ANSWER
-    // ==========================================================
-
-    else if (isAriaSpeakingRef.current) {
-      console.log(
-        '[VOICE:INTERRUPT] User interrupted ARIA answer'
-      );
-
-      try {
-        window.speechSynthesis.cancel();
-      } catch (e) { }
-
+    } else if (isAriaSpeakingRef.current) {
+      console.log('[VOICE:INTERRUPT] User interrupted ARIA answer');
       setIsAriaSpeaking(false);
-
       isAriaSpeakingRef.current = false;
     }
 
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+    } catch (e) { }
+
     // ==========================================================
-    // ENTER GREETING
+    // ENTER GREETING & SPEAK "Yes, I'm listening."
     // ==========================================================
 
     voiceManagerRef.current?.setState(
       TutorState.ARIA_GREETING
     );
 
-    setVoiceStatusText(
-      '👋 ARIA: "Yes? Tell me. I\'m listening."'
-    );
-
     const ack =
       ACKNOWLEDGMENTS[selectedLanguageCode] ||
       ACKNOWLEDGMENTS.en;
+
+    setVoiceStatusText(
+      `👋 ARIA: "${ack}"`
+    );
 
     speakAriaAnswer(
       ack,
@@ -832,11 +828,13 @@ const CoursePlayer = ({
     const selfEchoPhrases = [
       'yes tell me im listening', 'yes tell me i am listening', 'yes tell me',
       'im listening', 'i am listening', 'tell me', 'listening', 'yes', 'yeah',
+      'yes im listening', 'yes i am listening',
+      'continuing to the course', 'continuing to course', 'resuming course', 'resuming lecture',
       'hello i am aria', 'i am aria', 'i am aria your personal ai tutor',
-      '我在听', '请问有什么可以帮您', '我在听请问', '请问',
-      'ya saya mendengar', 'sila beritahu saya', 'saya mendengar',
-      'சொல்லுங்கள் நான் கேட்கிறேன்', 'நான் கேட்கிறேன்', 'சொல்லுங்கள்',
-      'বলুন আমি শুনছি', 'আমি শুনছি', 'হ্যাঁ বলুন'
+      '我在听', '请问有什么可以帮您', '我在听请问', '请问', '正在继续课程',
+      'ya saya mendengar', 'sila beritahu saya', 'saya mendengar', 'menyambung semula kursus',
+      'சொல்லுங்கள் நான் கேட்கிறேன்', 'நான் கேட்கிறேன்', 'சொல்லுங்கள்', 'பாடத்தைத் தொடர்கிறேன்',
+      'বলুন আমি শুনছি', 'আমি শুনছি', 'হ্যাঁ বলুন', 'কোর্সে ফিরে যাচ্ছি'
     ]
     if (selfEchoPhrases.some(e => norm === e || (norm.length < 25 && (norm.includes(e) || e.includes(norm))))) {
       console.log(`[VOICE:ECHO_REJECTED] Ignored self-greeting echo in handleVoiceQuestion: "${rawSpeech}"`)
@@ -847,8 +845,12 @@ const CoursePlayer = ({
 
     // Voice navigation commands
     if (lower === 'resume' || lower === 'continue' || lower === 'play' || lower === 'carry on' || lower === 'back to lecture') {
-      resumeLectureFromExactPosition()
-      voiceManagerRef.current?.returnToSleep()
+      const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en
+      setVoiceStatusText(`▶️ ${resumePhrase}`)
+      speakAriaAnswer(resumePhrase, () => {
+        resumeLectureFromExactPosition()
+        voiceManagerRef.current?.returnToSleep()
+      })
       return
     }
     if (lower === 'pause' || lower === 'pause lecture' || lower === 'stop' || lower === 'never mind' || lower === 'goodbye' || lower === 'bye') {
@@ -915,6 +917,17 @@ const CoursePlayer = ({
       // Speak ARIA answer with 100% microphone suppression and echo recording
       speakAriaAnswer(ariaAnswer, () => {
         isAnsweringRef.current = false
+        if (wasLecturePlayingRef.current) {
+          console.log('[VOICE] ARIA answer complete. Speaking continuation notice and resuming course...')
+          const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en
+          setVoiceStatusText(`▶️ ${resumePhrase}`)
+          setTimeout(() => {
+            speakAriaAnswer(resumePhrase, () => {
+              resumeLectureFromExactPosition()
+              voiceManagerRef.current?.returnToSleep()
+            })
+          }, 400)
+        }
       })
     } catch (err) {
       console.error('[VOICE] ARIA AI Tutor chat error:', err)
@@ -922,10 +935,16 @@ const CoursePlayer = ({
       isAnsweringRef.current = false
       setTimeout(() => {
         if (wasLecturePlayingRef.current) {
-          resumeLectureFromExactPosition()
+          const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en
+          setVoiceStatusText(`▶️ ${resumePhrase}`)
+          speakAriaAnswer(resumePhrase, () => {
+            resumeLectureFromExactPosition()
+            voiceManagerRef.current?.returnToSleep()
+          })
+        } else {
+          voiceManagerRef.current?.returnToSleep()
         }
-        voiceManagerRef.current?.returnToSleep()
-      }, 1500)
+      }, 1000)
     } finally {
       setChatLoading(false)
     }
@@ -952,26 +971,49 @@ const CoursePlayer = ({
         console.log(`[VOICE:WAKE_MATCH] Wake phrase received: "${wakePhrase}". Transitioning to greeting...`)
         interruptLectureAndWake()
       },
-      onAudioCaptured: async (audioBlob) => {
+      onAudioCaptured: async (audioBlob, context = {}) => {
         if (isTranscribingRef.current) return
         isTranscribingRef.current = true
         try {
-          console.log(`[VOICE:TRANSCRIPTION] Transcribing user audio with faster-whisper (${selectedLanguageCode}, size: ${audioBlob.size}B)...`)
+          const isWakeDetection = context.isWakeDetection || manager.state === TutorState.SLEEPING
+          console.log(`[VOICE:TRANSCRIPTION] Transcribing user audio with faster-whisper (${selectedLanguageCode}, size: ${audioBlob.size}B, isWakeDetection: ${isWakeDetection})...`)
           const res = await api.transcribeSpeech(audioBlob, selectedLanguageCode)
           const transcription = (res?.text || '').trim()
           console.log(`[VOICE:TRANSCRIPTION] Result: "${transcription}"`)
 
           if (!transcription || isNoiseOrHallucination(transcription) || transcription.length < 2) {
-            manager.setState(TutorState.FOLLOW_UP_LISTENING)
-            manager.resetFollowUpTimeout()
+            if (!isWakeDetection && manager.state !== TutorState.SLEEPING) {
+              manager.setState(TutorState.FOLLOW_UP_LISTENING)
+              manager.resetFollowUpTimeout()
+            }
+            return
+          }
+
+          if (isWakeDetection) {
+            if (containsWakeWord(transcription)) {
+              console.log(`[VOICE:WAKE_MATCH] Whisper wake word detected: "${transcription}". Interrupting course lecture...`)
+              interruptLectureAndWake()
+
+              const cleanQuestion = extractQuestionFromWakeWord(transcription)
+              if (cleanQuestion && cleanQuestion.length >= 2 && !isNoiseOrHallucination(cleanQuestion)) {
+                console.log(`[VOICE] Wake phrase included question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
+                setTimeout(() => {
+                  handleVoiceQuestion(cleanQuestion)
+                }, 1600)
+              }
+            } else {
+              console.log(`[VOICE:WAKE_IGNORE] No wake word in audio: "${transcription}". Staying in SLEEPING.`)
+            }
             return
           }
 
           handleVoiceQuestion(transcription)
         } catch (err) {
           console.error('[VOICE] Whisper transcription failed:', err)
-          manager.setState(TutorState.FOLLOW_UP_LISTENING)
-          manager.resetFollowUpTimeout()
+          if (manager.state !== TutorState.SLEEPING) {
+            manager.setState(TutorState.FOLLOW_UP_LISTENING)
+            manager.resetFollowUpTimeout()
+          }
         } finally {
           isTranscribingRef.current = false
         }
@@ -983,10 +1025,11 @@ const CoursePlayer = ({
         console.log('[VOICE:RETURN_TO_SLEEP] Conversational window ended. Returning to SLEEPING.')
         if (wasLecturePlayingRef.current) {
           console.log(`[VOICE] Auto-resuming course lecture from Concept ${savedLecturePositionRef.current + 1}...`)
-          setVoiceStatusText(`▶️ Resuming course lecture from Concept ${savedLecturePositionRef.current + 1}...`)
-          setTimeout(() => {
+          const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en
+          setVoiceStatusText(`▶️ ${resumePhrase}`)
+          speakAriaAnswer(resumePhrase, () => {
             resumeLectureFromExactPosition()
-          }, 800)
+          })
         } else {
           setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
         }
@@ -1000,7 +1043,8 @@ const CoursePlayer = ({
       } else if (newState === TutorState.WAKE_DETECTED) {
         setVoiceStatusText('✨ "Hey ARIA" Detected! Waking up...')
       } else if (newState === TutorState.ARIA_GREETING) {
-        setVoiceStatusText('👋 ARIA: "Yes? Tell me."')
+        const ack = ACKNOWLEDGMENTS[selectedLanguageCode] || ACKNOWLEDGMENTS.en
+        setVoiceStatusText(`👋 ARIA: "${ack}"`)
       } else if (newState === TutorState.ACTIVE_LISTENING) {
         setVoiceStatusText(`👂 Listening for your question (${currentLangObj.native})...`)
       } else if (newState === TutorState.PROCESSING) {

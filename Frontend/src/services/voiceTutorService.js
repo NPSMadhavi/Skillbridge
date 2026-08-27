@@ -201,21 +201,23 @@ export const KNOWN_SELF_ECHO_PATTERNS = [
   // English
   /\b(?:yes|yeah|ya)?\s*(?:tell\s+me|im\s+listening|i\s+am\s+listening|listening|please\s+tell\s+me)\b/i,
 
-  /\b(?:yes\s+tell\s+me|tell\s+me\s+i'm\s+listening|tell\s+me\s+im\s+listening)\b/i,
+  /\b(?:yes\s+tell\s+me|tell\s+me\s+i'm\s+listening|tell\s+me\s+im\s+listening|yes\s+i'm\s+listening|yes\s+im\s+listening)\b/i,
+
+  /\b(?:continuing\s+to\s+(?:the\s+)?course|resuming\s+(?:the\s+)?course|resuming\s+(?:the\s+)?lecture|back\s+to\s+(?:the\s+)?lecture)\b/i,
 
   /\b(?:hello\s+i\s+am\s+aria|i\s+am\s+aria|your\s+personal\s+ai\s+tutor)\b/i,
 
   // Chinese
-  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么)/iu,
+  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么|正在继续课程|继续课程)/iu,
 
   // Malay
-  /\b(?:ya\s+saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu)\b/i,
+  /\b(?:ya\s+saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu|menyambung\s+semula\s+kursus|menyambung\s+ke\s+kursus)\b/i,
 
   // Tamil
-  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்)/iu,
+  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்|பாடத்தைத்\s*தொடர்கிறேன்|பாடத்தைத்\s*தொடர்கிறது)/iu,
 
   // Bangla
-  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি)/iu
+  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি|কোর্সে\s*ফিরে\s*যাচ্ছি|ক্লাস\s*চালু\s*করছি)/iu
 ];
 
 
@@ -1168,114 +1170,58 @@ export class VoiceTutorManager {
 
 
           /*
-           * IMPORTANT:
-           *
-           * Course playing does NOT cause VAD
-           * to stop the wake detector.
-           *
-           * SpeechRecognition handles wake detection.
+           * VAD Speech Detection:
+           * - In ACTIVE_LISTENING / FOLLOW_UP_LISTENING: records user question.
+           * - In SLEEPING: records speech candidates for Whisper wake-word / interruption detection.
            */
-
           if (
-
-            this.state ===
-            TutorState.ACTIVE_LISTENING ||
-
-            this.state ===
-            TutorState.FOLLOW_UP_LISTENING
-
+            this.state === TutorState.ACTIVE_LISTENING ||
+            this.state === TutorState.FOLLOW_UP_LISTENING ||
+            this.state === TutorState.SLEEPING
           ) {
+            if (rms >= this.options.speechRmsThreshold) {
+              this.speechFramesCount += 1;
 
-            if (
-              rms >=
-              this.options.speechRmsThreshold
-            ) {
-
-              this.speechFramesCount +=
-                1;
-
-
-              if (
-                this.speechFramesCount >=
-                2
-              ) {
-
-                this.speechFramesCount =
-                  0;
-
-
+              if (this.speechFramesCount >= 2) {
+                this.speechFramesCount = 0;
                 this.log(
                   LogCategory.VAD_START,
-                  `User speech detected RMS=${rms.toFixed(1)}`
+                  `User speech detected (State: ${this.state}, LecturePlaying: ${this.isLecturePlaying}) RMS=${rms.toFixed(1)}`
                 );
 
-
                 this.clearFollowUpTimeout();
-
-
                 this.startMediaRecording();
-
               }
-
             } else {
-
-              this.speechFramesCount =
-                0;
-
+              this.speechFramesCount = 0;
             }
           }
-
         }, 40);
 
-
     } catch (error) {
-
       console.error(
         '[VOICE] Microphone initialization failed:',
         error
       );
 
-
       this.setState(
         TutorState.ERROR
       );
 
-
       throw error;
     }
   }
-
 
   /* ==========================================================
      START RECORDING
   ========================================================== */
 
   startMediaRecording() {
-
-    if (
-      !this.micStream ||
-      this.isRecording
-    ) {
-
+    if (!this.micStream || this.isRecording) {
       return;
     }
 
-
-    /*
-     * While course is playing and manager is sleeping,
-     * DO NOT record normal speech.
-     *
-     * Wake command must come first.
-     */
-
-    if (
-      this.isLecturePlaying &&
-      this.state ===
-      TutorState.SLEEPING
-    ) {
-
-      return;
-    }
+    this.recordingStateAtStart = this.state;
 
 
     try {
@@ -1439,42 +1385,33 @@ export class VoiceTutorManager {
           }
 
 
-          if (
-            this.options.onAudioCaptured
-          ) {
+          if (this.options.onAudioCaptured) {
+            const recordedState = this.recordingStateAtStart || this.state;
+            const wasSleeping = (recordedState === TutorState.SLEEPING);
 
-            this.setState(
-              TutorState.PROCESSING
-            );
-
+            if (!wasSleeping) {
+              this.setState(TutorState.PROCESSING);
+            }
 
             try {
-
-              await this.options
-                .onAudioCaptured(
-                  audioBlob
-                );
-
+              await this.options.onAudioCaptured(audioBlob, {
+                state: recordedState,
+                isWakeDetection: wasSleeping,
+                isLecturePlaying: this.isLecturePlaying
+              });
             } catch (error) {
-
               console.error(
                 '[VOICE] onAudioCaptured failed:',
                 error
               );
 
-
-              if (
-                this.state ===
-                TutorState.PROCESSING
-              ) {
-
+              if (this.state === TutorState.PROCESSING) {
                 this.setState(
                   TutorState.FOLLOW_UP_LISTENING
                 );
 
                 this.resetFollowUpTimeout();
               }
-
             }
           }
 
