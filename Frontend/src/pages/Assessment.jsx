@@ -415,7 +415,7 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
             </div>
 
             {/* Bottom Action Button */}
-            <div className="shrink-0 text-center pt-2">
+            <div className="shrink-0 text-center pt-5">
               <button
                 type="button"
                 onClick={handleActionClick}

@@ -379,11 +379,11 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
             </div>
 
             {/* 3D Engineer Avatar Illustration */}
-            <div className="absolute right-0 bottom-0 h-[92%] sm:h-full flex items-end justify-end pointer-events-none z-10 pr-2">
+            <div className="absolute right-[-90px] bottom-0 h-full pointer-events-none z-10 flex items-end">
               <img
                 src="/avatar.png"
                 alt="Learning Avatar"
-                className="h-full w-auto object-contain object-bottom drop-shadow-xl"
+                className="h-[100%] w-auto max-w-none"
               />
             </div>
           </div>
@@ -417,7 +417,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 </div>
 
                 {/* Bottom: 3 Stats Badges in Horizontal Row */}
-                <div className="flex items-center gap-3 sm:gap-4 lg:gap-6 pt-1 w-full">
+                <div className="flex items-center justify-between gap-2 pt-1 w-full min-w-0">
                   {/* Total Modules */}
                   <div className="flex items-center gap-2">
                     <div className="h-8 w-8 rounded-xl bg-[#eff6ff] text-[#3b82f6] flex items-center justify-center flex-shrink-0">

@@ -2284,5 +2284,3 @@ const CoursePlayer = ({
 }
 
 export default CoursePlayer
-
-
