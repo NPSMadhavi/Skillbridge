@@ -302,7 +302,9 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
               {isFinalAssessment ? 'Final Course Assessment' : 'Chapter Assessment'}
             </h1>
             <p className="text-xs sm:text-sm text-slate-500 font-medium mt-1">
-              {lessonTitle && course?.title ? `${course.title} • ${lessonTitle}` : (course?.title || lessonTitle || 'Course Assessment')}
+              {lessonTitle && course?.title && lessonTitle.trim().toLowerCase() !== course.title.trim().toLowerCase()
+                ? `${course.title} • ${lessonTitle}`
+                : (course?.title || lessonTitle || 'Course Assessment')}
             </p>
 
             {/* Segmented 5-Step Progress Bar */}

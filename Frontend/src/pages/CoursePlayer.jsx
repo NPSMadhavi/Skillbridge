@@ -1953,9 +1953,9 @@ const CoursePlayer = ({
         <section className="flex flex-col h-full min-h-0 overflow-hidden gap-2">
           {/* Active Lesson Header & Hands-Free Status Banner */}
           <div className="shrink-0 flex flex-col gap-0.5">
-            {activeLesson?.chapterTitle && (
-              <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider">
-                {activeLesson.chapterTitle} {activeLesson.moduleTitle ? `• ${activeLesson.moduleTitle}` : ''}
+            {(activeLesson?.chapterTitle || activeLesson?.moduleTitle) && (
+              <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider truncate">
+                {activeLesson.chapterTitle || activeLesson.moduleTitle}
               </span>
             )}
             <h2 className="text-base font-bold text-slate-900 leading-snug truncate">
