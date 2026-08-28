@@ -43,11 +43,11 @@ const EyeIcon = ({ open }) => (
 )
 
 const ScanBrackets = ({ active }) => (
-  <div className={`absolute inset-[26px] ${active ? 'animate-bracket-breathe' : ''}`} aria-hidden="true">
-    <span className="absolute top-0 left-0 h-4.5 w-4.5 rounded-tl-[3px] border-t-[2px] border-l-[2px] border-[#ff8c21]" />
-    <span className="absolute top-0 right-0 h-4.5 w-4.5 rounded-tr-[3px] border-t-[2px] border-r-[2px] border-[#ff8c21]" />
-    <span className="absolute bottom-0 left-0 h-4.5 w-4.5 rounded-bl-[3px] border-b-[2px] border-l-[2px] border-[#ff8c21]" />
-    <span className="absolute right-0 bottom-0 h-4.5 w-4.5 rounded-br-[3px] border-r-[2px] border-b-[2px] border-[#ff8c21]" />
+  <div className={`absolute inset-[18px] ${active ? 'animate-bracket-breathe' : ''}`} aria-hidden="true">
+    <span className="absolute top-0 left-0 h-3.5 w-3.5 rounded-tl-[3px] border-t-[2px] border-l-[2px] border-[#ff8c21]" />
+    <span className="absolute top-0 right-0 h-3.5 w-3.5 rounded-tr-[3px] border-t-[2px] border-r-[2px] border-[#ff8c21]" />
+    <span className="absolute bottom-0 left-0 h-3.5 w-3.5 rounded-bl-[3px] border-b-[2px] border-l-[2px] border-[#ff8c21]" />
+    <span className="absolute right-0 bottom-0 h-3.5 w-3.5 rounded-br-[3px] border-r-[2px] border-b-[2px] border-[#ff8c21]" />
   </div>
 )
 
@@ -91,7 +91,7 @@ const Login = ({ onSuccess }) => {
     }
   }, [mode])
 
-  const [panelHeight, setPanelHeight] = useState(240)
+  const [panelHeight, setPanelHeight] = useState(200)
   const passwordRef = useRef(null)
   const faceRef = useRef(null)
 
@@ -347,11 +347,11 @@ const Login = ({ onSuccess }) => {
                 : 'pointer-events-none absolute inset-x-0 top-0 translate-x-12 opacity-0'
                 }`}
             >
-              <div className="flex flex-col items-center pt-1">
+              <div className="flex flex-col items-center pt-0.5">
                 {faceState === 'success' ? (
-                  <div className="flex h-[140px] w-[140px] items-center justify-center rounded-full border-[1.5px] border-emerald-500 bg-emerald-500/10 shadow-[0_8px_30px_rgba(16,185,129,0.06)] animate-bracket-breathe">
-                    <div className="grid h-14 w-14 place-items-center rounded-full border-[3px] border-emerald-500 text-emerald-500">
-                      <svg className="h-8 w-8 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <div className="flex h-[104px] w-[104px] items-center justify-center rounded-full border-[1.5px] border-emerald-500 bg-emerald-500/10 shadow-[0_8px_30px_rgba(16,185,129,0.06)] animate-bracket-breathe">
+                    <div className="grid h-11 w-11 place-items-center rounded-full border-[2.5px] border-emerald-500 text-emerald-500">
+                      <svg className="h-6 w-6 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
                     </div>
@@ -361,7 +361,7 @@ const Login = ({ onSuccess }) => {
                     type="button"
                     onClick={runFaceId}
                     disabled={faceState === 'scanning'}
-                    className={`relative grid h-[140px] w-[140px] place-items-center rounded-full border-[1.5px] bg-white transition-all duration-200 ${faceState === 'error'
+                    className={`relative grid h-[104px] w-[104px] place-items-center rounded-full border-[1.5px] bg-white transition-all duration-200 ${faceState === 'error'
                       ? 'border-rose-400 ring-4 ring-rose-500/10'
                       : 'border-[#1d3a67] hover:border-slate-300 shadow-sm hover:scale-[1.01]'
                       } ${faceState === 'idle' || faceState === 'error'
@@ -376,36 +376,38 @@ const Login = ({ onSuccess }) => {
                           ref={videoRef}
                           playsInline
                           muted
-                          className="absolute inset-[3px] h-[132px] w-[132px] rounded-full object-cover scale-x-[-1]"
+                          className="absolute inset-[3px] h-[96px] w-[96px] rounded-full object-cover scale-x-[-1]"
                         />
                         <span className="absolute inset-0 animate-ring-pulse rounded-full border border-[#ff8c21]/50" />
                         <ScanBrackets active={true} />
-                        <span className="pointer-events-none absolute right-6 left-6 h-0.5 animate-scan-move rounded-full bg-linear-to-r from-transparent via-[#ff8c21] to-transparent" />
+                        <span className="pointer-events-none absolute right-4 left-4 h-0.5 animate-scan-move rounded-full bg-linear-to-r from-transparent via-[#ff8c21] to-transparent" />
                       </>
                     ) : (
                       // Bracket scan icon
-                      <svg className="h-9 w-9 text-[#0e2246]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <svg className="h-8 w-8 text-[#0e2246]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M20 16v2a2 2 0 0 1-2 2h-2" />
                       </svg>
                     )}
                   </button>
                 )}
 
-                <p className="mt-4 text-center text-sm font-semibold text-slate-700">
+                <p className="mt-2.5 text-center text-[13.5px] font-semibold text-slate-700">
                   {faceState === 'success'
                     ? 'Identity Verified!'
                     : faceState === 'error'
                       ? 'Authentication failed'
                       : 'Tap to authenticate'}
                 </p>
-                <p className="mt-0.5 text-center text-xs text-slate-400">
-                  {faceState === 'scanning' ? 'Analyzing face biometrics...' : ''}
-                </p>
+                {faceState === 'scanning' && (
+                  <p className="mt-0.5 text-center text-xs text-slate-400">
+                    Analyzing face biometrics...
+                  </p>
+                )}
 
                 {/* Information footer alert card */}
-                <div className="mt-4 rounded-xl border border-orange-200 bg-[#fff9f4] px-4 py-3.5 text-center max-w-[310px] shadow-sm">
-                  <p className="text-[11.5px] leading-relaxed text-slate-600">
-                    Use Face ID for quick, secure access to your learning account. Your facial data is securely managed by your device and is never stored by us.
+                <div className="mt-2.5 rounded-xl border border-orange-200/80 bg-[#fff9f4] px-3.5 py-2 text-center max-w-[310px] shadow-sm">
+                  <p className="text-[11px] leading-relaxed text-slate-600">
+                    Use Face ID for quick, secure access. Your facial data is securely managed by your device and is never stored.
                   </p>
                 </div>
               </div>

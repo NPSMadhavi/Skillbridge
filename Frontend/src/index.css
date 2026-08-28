@@ -132,13 +132,13 @@
 
 @keyframes scan-move {
   0% {
-    top: 28px;
+    top: 18px;
   }
   50% {
-    top: calc(100% - 30px);
+    top: calc(100% - 20px);
   }
   100% {
-    top: 28px;
+    top: 18px;
   }
 }
 
