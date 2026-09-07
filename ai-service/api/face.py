@@ -17,7 +17,8 @@ class Candidate(BaseModel):
     encrypted_embedding: str
 
 class FaceVerifyRequest(BaseModel):
-    query_image: str
+    query_image: str | None = None
+    query_images: list[str] | None = None
     candidates: list[Candidate]
 
 class FaceVerifyResponse(BaseModel):
@@ -44,7 +45,11 @@ def register_face(payload: FaceRegisterRequest, face_svc = Depends(get_face_serv
 def verify_face(payload: FaceVerifyRequest, face_svc = Depends(get_face_service)):
     try:
         cand_list = [c.model_dump() for c in payload.candidates]
-        result = face_svc.verify_face(payload.query_image, cand_list)
+        result = face_svc.verify_face(
+            query_image_base64=payload.query_image,
+            candidates=cand_list,
+            query_images_base64=payload.query_images
+        )
         return FaceVerifyResponse(
             matched=result["matched"],
             user_id=result["user_id"],
@@ -54,3 +59,4 @@ def verify_face(payload: FaceVerifyRequest, face_svc = Depends(get_face_service)
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Biometric verification failed: {str(e)}")
+

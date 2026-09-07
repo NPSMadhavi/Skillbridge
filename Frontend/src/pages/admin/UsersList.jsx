@@ -767,12 +767,14 @@ const UsersList = () => {
               </button>
             </div>
             
-            <form onSubmit={handleSaveEdit} className="mt-4 space-y-3.5">
+            <form onSubmit={handleSaveEdit} className="mt-4 space-y-3.5" autoComplete="off">
               <div className="flex flex-col gap-1.5">
                 <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
                   Full name
                 </label>
                 <input
+                  name="edit_fullName"
+                  autoComplete="off"
                   value={editForm.fullName}
                   onChange={(e) => setEditForm(prev => ({ ...prev, fullName: e.target.value }))}
                   className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
@@ -785,6 +787,8 @@ const UsersList = () => {
                   FIN number
                 </label>
                 <input
+                  name="edit_finNumber"
+                  autoComplete="off"
                   value={editForm.finNumber}
                   onChange={(e) => setEditForm(prev => ({ ...prev, finNumber: e.target.value }))}
                   className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
@@ -798,6 +802,8 @@ const UsersList = () => {
                 </label>
                 <input
                   type="email"
+                  name="edit_user_email"
+                  autoComplete="off"
                   value={editForm.email}
                   onChange={(e) => setEditForm(prev => ({ ...prev, email: e.target.value }))}
                   className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
@@ -840,6 +846,8 @@ const UsersList = () => {
                 </label>
                 <input
                   type="password"
+                  name="edit_user_password"
+                  autoComplete="new-password"
                   value={editForm.password}
                   onChange={(e) => setEditForm(prev => ({ ...prev, password: e.target.value }))}
                   placeholder="Leave blank to keep unchanged"

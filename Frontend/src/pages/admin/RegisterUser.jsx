@@ -136,9 +136,10 @@ const RegisterUser = () => {
   const [form, setForm] = useState(emptyForm)
   const [touched, setTouched] = useState(emptyTouched)
   const [errors, setErrors] = useState({})
+  const [existingFaceUser, setExistingFaceUser] = useState(null)
   const [showPassword, setShowPassword] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [toast, setToast] = useState(null)
+  const [statusBanner, setStatusBanner] = useState(null)
   const [cameraOpen, setCameraOpen] = useState(false)
   const [cameraError, setCameraError] = useState('')
   const [capturing, setCapturing] = useState(false)
@@ -162,6 +163,9 @@ const RegisterUser = () => {
   }, [])
 
   const updateField = (key, value) => {
+    if (key === 'faceIdData' && !value) {
+      setExistingFaceUser(null)
+    }
     setForm((prev) => {
       const next = { ...prev, [key]: value }
       if (touched[key] || errors[key]) {
@@ -261,23 +265,60 @@ const RegisterUser = () => {
       }
 
       // Check if face is already recognized and registered to an existing user
+      let check = null
       try {
-        const check = await api.checkUserExists({ faceIdData: capturedImages[0] })
-        if (check.exists && check.field === 'faceIdData') {
-          setCapturing(false)
-          const msg = check.message || 'User already exists with this Face ID.'
-          setCameraError(`⚠️ ${msg}`)
-          setErrors((prev) => ({
-            ...prev,
-            faceIdData: msg,
-          }))
-          toast.error(msg)
-          return
-        }
+        check = await api.checkUserExists({ faceIdData: capturedImages })
+        console.log('[Face Duplicate Check Result]:', check)
       } catch (checkErr) {
         console.warn('Face duplicate check warning:', checkErr)
+        const errMsg = checkErr.message || ''
+        if (
+          errMsg.toLowerCase().includes('face') ||
+          errMsg.toLowerCase().includes('already exists') ||
+          errMsg.toLowerCase().includes('already registered')
+        ) {
+          const matchedUser = checkErr.matchedUser || { fullName: 'Registered User' }
+          setExistingFaceUser(matchedUser)
+          setForm((prev) => ({
+            ...prev,
+            faceIdData: capturedImages[0],
+            faceIdDataList: capturedImages,
+          }))
+          setErrors((prev) => ({
+            ...prev,
+            faceIdData: errMsg,
+          }))
+          setCapturing(false)
+          closeCamera()
+          toast.error(errMsg)
+          return
+        }
+        setCapturing(false)
+        setCameraError(errMsg || 'Failed to verify face uniqueness. Please try again.')
+        toast.error(errMsg || 'Failed to verify face uniqueness.')
+        return
       }
 
+      if (check && check.exists && check.field === 'faceIdData') {
+        const matchedUser = check.user || {}
+        setExistingFaceUser(matchedUser)
+        setForm((prev) => ({
+          ...prev,
+          faceIdData: capturedImages[0],
+          faceIdDataList: capturedImages,
+        }))
+        const msg = check.message || `User already exists with this face (${matchedUser.fullName || 'Registered User'}).`
+        setErrors((prev) => ({
+          ...prev,
+          faceIdData: msg,
+        }))
+        setCapturing(false)
+        closeCamera()
+        toast.error(msg)
+        return
+      }
+
+      setExistingFaceUser(null)
       setForm((prev) => ({
         ...prev,
         faceIdData: capturedImages[0],
@@ -289,7 +330,7 @@ const RegisterUser = () => {
       toast.success('Face ID verified and captured successfully!')
     } catch (err) {
       setCapturing(false)
-      const errTxt = 'Failed to capture face biometric data. Please try again.'
+      const errTxt = err.message || 'Failed to capture face biometric data. Please try again.'
       setCameraError(errTxt)
       toast.error(errTxt)
     }
@@ -297,7 +338,7 @@ const RegisterUser = () => {
 
   const handleSubmit = async (event) => {
     event.preventDefault()
-    setToast(null)
+    setStatusBanner(null)
 
     // Mark all touched
     const allTouched = Object.keys(emptyTouched).reduce((acc, k) => {
@@ -306,7 +347,17 @@ const RegisterUser = () => {
     }, {})
     setTouched(allTouched)
 
+    if (existingFaceUser) {
+      const errMsg = `Cannot register user: This face is already enrolled to ${existingFaceUser.fullName || 'an existing user'}.`
+      setErrors((prev) => ({ ...prev, faceIdData: errMsg }))
+      toast.error(errMsg)
+      return
+    }
+
     const nextErrors = validateAll(form)
+    if (existingFaceUser) {
+      nextErrors.faceIdData = `Face already enrolled to ${existingFaceUser.fullName || 'an existing user'}.`
+    }
     setErrors(nextErrors)
 
     if (Object.keys(nextErrors).length) {
@@ -332,22 +383,24 @@ const RegisterUser = () => {
       })
       setForm(emptyForm)
       setTouched(emptyTouched)
+      setExistingFaceUser(null)
       setErrors({})
       toast.success(`${res.user.fullName} registered successfully!`)
-      setToast({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
+      setStatusBanner({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
     } catch (err) {
       const errorMsg = err.message || 'Registration failed.'
-      if (errorMsg.toLowerCase().includes('fin number')) {
+      if (errorMsg.toLowerCase().includes('face') || err.matchedUser) {
+        setExistingFaceUser(err.matchedUser || { fullName: 'Registered User' })
+        setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
+      } else if (errorMsg.toLowerCase().includes('fin number')) {
         setErrors((prev) => ({ ...prev, finNumber: errorMsg }))
         finNumberRef.current?.focus()
-      } else if (errorMsg.toLowerCase().includes('face')) {
-        setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
       } else if (errorMsg.toLowerCase().includes('email')) {
         setErrors((prev) => ({ ...prev, email: errorMsg }))
         emailRef.current?.focus()
       }
       toast.error(errorMsg)
-      setToast({ type: 'error', text: errorMsg })
+      setStatusBanner({ type: 'error', text: errorMsg })
     } finally {
       setSaving(false)
     }
@@ -367,7 +420,7 @@ const RegisterUser = () => {
       </div>
 
       <section className="rounded-2xl border border-line bg-panel p-5 shadow-[0_10px_30px_rgba(15,27,45,0.04)] sm:p-7">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit} noValidate>
+        <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit} noValidate autoComplete="off">
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <label htmlFor="fullName" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
               Full name <span className="text-rose-500">*</span>
@@ -375,6 +428,8 @@ const RegisterUser = () => {
             <input
               ref={fullNameRef}
               id="fullName"
+              name="fullName"
+              autoComplete="off"
               value={form.fullName}
               onChange={(e) => updateField('fullName', e.target.value)}
               onBlur={() => handleBlur('fullName')}
@@ -398,6 +453,8 @@ const RegisterUser = () => {
             <input
               ref={finNumberRef}
               id="finNumber"
+              name="finNumber"
+              autoComplete="off"
               maxLength={9}
               value={form.finNumber}
               onChange={(e) => updateField('finNumber', e.target.value.toUpperCase())}
@@ -449,6 +506,8 @@ const RegisterUser = () => {
             <input
               ref={emailRef}
               id="email"
+              name="new_user_email"
+              autoComplete="new-password"
               type="email"
               value={form.email}
               onChange={(e) => updateField('email', e.target.value)}
@@ -474,6 +533,8 @@ const RegisterUser = () => {
               <input
                 ref={passwordRef}
                 id="password"
+                name="new_user_password"
+                autoComplete="new-password"
                 type={showPassword ? 'text' : 'password'}
                 value={form.password}
                 onChange={(e) => updateField('password', e.target.value)}
@@ -527,35 +588,119 @@ const RegisterUser = () => {
             </p>
 
             {form.faceIdData ? (
-              <div className="flex flex-col gap-3 rounded-2xl border border-ok/25 bg-ok/5 p-4 sm:flex-row sm:items-center">
-                <img
-                  src={form.faceIdData}
-                  alt="Captured Face ID"
-                  className="h-24 w-24 rounded-xl object-cover shadow-sm"
-                />
-                <div className="flex-1">
-                  <p className="font-semibold text-ok">Face ID enrolled</p>
-                  <p className="mt-1 text-sm text-muted">
-                    Biometric snapshot captured and ready to save with this user.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={openCamera}
-                      className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40"
-                    >
-                      Recapture
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateField('faceIdData', '')}
-                      className="cursor-pointer rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-sm font-semibold text-danger"
-                    >
-                      Remove
-                    </button>
+              existingFaceUser ? (
+                <div className="flex flex-col gap-3.5 rounded-2xl border-2 border-rose-500/50 bg-rose-500/10 p-4.5 animate-fade-in shadow-sm">
+                  <div className="flex items-center gap-2 text-rose-500 font-semibold text-sm">
+                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-white font-bold text-xs">
+                      !
+                    </span>
+                    <span>Face already registered in system</span>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                    <div className="relative shrink-0">
+                      <img
+                        src={form.faceIdData}
+                        alt="Captured Face ID"
+                        className="h-24 w-24 rounded-xl object-cover border-2 border-rose-500/50 shadow-sm"
+                      />
+                      <span className="absolute bottom-1 right-1 rounded-md bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
+                        Captured
+                      </span>
+                    </div>
+
+                    {existingFaceUser.faceImage && (
+                      <div className="relative shrink-0 hidden sm:block">
+                        <img
+                          src={existingFaceUser.faceImage}
+                          alt={existingFaceUser.fullName || 'Existing User'}
+                          className="h-24 w-24 rounded-xl object-cover border-2 border-rose-500/50 opacity-90 shadow-sm"
+                        />
+                        <span className="absolute bottom-1 right-1 rounded-md bg-navy/90 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
+                          Enrolled
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-rose-500 text-base">
+                        Matched: {existingFaceUser.fullName || 'Registered User'}
+                      </h4>
+                      <p className="mt-0.5 text-xs text-muted">
+                        FIN: <span className="font-mono font-medium text-fg">{existingFaceUser.finNumber || 'N/A'}</span>
+                        {existingFaceUser.email && (
+                          <> • Email: <span className="text-fg">{existingFaceUser.email}</span></>
+                        )}
+                      </p>
+                      <p className="mt-1.5 text-xs text-rose-400 font-medium leading-relaxed">
+                        ⚠️ This face is already enrolled. A new account cannot be registered with an existing user's face.
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExistingFaceUser(null)
+                            setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                            openCamera()
+                          }}
+                          className="cursor-pointer rounded-lg border border-rose-500/40 bg-rose-500/20 px-3 py-1.5 text-sm font-semibold text-rose-300 hover:bg-rose-500/30 transition"
+                        >
+                          Recapture Face
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateField('faceIdData', '')
+                            setExistingFaceUser(null)
+                            setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                          }}
+                          className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40 transition"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="flex flex-col gap-3 rounded-2xl border border-ok/25 bg-ok/5 p-4 sm:flex-row sm:items-center">
+                  <img
+                    src={form.faceIdData}
+                    alt="Captured Face ID"
+                    className="h-24 w-24 rounded-xl object-cover shadow-sm"
+                  />
+                  <div className="flex-1">
+                    <p className="font-semibold text-ok">Face ID enrolled</p>
+                    <p className="mt-1 text-sm text-muted">
+                      Biometric snapshot captured and verified unique. Ready to save with this user.
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExistingFaceUser(null)
+                          setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                          openCamera()
+                        }}
+                        className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40"
+                      >
+                        Recapture
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateField('faceIdData', '')
+                          setExistingFaceUser(null)
+                          setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                        }}
+                        className="cursor-pointer rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-sm font-semibold text-danger"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )
             ) : (
               <button
                 type="button"
@@ -585,7 +730,7 @@ const RegisterUser = () => {
                 <span className="text-sm text-muted">Use the camera to enroll biometric data</span>
               </button>
             )}
-            {errors.faceIdData && (
+            {errors.faceIdData && !existingFaceUser && (
               <p role="alert" className="mt-2 flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
                 <ExclamationCircleIcon />
                 <span>{errors.faceIdData}</span>
@@ -593,16 +738,16 @@ const RegisterUser = () => {
             )}
           </div>
 
-          {toast && (
+          {statusBanner && (
             <p
               className={`sm:col-span-2 rounded-[10px] px-3.5 py-2.5 text-center text-sm ${
-                toast.type === 'ok'
+                statusBanner.type === 'ok'
                   ? 'border border-ok/25 bg-ok/10 text-ok'
                   : 'border border-danger/25 bg-danger/10 text-danger'
               }`}
               role="status"
             >
-              {toast.text}
+              {statusBanner.text}
             </p>
           )}
 

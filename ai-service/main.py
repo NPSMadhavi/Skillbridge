@@ -42,4 +42,4 @@ if __name__ == "__main__":
     from config.settings import settings
     port = int(os.environ.get("PORT", settings.PORT))
     # Bind to all interfaces (0.0.0.0) for containerization / network access
-    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info", reload=True)

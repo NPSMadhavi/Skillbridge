@@ -9,7 +9,7 @@ export const checkUserExists = async (req, res) => {
     if (finNumber) {
       const existingFin = await prisma.user.findUnique({
         where: { finNumber: finNumber.trim().toUpperCase() },
-        select: { id: true, fullName: true, finNumber: true, email: true },
+        select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true },
       });
       if (existingFin) {
         return res.json({
@@ -24,7 +24,7 @@ export const checkUserExists = async (req, res) => {
     if (email) {
       const existingEmail = await prisma.user.findUnique({
         where: { email: email.trim().toLowerCase() },
-        select: { id: true, fullName: true, finNumber: true, email: true },
+        select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true },
       });
       if (existingEmail) {
         return res.json({
@@ -39,19 +39,24 @@ export const checkUserExists = async (req, res) => {
     if (faceIdData) {
       const candidates = await prisma.user.findMany({
         where: { faceEmbedding: { not: null } },
-        select: { id: true, fullName: true, finNumber: true, faceEmbedding: true },
+        select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true, faceEmbedding: true },
       });
 
       if (candidates.length > 0) {
-        const queryFace = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
-        const verifyResult = await pythonService.verifyFace(queryFace, candidates);
+        const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
         if (verifyResult && verifyResult.matched && verifyResult.id) {
           const matchedUser = candidates.find((c) => c.id === verifyResult.id);
           return res.json({
             exists: true,
             field: 'faceIdData',
             message: `User already exists with this face (${matchedUser?.fullName || 'Registered User'} - FIN: ${matchedUser?.finNumber || 'N/A'}).`,
-            user: matchedUser,
+            user: {
+              id: matchedUser?.id,
+              fullName: matchedUser?.fullName,
+              finNumber: matchedUser?.finNumber,
+              email: matchedUser?.email,
+              faceImage: matchedUser?.faceImage,
+            },
           });
         }
       }
@@ -60,7 +65,7 @@ export const checkUserExists = async (req, res) => {
     return res.json({ exists: false });
   } catch (error) {
     console.error('Check user exists error:', error);
-    res.status(500).json({ error: 'Error checking user duplication.' });
+    res.status(error.statusCode || 500).json({ error: error.message || 'Error checking user duplication.' });
   }
 };
 
@@ -89,24 +94,30 @@ export const registerUser = async (req, res) => {
         // Check if face is already registered to any existing user
         const candidates = await prisma.user.findMany({
           where: { faceEmbedding: { not: null } },
-          select: { id: true, fullName: true, finNumber: true, faceEmbedding: true },
+          select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true, faceEmbedding: true },
         });
 
         if (candidates.length > 0) {
-          const queryFace = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
-          const verifyResult = await pythonService.verifyFace(queryFace, candidates);
+          const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
           if (verifyResult && verifyResult.matched && verifyResult.id) {
             const matchedUser = candidates.find((c) => c.id === verifyResult.id);
             const matchedName = matchedUser?.fullName ? ` (${matchedUser.fullName} - FIN: ${matchedUser.finNumber})` : '';
             return res.status(400).json({
-              error: `User already exists with this face${matchedName}.`
+              error: `User already exists with this face${matchedName}.`,
+              matchedUser: {
+                id: matchedUser?.id,
+                fullName: matchedUser?.fullName,
+                finNumber: matchedUser?.finNumber,
+                email: matchedUser?.email,
+                faceImage: matchedUser?.faceImage,
+              },
             });
           }
         }
 
         faceEmbedding = await pythonService.registerFace(faceIdData);
       } catch (err) {
-        if (err.message && err.message.includes('already exists')) {
+        if (err.message && (err.message.includes('already exists') || err.message.includes('already registered'))) {
           return res.status(400).json({ error: err.message });
         }
         return res.status(422).json({ error: `Face biometric vector enrollment failed: ${err.message}` });
@@ -251,9 +262,31 @@ export const updateUser = async (req, res) => {
     let faceImage = undefined;
     if (faceIdData) {
       try {
+        const candidates = await prisma.user.findMany({
+          where: {
+            id: { not: id },
+            faceEmbedding: { not: null },
+          },
+          select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true, faceEmbedding: true },
+        });
+
+        if (candidates.length > 0) {
+          const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
+          if (verifyResult && verifyResult.matched && verifyResult.id) {
+            const matchedUser = candidates.find((c) => c.id === verifyResult.id);
+            const matchedName = matchedUser?.fullName ? ` (${matchedUser.fullName} - FIN: ${matchedUser.finNumber})` : '';
+            return res.status(400).json({
+              error: `This face is already registered to another user${matchedName}.`,
+            });
+          }
+        }
+
         faceEmbedding = await pythonService.registerFace(faceIdData);
         faceImage = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
       } catch (err) {
+        if (err.message && (err.message.includes('already exists') || err.message.includes('already registered'))) {
+          return res.status(400).json({ error: err.message });
+        }
         return res.status(422).json({ error: `Face biometric vector update failed: ${err.message}` });
       }
     }

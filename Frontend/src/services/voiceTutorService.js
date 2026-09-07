@@ -2006,7 +2006,7 @@ export class VoiceTutorManager {
       if (containsWakeWord(text)) {
         this.log(
           LogCategory.WAKE_MATCH,
-          `🔥 WAKE DETECTED (${this.langCode}): "${text}"`
+          ` WAKE DETECTED (${this.langCode}): "${text}"`
         );
 
         this.triggerWakeSequence(text);

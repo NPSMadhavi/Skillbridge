@@ -55,7 +55,13 @@ class FaceService:
             # Generate embedding by adding batch dim (1, 3, 160, 160)
             embedding_tensor = self.model(cropped_face.unsqueeze(0))
             embedding = embedding_tensor.squeeze(0).tolist()
-            return embedding
+            
+            # Normalize to unit length
+            vec = np.array(embedding)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            return vec.tolist()
 
     def compare_embeddings(self, emb1: list[float], emb2: list[float]) -> float:
         """
@@ -134,18 +140,42 @@ class FaceService:
             avg_emb = avg_emb / norm
         return avg_emb.tolist()
 
-    def verify_face(self, query_image_base64: str, candidates: list[dict]) -> dict:
+    def verify_face(self, query_image_base64: str | None = None, candidates: list[dict] = [], query_images_base64: list[str] | None = None) -> dict:
         """
-        Compares query image with candidates' encrypted embeddings.
+        Compares query image or list of query images with candidates' encrypted embeddings.
         candidates: [{"id": str, "encrypted_embedding": str}]
         """
-        # Decode and get embedding of query face
-        query_pil = self.decode_base64_image(query_image_base64)
-        query_emb = self.get_embedding(query_pil)
+        query_embeddings = []
+
+        if query_images_base64 and len(query_images_base64) > 0:
+            for img_str in query_images_base64:
+                try:
+                    pil_image = self.decode_base64_image(img_str)
+                    emb = self.get_embedding(pil_image)
+                    query_embeddings.append(emb)
+                except Exception as e:
+                    print(f"Skipping query frame in verify_face: {str(e)}")
+                    continue
+            
+            # Also add mean vector across query frames
+            if query_embeddings:
+                avg_emb = np.mean(query_embeddings, axis=0)
+                norm = np.linalg.norm(avg_emb)
+                if norm > 0:
+                    query_embeddings.append((avg_emb / norm).tolist())
+
+        elif query_image_base64:
+            query_pil = self.decode_base64_image(query_image_base64)
+            query_emb = self.get_embedding(query_pil)
+            query_embeddings.append(query_emb)
+
+        if not query_embeddings:
+            raise ValueError("No face detected in query image(s). Ensure proper lighting and look directly at the camera.")
 
         best_match_id = None
+        best_sim = -1.0
         highest_similarity = -1.0
-        threshold = 0.62  # Cosine similarity verification threshold for InceptionResnetV1 FaceNet
+        threshold = 0.48  # Balanced cosine threshold for InceptionResnetV1 VGGFace2
 
         for candidate in candidates:
             cand_id = candidate.get("id")
@@ -157,21 +187,25 @@ class FaceService:
             try:
                 # Decrypt candidate embedding
                 cand_emb = crypto_service.decrypt_embedding(encrypted_emb)
-                # Compute similarity
-                sim = self.compare_embeddings(query_emb, cand_emb)
-                if sim > highest_similarity:
-                    highest_similarity = sim
-                    if sim >= threshold:
+                # Compute maximum similarity across all query frames for this candidate
+                for q_emb in query_embeddings:
+                    sim = self.compare_embeddings(q_emb, cand_emb)
+                    if sim > highest_similarity:
+                        highest_similarity = sim
+                    if sim >= threshold and sim > best_sim:
+                        best_sim = sim
                         best_match_id = cand_id
             except Exception as e:
                 print(f"Failed to process candidate {cand_id}: {str(e)}")
                 continue
 
         matched = best_match_id is not None
+        confidence = best_sim if matched else highest_similarity
+        print(f"Biometric Verification Result: matched={matched}, user_id={best_match_id}, confidence={confidence:.4f} (threshold={threshold})")
         return {
             "matched": matched,
             "user_id": best_match_id,
-            "confidence": highest_similarity
+            "confidence": confidence
         }
 
 # Global face service instance (will lazy-load models on import)

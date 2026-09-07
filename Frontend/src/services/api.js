@@ -1,4 +1,4 @@
-const API_BASE_URL = '/api/v1';
+const API_BASE_URL = 'http://localhost:5000/api/v1';
 
 const getHeaders = (isAdmin = false) => {
   const headers = {
@@ -46,7 +46,11 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.error || 'Failed to register user.');
+      const customErr = new Error(err.error || 'Failed to register user.');
+      if (err.matchedUser) {
+        customErr.matchedUser = err.matchedUser;
+      }
+      throw customErr;
     }
     return res.json();
   },
@@ -60,7 +64,11 @@ export const api = {
     });
     if (!res.ok) {
       const err = await res.json();
-      throw new Error(err.error || 'Failed to check user existence.');
+      const customErr = new Error(err.error || 'Failed to check user existence.');
+      if (err.matchedUser) {
+        customErr.matchedUser = err.matchedUser;
+      }
+      throw customErr;
     }
     return res.json();
   },

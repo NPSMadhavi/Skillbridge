@@ -45,10 +45,18 @@ class PythonService {
         encrypted_embedding: c.faceEmbedding
       }));
 
-      const response = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/face/verify`, {
-        query_image: queryImageBase64,
+      const payload = {
         candidates: pythonCandidates,
-      });
+      };
+
+      if (Array.isArray(queryImageBase64)) {
+        payload.query_images = queryImageBase64;
+        payload.query_image = queryImageBase64[0];
+      } else {
+        payload.query_image = queryImageBase64;
+      }
+
+      const response = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/face/verify`, payload);
 
       return {
         matched: response.data.matched,
