@@ -6,21 +6,26 @@ const getHeaders = (role = false) => {
   };
 
   try {
-    const adminSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || 'null');
-    const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null');
-    const superAdminSession = JSON.parse(sessionStorage.getItem('skillbridge_super_admin') || 'null');
+    const adminSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || 'null');
+    const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null');
+    const superAdminSession = JSON.parse(sessionStorage.getItem('skillbridge_super_admin') || localStorage.getItem('skillbridge_super_admin') || 'null');
 
     const path = typeof window !== 'undefined' ? window.location.pathname : '';
     const isAdminPath = path.startsWith('/admin');
     const isSuperAdminPath = path.startsWith('/super-admin');
 
     let token = null;
+    let tenantId = 'default';
+
     if (role === 'super' || isSuperAdminPath) {
       token = superAdminSession?.token || adminSession?.token;
+      tenantId = 'master';
     } else if (role === true || isAdminPath) {
       token = adminSession?.token || userSession?.token;
+      tenantId = adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
     } else {
       token = userSession?.token || adminSession?.token;
+      tenantId = userSession?.tenant?.code || userSession?.user?.tenantCode || sessionStorage.getItem('skillbridge_tenant') || 'default';
     }
 
     if (token) {
@@ -28,7 +33,6 @@ const getHeaders = (role = false) => {
     }
 
     // Attach tenant header for multi-database routing
-    const tenantId = sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
     if (tenantId) {
       headers['x-tenant-id'] = tenantId;
     }

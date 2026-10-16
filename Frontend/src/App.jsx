@@ -68,7 +68,7 @@ const getAdminSession = () => {
 // Protected Student Shell with Header
 const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
   const navigate = useNavigate()
-  const isAuthenticated = Boolean(sessionStorage.getItem('skillbridge_user'))
+  const isAuthenticated = Boolean(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user'))
   const languageReady = hasStoredLanguage()
 
   if (!isAuthenticated) {
@@ -85,6 +85,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
         onLogoClick={() => navigate('/')}
         onLogout={() => {
           sessionStorage.removeItem('skillbridge_user')
+          localStorage.removeItem('skillbridge_user')
           clearStoredLanguage()
           navigate('/login')
         }}
@@ -264,7 +265,7 @@ const AssessmentRoute = () => {
 // Student Login Route Component
 const StudentLoginRoute = () => {
   const navigate = useNavigate()
-  if (sessionStorage.getItem('skillbridge_user')) {
+  if (sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user')) {
     return <Navigate to="/" replace />
   }
   return (
@@ -283,7 +284,7 @@ const StudentLoginRoute = () => {
 // Language Selection Route Component
 const LanguageRoute = () => {
   const navigate = useNavigate()
-  if (!sessionStorage.getItem('skillbridge_user')) {
+  if (!sessionStorage.getItem('skillbridge_user') && !localStorage.getItem('skillbridge_user')) {
     return <Navigate to="/login" replace />
   }
   return <Language onContinue={() => navigate('/')} />

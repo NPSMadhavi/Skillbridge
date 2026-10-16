@@ -18,7 +18,7 @@ const Header = ({ onLogout, onLogoClick }) => {
   // Retrieve user details from sessionStorage
   const user = (() => {
     try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
+      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null')
       return data?.user || { fullName: 'James', role: 'STUDENT' }
     } catch {
       return { fullName: 'James', role: 'STUDENT' }

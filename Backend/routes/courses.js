@@ -170,18 +170,53 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
   }
 });
 
+// Helper to collect all potential user identification aliases (UUID, email, FIN)
+const resolveUserIdentifiers = async (user) => {
+  if (!user) return [];
+  const directId = user.id || user.userId;
+  const email = user.email ? String(user.email).trim().toLowerCase() : null;
+  const fin = user.finNumber ? String(user.finNumber).trim() : null;
+
+  const identifiers = new Set();
+  if (directId) identifiers.add(String(directId));
+  if (email) identifiers.add(email);
+  if (fin) identifiers.add(fin);
+
+  // Look up user record in current tenant database to find primary UUID
+  try {
+    const conditions = [];
+    if (directId) conditions.push({ id: directId });
+    if (email) conditions.push({ email });
+    if (fin) conditions.push({ finNumber: fin });
+
+    if (conditions.length > 0) {
+      const dbUser = await prisma.user.findFirst({
+        where: { OR: conditions },
+        select: { id: true, email: true, finNumber: true }
+      });
+      if (dbUser) {
+        if (dbUser.id) identifiers.add(String(dbUser.id));
+        if (dbUser.email) identifiers.add(dbUser.email.toLowerCase());
+        if (dbUser.finNumber) identifiers.add(dbUser.finNumber);
+      }
+    }
+  } catch (err) {
+    console.warn('[Courses] Identifier resolution warning:', err.message);
+  }
+
+  return Array.from(identifiers);
+};
+
 // Helper to verify student course assignment access
 const checkCourseAccess = async (req, courseId) => {
   if (req.user?.role === 'ADMIN') return true;
-  const userId = req.user?.id || req.user?.userId;
-  if (!userId) return false;
+  const userIds = await resolveUserIdentifiers(req.user);
+  if (userIds.length === 0) return false;
 
-  const assignment = await prisma.userCourseAssignment.findUnique({
+  const assignment = await prisma.userCourseAssignment.findFirst({
     where: {
-      userId_courseId: {
-        userId,
-        courseId,
-      },
+      userId: { in: userIds },
+      courseId,
     },
   });
   return Boolean(assignment);
@@ -216,9 +251,15 @@ router.get('/', authenticateToken, async (req, res) => {
     }
 
     // For STUDENT role: return ONLY assigned courses
-    const userId = req.user?.id || req.user?.userId;
+    const userIds = await resolveUserIdentifiers(req.user);
+    if (userIds.length === 0) {
+      return res.json([]);
+    }
+
     const assignments = await prisma.userCourseAssignment.findMany({
-      where: { userId },
+      where: {
+        userId: { in: userIds }
+      },
       select: { courseId: true },
     });
     const assignedIds = assignments.map((a) => a.courseId);

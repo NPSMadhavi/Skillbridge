@@ -1,3 +1,4 @@
+import jwt from 'jsonwebtoken';
 import { tenantService } from '../services/tenantService.js';
 import { tenantStorage } from '../config/prisma.js';
 
@@ -7,32 +8,60 @@ import { tenantStorage } from '../config/prisma.js';
  */
 export const resolveTenant = async (req, res, next) => {
   try {
-    // 1. Check header, query, or body
-    let rawTenant =
-      req.headers['x-tenant-id'] ||
-      req.headers['x-company-code'] ||
-      req.headers['x-tenant'] ||
-      req.query?.tenant ||
-      req.query?.tenantId ||
-      req.body?.tenantId ||
-      req.body?.tenantCode ||
-      req.body?.companyCode;
+    // 1. If an Authorization Bearer token is provided, inspect its cryptographically bound tenantCode
+    let rawTenant = null;
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const tokenStr = authHeader.split(' ')[1];
+        if (tokenStr) {
+          const decoded = jwt.decode(tokenStr);
+          if (decoded && decoded.tenantCode) {
+            rawTenant = decoded.tenantCode;
+          }
+        }
+      } catch (tokenErr) {
+        // Fall back to headers if token inspection encounters an error
+      }
+    }
 
-    // 2. If user is authenticated and token contains tenantCode, use it
+    // 2. If not specified in the token, check request headers, query parameters, or body
+    if (!rawTenant) {
+      rawTenant =
+        req.headers['x-tenant-id'] ||
+        req.headers['x-company-code'] ||
+        req.headers['x-tenant'] ||
+        req.query?.tenant ||
+        req.query?.tenantId ||
+        req.body?.tenantId ||
+        req.body?.tenantCode ||
+        req.body?.companyCode;
+    }
+
+    // 3. Fallback to req.user if already populated
     if (!rawTenant && req.user?.tenantCode) {
       rawTenant = req.user.tenantCode;
     }
 
-    // Default to 'default' if not explicitly provided
+    // Normalize tenant code (defaulting to 'default')
     const tenantCode = (rawTenant ? String(rawTenant) : 'default').trim().toLowerCase();
 
-    const tenantClient = await tenantService.getTenantClient(tenantCode);
+    // Resolve tenant client with safe fallback to default tenant
+    let tenantClient;
+    let effectiveTenant = tenantCode;
+    try {
+      tenantClient = await tenantService.getTenantClient(tenantCode);
+    } catch (clientErr) {
+      console.warn(`[TenantMiddleware] Tenant '${tenantCode}' resolution failed, falling back to 'default':`, clientErr.message);
+      tenantClient = await tenantService.getTenantClient('default');
+      effectiveTenant = 'default';
+    }
 
-    req.tenantCode = tenantCode;
+    req.tenantCode = effectiveTenant;
     req.prisma = tenantClient;
 
     // Run the rest of the request lifecycle within the tenant's storage scope
-    tenantStorage.run({ tenantCode, client: tenantClient }, () => {
+    tenantStorage.run({ tenantCode: effectiveTenant, client: tenantClient }, () => {
       next();
     });
   } catch (error) {

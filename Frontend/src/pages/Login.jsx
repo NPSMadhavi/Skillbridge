@@ -153,10 +153,9 @@ const Login = ({ onSuccess }) => {
     setLoading(true)
     try {
       const res = await api.studentLogin(email.trim(), password, cleanCode)
-      sessionStorage.setItem(
-        'skillbridge_user',
-        JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
-      )
+      const userPayload = JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
+      sessionStorage.setItem('skillbridge_user', userPayload)
+      localStorage.setItem('skillbridge_user', userPayload)
       sessionStorage.setItem('skillbridge_tenant', cleanCode)
       localStorage.setItem('skillbridge_tenant', cleanCode)
       restoreLanguageAfterLogin(res.user)
@@ -223,10 +222,9 @@ const Login = ({ onSuccess }) => {
       const cleanCode = (companyCode || 'default').trim().toLowerCase()
       const res = await api.studentFaceLogin(base64Data, cleanCode)
 
-      sessionStorage.setItem(
-        'skillbridge_user',
-        JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
-      )
+      const userPayload = JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
+      sessionStorage.setItem('skillbridge_user', userPayload)
+      localStorage.setItem('skillbridge_user', userPayload)
       sessionStorage.setItem('skillbridge_tenant', cleanCode)
       localStorage.setItem('skillbridge_tenant', cleanCode)
       restoreLanguageAfterLogin(res.user)
