@@ -60,7 +60,8 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     generatedCourse.description = description.trim();
 
     console.log(`[Curriculum Design] Curriculum structured. Saving course to database...`);
-    const newCourse = await prisma.course.create({
+    const targetPrisma = req.prisma || prisma;
+    const newCourse = await targetPrisma.course.create({
       data: {
         title: generatedCourse.title,
         description: generatedCourse.description,
@@ -73,7 +74,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     // Store semantic chunks and generate vector embeddings directly in PostgreSQL pgvector
     try {
       console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension into PostgreSQL pgvector...`);
-      await vectorChunkService.indexCourse(prisma, newCourse.id, docResult, generatedCourse);
+      await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, generatedCourse);
       console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
 
       // If created in a company tenant, also mirror into defaultPrisma so all companies have it
@@ -150,7 +151,8 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
       curriculumObj.description = trimmedDesc;
     }
 
-    const newCourse = await prisma.course.create({
+    const targetPrisma = req.prisma || prisma;
+    const newCourse = await targetPrisma.course.create({
       data: {
         title: trimmedTitle,
         description: trimmedDesc,
@@ -222,6 +224,54 @@ const checkCourseAccess = async (req, courseId) => {
   return Boolean(assignment);
 };
 
+// Helper to format lightweight course object for catalog/listing without massive base64 payloads
+function formatCourseForCatalog(course) {
+  let curriculumSummary = course.curriculum;
+  if (curriculumSummary) {
+    if (typeof curriculumSummary === 'string') {
+      try {
+        curriculumSummary = JSON.parse(curriculumSummary);
+      } catch (e) {
+        curriculumSummary = {};
+      }
+    }
+
+    // Strip heavy base64 visuals and raw slide data from lessons for fast catalog listing
+    const sanitizedLessons = (curriculumSummary.lessons || []).map((l) => ({
+      id: l.id,
+      title: l.title,
+      duration: l.duration,
+      moduleId: l.moduleId,
+      chapterId: l.chapterId,
+      moduleTitle: l.moduleTitle,
+      chapterTitle: l.chapterTitle,
+      explanation: l.explanation,
+      sourceSlides: l.sourceSlides,
+    }));
+
+    curriculumSummary = {
+      title: curriculumSummary.title,
+      description: curriculumSummary.description,
+      includes: curriculumSummary.includes,
+      learning: curriculumSummary.learning,
+      curriculum: curriculumSummary.curriculum,
+      lessons: sanitizedLessons,
+      quiz: curriculumSummary.quiz,
+    };
+  }
+
+  return {
+    id: course.id,
+    title: course.title,
+    description: course.description,
+    fileName: course.fileName,
+    curriculum: curriculumSummary,
+    createdAt: course.createdAt,
+    updatedAt: course.updatedAt,
+    assignedUsersCount: course._count?.assignments || 0,
+  };
+}
+
 // 2. Get published RAG courses (Admin gets all with counts; Students get ONLY assigned courses)
 router.get('/', authenticateToken, async (req, res) => {
   try {
@@ -243,11 +293,7 @@ router.get('/', authenticateToken, async (req, res) => {
           },
         },
       });
-      const formatted = courses.map((c) => ({
-        ...c,
-        assignedUsersCount: c._count?.assignments || 0,
-      }));
-      return res.json(formatted);
+      return res.json(courses.map(formatCourseForCatalog));
     }
 
     // For STUDENT role: return ONLY assigned courses
@@ -267,8 +313,13 @@ router.get('/', authenticateToken, async (req, res) => {
     const courses = await prisma.course.findMany({
       where: { id: { in: assignedIds } },
       orderBy: { createdAt: 'desc' },
+      include: {
+        _count: {
+          select: { assignments: true },
+        },
+      },
     });
-    return res.json(courses);
+    return res.json(courses.map(formatCourseForCatalog));
   } catch (error) {
     console.error('Failed to retrieve RAG courses:', error);
     res.status(500).json({ error: 'Failed to retrieve courses catalog.' });

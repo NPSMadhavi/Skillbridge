@@ -114,7 +114,6 @@ export const tenantService = {
       throw new Error(`Master database unavailable: ${dbErr.message}`);
     }
 
-    if (!company) {
       if (normalizedCode === 'default') {
         return defaultPrisma;
       }

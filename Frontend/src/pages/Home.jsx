@@ -112,8 +112,8 @@ const getCompletedLessonIdsForCourse = (courseId, userId) => {
 const Home = ({ onOpenCourse, onPlayCourse }) => {
   const [ragCourses, setRagCourses] = useState([])
   const [selectedCourseId, setSelectedCourseId] = useState(null)
-  const [userProgressMap, setUserProgressMap] = useState({})
-  const [loadingCourses, setLoadingCourses] = useState(true)
+  const [loading, setLoading] = useState(true)
+  const loadingCourses = loading
 
   const user = useMemo(() => {
     try {
@@ -129,7 +129,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
   }, [user]);
 
   const loadCourses = useCallback(() => {
-    setLoadingCourses(true);
+    setLoading(true);
     api.getCourses()
       .then(res => {
         if (Array.isArray(res)) {
@@ -169,7 +169,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
         console.error("Error fetching courses catalog:", err);
       })
       .finally(() => {
-        setLoadingCourses(false);
+        setLoading(false);
       });
   }, [userId]);
 
@@ -367,12 +367,22 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
 
               <div className="my-auto py-1">
                 <h3 className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold tracking-tight text-white leading-tight line-clamp-2">
-                  {activeCourseObj ? activeCourseObj.title : 'Full-Stack Web Development'}
+                  {loading ? (
+                    <span className="inline-block h-7 w-48 rounded-lg bg-white/20 animate-pulse" />
+                  ) : activeCourseObj ? (
+                    activeCourseObj.title
+                  ) : (
+                    'No Assigned Course'
+                  )}
                 </h3>
                 <p className="text-xs text-blue-100/90 font-medium mt-1">
-                  {activeCourseObj
-                    ? `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
-                    : 'Modules 5 of 10'}
+                  {loading ? (
+                    <span className="inline-block h-3.5 w-24 rounded bg-white/20 animate-pulse" />
+                  ) : activeCourseObj ? (
+                    `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
+                  ) : (
+                    'Awaiting administrator assignment'
+                  )}
                 </p>
               </div>
 
@@ -380,15 +390,17 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 <div className="w-full bg-white/20 h-2 rounded-full overflow-hidden mb-1.5">
                   <div
                     className="bg-[#ff7a00] h-full rounded-full transition-all duration-500"
-                    style={{ width: `${activeCourseProgressPct}%` }}
+                    style={{ width: `${loading ? 0 : activeCourseProgressPct}%` }}
                   />
                 </div>
                 <span className="text-[11px] font-bold text-blue-100">
-                  {activeCourseProgressPct}% Complete
+                  {loading ? '...' : `${activeCourseProgressPct}% Complete`}
                 </span>
               </div>
 
-              {activeCourseObj ? (
+              {loading ? (
+                <div className="mt-2 h-8 w-28 rounded-xl bg-white/20 animate-pulse" />
+              ) : activeCourseObj ? (
                 <button
                   type="button"
                   onClick={() => onPlayCourse?.(activeCourseObj)}
@@ -519,10 +531,10 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col divide-y divide-slate-100/80 overflow-y-auto pr-1">
-            {loadingCourses && displayCourses.length === 0 ? (
+            {loading && displayCourses.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400 my-auto">
-                <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-500/20 border-t-[#ff7a00] mb-2" />
-                <p className="text-xs font-semibold text-slate-600">Checking assigned courses...</p>
+                <div className="h-7 w-7 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21] mb-2" />
+                <p className="text-xs font-semibold text-slate-500">Loading your courses...</p>
               </div>
             ) : displayCourses.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400 my-auto">

@@ -78,43 +78,6 @@ const AdminDashboard = () => {
           </Link>
         </div>
       </div>
-
-      {/* Company Slug / Organization Identifier Card */}
-      <div className="rounded-2xl border border-sky/20 bg-sky/5 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xs">
-        <div className="flex items-center gap-3.5 min-w-0">
-          <div className="w-10 h-10 rounded-xl bg-navy text-white flex items-center justify-center font-bold text-base shrink-0 shadow-xs">
-            🏢
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-bold text-fg text-sm sm:text-base truncate">{companyName}</span>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                Active Tenant
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-1 flex-wrap">
-              <span className="text-xs text-muted font-medium">Company Slug / Identifier:</span>
-              <code className="text-xs font-mono font-bold text-navy bg-white px-2.5 py-0.5 rounded-lg border border-navy/20">
-                {slug}
-              </code>
-              <span className="text-[11px] text-muted hidden md:inline">
-                (Learners can use this code during login)
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            type="button"
-            onClick={handleCopySlug}
-            className="inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-line bg-panel px-3.5 py-2 text-xs font-semibold text-fg shadow-xs transition hover:bg-ink hover:text-navy"
-          >
-            <span>{copiedSlug ? '✓ Copied!' : '📋 Copy Company Slug'}</span>
-          </button>
-        </div>
-      </div>
-
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total users" value={loading ? '…' : stats.totalUsers} hint="All registered profiles" tone="text-navy" icon="👥" />
         <StatCard label="Face ID enrolled" value={loading ? '…' : stats.faceEnrolled} hint="Biometric captures saved" tone="text-sky" icon="📸" />
@@ -174,9 +137,8 @@ const AdminDashboard = () => {
                     <td className="py-3.5 pr-3 text-muted">{user.country}</td>
                     <td className="py-3.5">
                       <span
-                        className={`rounded-full px-2.5 py-1 text-[0.7rem] font-bold uppercase ${
-                          user.faceIdData ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'
-                        }`}
+                        className={`rounded-full px-2.5 py-1 text-[0.7rem] font-bold uppercase ${user.faceIdData ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'
+                          }`}
                       >
                         {user.faceIdData ? 'Enrolled' : 'Missing'}
                       </span>

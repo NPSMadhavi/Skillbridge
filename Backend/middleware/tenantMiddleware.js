@@ -43,6 +43,18 @@ export const resolveTenant = async (req, res, next) => {
       rawTenant = req.user.tenantCode;
     }
 
+    // 4. For login/auth requests where tenant is not provided or is 'default', attempt resolution via email
+    if ((!rawTenant || rawTenant === 'default') && req.body?.email) {
+      try {
+        const comp = await tenantService.findCompanyByAdminEmail(req.body.email);
+        if (comp) {
+          rawTenant = comp.code;
+        }
+      } catch (err) {
+        // Fallback to default if lookup fails
+      }
+    }
+
     // Normalize tenant code (defaulting to 'default')
     const tenantCode = (rawTenant ? String(rawTenant) : 'default').trim().toLowerCase();
 
