@@ -10,10 +10,14 @@ const getHeaders = (role = false) => {
     const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null');
     const superAdminSession = JSON.parse(sessionStorage.getItem('skillbridge_super_admin') || 'null');
 
+    const path = typeof window !== 'undefined' ? window.location.pathname : '';
+    const isAdminPath = path.startsWith('/admin');
+    const isSuperAdminPath = path.startsWith('/super-admin');
+
     let token = null;
-    if (role === 'super') {
-      token = superAdminSession?.token;
-    } else if (role === true) {
+    if (role === 'super' || isSuperAdminPath) {
+      token = superAdminSession?.token || adminSession?.token;
+    } else if (role === true || isAdminPath) {
       token = adminSession?.token || userSession?.token;
     } else {
       token = userSession?.token || adminSession?.token;
@@ -553,10 +557,11 @@ export const api = {
   },
 
 
-  getCourses: async () => {
+  getCourses: async (asAdmin) => {
+    const isAdmin = asAdmin !== undefined ? asAdmin : (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin'));
     const res = await fetch(`${API_BASE_URL}/courses`, {
       method: 'GET',
-      headers: getHeaders(false),
+      headers: getHeaders(isAdmin),
     });
     if (!res.ok) {
       const err = await res.json();

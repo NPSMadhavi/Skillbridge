@@ -143,6 +143,17 @@ const RegisterUser = () => {
   const [statusBanner, setStatusBanner] = useState(null)
   const [enrollmentModalOpen, setEnrollmentModalOpen] = useState(false)
   const [faceEnrollment, setFaceEnrollment] = useState(null)
+  const [courses, setCourses] = useState([])
+  const [assignedCourseIds, setAssignedCourseIds] = useState([])
+  const [loadingCourses, setLoadingCourses] = useState(false)
+
+  useEffect(() => {
+    setLoadingCourses(true)
+    api.getCourses(true)
+      .then((data) => setCourses(data || []))
+      .catch(() => setCourses([]))
+      .finally(() => setLoadingCourses(false))
+  }, [])
 
   const fullNameRef = useRef(null)
   const finNumberRef = useRef(null)
@@ -266,14 +277,16 @@ const RegisterUser = () => {
         country: form.country.trim(),
         faceIdData: form.faceIdData,
         faceEnrollment: faceEnrollment,
+        assignedCourseIds,
       })
       setForm(emptyForm)
       setFaceEnrollment(null)
+      setAssignedCourseIds([])
       setTouched(emptyTouched)
       setExistingFaceUser(null)
       setErrors({})
       toast.success(`${res.user.fullName} registered successfully!`)
-      setStatusBanner({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
+      setStatusBanner({ type: 'ok', text: `${res.user.fullName} registered successfully with ${assignedCourseIds.length} course(s) assigned.` })
     } catch (err) {
       const errorMsg = err.message || 'Registration failed.'
       if (err.matchedUser || errorMsg.toLowerCase().includes('already exists') || errorMsg.toLowerCase().includes('already registered')) {
@@ -649,6 +662,91 @@ const RegisterUser = () => {
                 <span>{errors.faceIdData}</span>
               </p>
             )}
+          </div>
+
+          {/* Course Assignment Section */}
+          <div className="sm:col-span-2 rounded-2xl border border-line bg-panel p-4.5 shadow-xs">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                  Assign Courses (Optional)
+                </p>
+                <p className="text-xs text-muted mt-0.5">
+                  Select which courses this learner can access immediately upon registration.
+                </p>
+              </div>
+              {courses.length > 0 && (
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setAssignedCourseIds(courses.map(c => c.id))}
+                    className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-semibold"
+                  >
+                    Select all
+                  </button>
+                  <span className="text-muted">•</span>
+                  <button
+                    type="button"
+                    onClick={() => setAssignedCourseIds([])}
+                    className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {loadingCourses ? (
+              <div className="py-4 text-center text-xs text-muted">Loading courses catalog...</div>
+            ) : courses.length === 0 ? (
+              <div className="py-4 text-center text-xs text-muted">
+                No courses published yet. You can create courses in Course Manager.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                {courses.map((c) => {
+                  const isChecked = assignedCourseIds.includes(c.id);
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => {
+                        setAssignedCourseIds(prev =>
+                          prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id]
+                        );
+                      }}
+                      className={`flex items-start gap-2.5 p-3 rounded-xl border transition cursor-pointer select-none ${
+                        isChecked
+                          ? 'border-sky/60 bg-sky/5 shadow-xs'
+                          : 'border-line bg-ink/30 hover:border-line/90'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          setAssignedCourseIds(prev =>
+                            prev.includes(c.id) ? prev.filter(id => id !== c.id) : [...prev, c.id]
+                          );
+                        }}
+                        className="mt-0.5 h-4 w-4 rounded text-sky focus:ring-sky/40 border-line cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-xs font-semibold leading-tight truncate ${isChecked ? 'text-sky' : 'text-fg'}`}>
+                          {c.title}
+                        </p>
+                        <p className="text-[10px] text-muted line-clamp-1 mt-0.5">
+                          {c.description || 'AI training course'}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <p className="mt-2 text-[11px] text-muted">
+              {assignedCourseIds.length} course{assignedCourseIds.length === 1 ? '' : 's'} selected
+            </p>
           </div>
 
           {statusBanner && (

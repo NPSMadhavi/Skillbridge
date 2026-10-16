@@ -33,6 +33,46 @@ const AdminCourses = () => {
   // View details modal state
   const [viewingCourse, setViewingCourse] = useState(null)
 
+  // Assign Learners modal state
+  const [assignCourse, setAssignCourse] = useState(null)
+  const [allUsers, setAllUsers] = useState([])
+  const [selectedUserIds, setSelectedUserIds] = useState([])
+  const [loadingAssignments, setLoadingAssignments] = useState(false)
+  const [savingAssignments, setSavingAssignments] = useState(false)
+
+  const handleOpenAssignUsers = async (course) => {
+    setAssignCourse(course)
+    setLoadingAssignments(true)
+    try {
+      const [users, assignmentsData] = await Promise.all([
+        allUsers.length > 0 ? Promise.resolve(allUsers) : api.getUsers(),
+        api.getCourseAssignments(course.id)
+      ])
+      setAllUsers(users || [])
+      setSelectedUserIds((assignmentsData.assignedUsers || []).map(u => u.id))
+    } catch (err) {
+      console.error(err)
+      toast.error('Failed to load course assignments.')
+    } finally {
+      setLoadingAssignments(false)
+    }
+  }
+
+  const handleSaveCourseAssignments = async () => {
+    if (!assignCourse) return
+    setSavingAssignments(true)
+    try {
+      const res = await api.assignCourseUsers(assignCourse.id, selectedUserIds)
+      setCoursesList(prev => prev.map(c => c.id === assignCourse.id ? { ...c, assignedUsersCount: res.assignedUserIds?.length || 0 } : c))
+      toast.success('Course learners assigned successfully!')
+      setAssignCourse(null)
+    } catch (err) {
+      toast.error(err.message || 'Failed to save learners assignment.')
+    } finally {
+      setSavingAssignments(false)
+    }
+  }
+
   const totalPages = Math.max(1, Math.ceil(coursesList.length / pageSize))
 
   const paginatedCourses = useMemo(() => {
@@ -271,6 +311,15 @@ const AdminCourses = () => {
                         📄 {course.fileName}
                       </span>
                       <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAssignUsers(course)}
+                          className="cursor-pointer rounded-lg bg-sky/10 border border-sky/30 text-sky px-2 py-1 text-xs font-semibold hover:bg-sky/20 transition flex items-center gap-1"
+                          title="Assign learners to this course"
+                        >
+                          <span>👥</span>
+                          <span>{course.assignedUsersCount || 0} Learners</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => setViewingCourse(course)}
@@ -688,6 +737,139 @@ const AdminCourses = () => {
               >
                 Close
               </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* Assign Learners Modal */}
+      {assignCourse && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="relative w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in max-h-[85vh] flex flex-col justify-between overflow-hidden">
+            <div className="flex items-center justify-between border-b border-line pb-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="h-10 w-10 rounded-xl bg-sky/10 border border-sky/20 text-sky grid place-items-center font-bold text-lg">
+                  👥
+                </div>
+                <div>
+                  <h2 className="font-display text-lg font-semibold text-fg">
+                    Assign Learners
+                  </h2>
+                  <p className="text-xs text-muted truncate max-w-xs">
+                    {assignCourse.title}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAssignCourse(null)}
+                className="grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-line bg-ink text-muted hover:text-fg transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between py-2 border-b border-line/40 shrink-0 text-xs">
+              <span className="text-muted font-medium">
+                {selectedUserIds.length} of {allUsers.length} learner{allUsers.length === 1 ? '' : 's'} assigned
+              </span>
+              {allUsers.length > 0 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUserIds(allUsers.map((u) => u.id))}
+                    className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-semibold"
+                  >
+                    Select all
+                  </button>
+                  <span className="text-muted">•</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUserIds([])}
+                    className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto my-3 space-y-2 pr-1">
+              {loadingAssignments ? (
+                <div className="py-10 text-center text-xs text-muted">Loading learners...</div>
+              ) : allUsers.length === 0 ? (
+                <div className="py-10 text-center text-xs text-muted">
+                  No registered users found. Register users from the Register User page.
+                </div>
+              ) : (
+                allUsers.map((u) => {
+                  const isChecked = selectedUserIds.includes(u.id);
+                  return (
+                    <div
+                      key={u.id}
+                      onClick={() => {
+                        setSelectedUserIds((prev) =>
+                          prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                        );
+                      }}
+                      className={`flex items-center gap-3 p-3 rounded-xl border transition cursor-pointer select-none ${
+                        isChecked
+                          ? 'border-sky/60 bg-sky/5 shadow-xs'
+                          : 'border-line bg-ink/30 hover:border-line/90'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          setSelectedUserIds((prev) =>
+                            prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                          );
+                        }}
+                        className="h-4 w-4 rounded text-sky focus:ring-sky/40 border-line cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`text-xs font-bold truncate ${isChecked ? 'text-sky' : 'text-fg'}`}>
+                            {u.fullName}
+                          </p>
+                          <span className="text-[10px] text-muted font-mono">{u.finNumber}</span>
+                        </div>
+                        <p className="text-[11px] text-muted truncate">{u.email}</p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="pt-3 border-t border-line flex items-center justify-between shrink-0">
+              <span className="text-[11px] text-muted">
+                {selectedUserIds.length === 0 ? '⚠️ No learners assigned' : 'Selected learners can play this course'}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAssignCourse(null)}
+                  className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2 text-xs font-semibold text-fg hover:border-sky/40"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingAssignments}
+                  onClick={handleSaveCourseAssignments}
+                  className="cursor-pointer rounded-xl border-0 bg-sky px-4 py-2 text-xs font-bold text-white shadow-md hover:brightness-105 transition disabled:opacity-60"
+                >
+                  {savingAssignments ? 'Saving...' : 'Save Assignments'}
+                </button>
+              </div>
             </div>
           </div>
         </div>,

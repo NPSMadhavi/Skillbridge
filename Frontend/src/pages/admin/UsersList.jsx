@@ -144,6 +144,15 @@ const UsersList = () => {
             : u
         )
       )
+      setSelectedUser((prev) =>
+        prev && prev.id === assignModalUser.id
+          ? {
+              ...prev,
+              assignedCourseIds: res.assignedCourseIds,
+              assignedCourses: res.assignedCourses,
+            }
+          : prev
+      )
       toast.success('Course assignments updated successfully!')
       setAssignModalUser(null)
     } catch (err) {
@@ -1438,7 +1447,12 @@ const UsersList = () => {
               ) : (
                 allCourses.map((c) => {
                   const isChecked = assignedCourseSelection.includes(c.id);
-                  const curriculumData = typeof c.curriculum === 'string' ? JSON.parse(c.curriculum) : (c.curriculum || {});
+                  let curriculumData = {};
+                  try {
+                    curriculumData = typeof c.curriculum === 'string' ? JSON.parse(c.curriculum) : (c.curriculum || {});
+                  } catch (_) {
+                    curriculumData = {};
+                  }
                   const totalLessons = curriculumData.lessons?.length || (curriculumData.curriculum?.length || 1);
 
                   return (
@@ -1454,8 +1468,11 @@ const UsersList = () => {
                       <input
                         type="checkbox"
                         checked={isChecked}
-                        onChange={() => {}}
-                        className="mt-0.5 h-4 w-4 rounded text-sky focus:ring-sky/40 border-line"
+                        onChange={(e) => {
+                          e.stopPropagation();
+                          toggleCourseSelection(c.id);
+                        }}
+                        className="mt-0.5 h-4 w-4 rounded text-sky focus:ring-sky/40 border-line cursor-pointer"
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between gap-2">
