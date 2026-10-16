@@ -112,6 +112,7 @@ const getCompletedLessonIdsForCourse = (courseId, userId) => {
 const Home = ({ onOpenCourse, onPlayCourse }) => {
   const [ragCourses, setRagCourses] = useState([])
   const [selectedCourseId, setSelectedCourseId] = useState(null)
+  const [userProgressMap, setUserProgressMap] = useState({})
   const [loading, setLoading] = useState(true)
   const loadingCourses = loading
 
