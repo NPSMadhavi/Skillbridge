@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 export const tenantStorage = new AsyncLocalStorage();
 
 // Default fallback client (points to default DATABASE_URL in .env)
-const defaultPrisma = new PrismaClient();
+export const defaultPrisma = new PrismaClient();
 
 /**
  * Dynamic Prisma Proxy:

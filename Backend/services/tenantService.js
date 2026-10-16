@@ -5,6 +5,7 @@ import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import masterPrisma from '../config/masterPrisma.js';
+import { defaultPrisma } from '../config/prisma.js';
 
 const { Client } = pg;
 const __filename = fileURLToPath(import.meta.url);
@@ -36,37 +37,40 @@ export const tenantService = {
     if (!email) return null;
     const cleanEmail = email.trim().toLowerCase();
 
-    // 1. Direct match on master database (Primary Company Admin)
-    const primaryCompany = await masterPrisma.company.findFirst({
-      where: { adminEmail: cleanEmail }
-    });
-    if (primaryCompany) {
-      return primaryCompany;
-    }
-
-    // 2. Search through registered active company tenant databases
-    const allCompanies = await masterPrisma.company.findMany({
-      where: { status: 'ACTIVE' }
-    });
-
-    for (const comp of allCompanies) {
-      try {
-        const client = await this.getTenantClient(comp.code);
-        const admin = await client.admin.findUnique({
-          where: { email: cleanEmail }
-        });
-        if (admin) {
-          return comp;
-        }
-      } catch (err) {
-        // Continue searching other companies
+    try {
+      // 1. Direct match on master database (Primary Company Admin)
+      const primaryCompany = await masterPrisma.company.findFirst({
+        where: { adminEmail: cleanEmail }
+      });
+      if (primaryCompany) {
+        return primaryCompany;
       }
+
+      // 2. Search through registered active company tenant databases
+      const allCompanies = await masterPrisma.company.findMany({
+        where: { status: 'ACTIVE' }
+      });
+
+      for (const comp of allCompanies) {
+        try {
+          const client = await this.getTenantClient(comp.code);
+          const admin = await client.admin.findUnique({
+            where: { email: cleanEmail }
+          });
+          if (admin) {
+            return comp;
+          }
+        } catch (err) {
+          // Continue searching other companies
+        }
+      }
+    } catch (masterErr) {
+      console.warn('[TenantService] Master DB query failed in findCompanyByAdminEmail:', masterErr.message);
     }
 
     // 3. Fallback: check default database admin
     try {
-      const defaultClient = await this.getTenantClient('default');
-      const defaultAdmin = await defaultClient.admin.findUnique({
+      const defaultAdmin = await defaultPrisma.admin.findUnique({
         where: { email: cleanEmail }
       });
       if (defaultAdmin) {
@@ -87,16 +91,33 @@ export const tenantService = {
 
     const normalizedCode = tenantCode.toLowerCase().trim();
 
+    // Default tenant uses the primary database client directly
+    if (normalizedCode === 'default') {
+      return defaultPrisma;
+    }
+
     if (tenantClients.has(normalizedCode)) {
       return tenantClients.get(normalizedCode);
     }
 
     // Lookup company in Master DB
-    let company = await masterPrisma.company.findUnique({
-      where: { code: normalizedCode }
-    });
+    let company = null;
+    try {
+      company = await masterPrisma.company.findUnique({
+        where: { code: normalizedCode }
+      });
+    } catch (dbErr) {
+      console.warn(`[TenantService] Master DB query failed for tenant '${tenantCode}':`, dbErr.message);
+      if (normalizedCode === 'default') {
+        return defaultPrisma;
+      }
+      throw new Error(`Master database unavailable: ${dbErr.message}`);
+    }
 
     if (!company) {
+      if (normalizedCode === 'default') {
+        return defaultPrisma;
+      }
       throw new Error(`Company with code '${tenantCode}' was not found.`);
     }
 
