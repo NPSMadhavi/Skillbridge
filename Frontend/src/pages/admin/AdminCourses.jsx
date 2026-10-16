@@ -428,7 +428,7 @@ const AdminCourses = () => {
                   }`}>
                     <input
                       type="file"
-                      accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json"
+                      accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4"
                       onChange={handleFileChange}
                       className="hidden"
                     />
@@ -437,16 +437,17 @@ const AdminCourses = () => {
                         selectedFile.name.endsWith('.pdf') ? '📄' :
                         selectedFile.name.match(/\.(docx?|doc)$/i) ? '📝' :
                         selectedFile.name.match(/\.(txt|md|text)$/i) ? '📃' :
-                        selectedFile.name.match(/\.(pptx?|ppt)$/i) ? '📑' : '📁'
+                        selectedFile.name.match(/\.(pptx?|ppt)$/i) ? '📑' :
+                        selectedFile.name.match(/\.(mp3|wav|m4a|aac|ogg|flac|webm|mp4)$/i) ? '🎙️' : '📁'
                       ) : '📄'}
                     </span>
                     <span className="mt-2 text-xs font-bold text-fg break-all max-w-full px-2">
-                      {selectedFile ? selectedFile.name : 'Upload Document'}
+                      {selectedFile ? selectedFile.name : 'Upload Document or Audio'}
                     </span>
                     <span className="text-[11px] text-muted mt-0.5">
                       {selectedFile
                         ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
-                        : 'PDF, PPTX, PPT, Word (DOCX/DOC), Text (TXT/MD), CSV • All file sizes supported'}
+                        : 'PPTX, PPT, PDF, Word (DOCX/DOC), Audio (MP3/WAV/M4A), Text (TXT/MD) • Whisper & LLM Powered'}
                     </span>
                   </label>
                 </div>
@@ -550,7 +551,7 @@ const AdminCourses = () => {
                 }`}>
                   <input
                     type="file"
-                    accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json"
+                    accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4"
                     onChange={handleEditFileChange}
                     className="hidden"
                   />
@@ -558,7 +559,9 @@ const AdminCourses = () => {
                     {editFile ? (
                       editFile.name.endsWith('.pdf') ? '📄' :
                       editFile.name.match(/\.(docx?|doc)$/i) ? '📝' :
-                      editFile.name.match(/\.(txt|md|text)$/i) ? '📃' : '📁'
+                      editFile.name.match(/\.(txt|md|text)$/i) ? '📃' :
+                      editFile.name.match(/\.(pptx?|ppt)$/i) ? '📑' :
+                      editFile.name.match(/\.(mp3|wav|m4a|aac|ogg|flac|webm|mp4)$/i) ? '🎙️' : '📁'
                     ) : '🔄'}
                   </span>
                   <span className="mt-1.5 text-xs font-bold text-fg break-all max-w-full px-2">
@@ -567,7 +570,7 @@ const AdminCourses = () => {
                   <span className="text-[10px] text-muted mt-0.5">
                     {editFile
                       ? `${(editFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
-                      : 'PDF, PPTX, PPT, Word (DOCX/DOC), Text, CSV • All file sizes supported'}
+                      : 'PPTX, PPT, PDF, Word (DOCX/DOC), Audio (MP3/WAV/M4A), Text • Whisper & LLM Powered'}
                   </span>
                   {editFile && (
                     <button

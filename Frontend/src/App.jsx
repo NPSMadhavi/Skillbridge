@@ -16,6 +16,7 @@ import Login from './pages/Login'
 import MyCertificates from './pages/MyCertificates'
 import { courses as defaultCourses } from './data/courses'
 import { api } from './services/api'
+import { clearStoredLanguage, hasStoredLanguage } from './utils/language'
 
 // Helper to map DB AI course
 const mapRagCourse = (dbCourse) => {
@@ -44,6 +45,7 @@ const mapRagCourse = (dbCourse) => {
     description: dbCourse.description || curriculumData.description || 'AI custom course generated from document.',
     fileName: dbCourse.fileName,
     fileText: dbCourse.fileText,
+    chunks: dbCourse.chunks || [],
     learning: curriculumData.learning || [],
     includes: curriculumData.includes || [],
     curriculum: curriculumData.curriculum || [],
@@ -64,7 +66,7 @@ const getAdminSession = () => {
 const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
   const navigate = useNavigate()
   const isAuthenticated = Boolean(sessionStorage.getItem('skillbridge_user'))
-  const languageReady = Boolean(sessionStorage.getItem('skillbridge_language'))
+  const languageReady = hasStoredLanguage()
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
@@ -80,7 +82,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
         onLogoClick={() => navigate('/')}
         onLogout={() => {
           sessionStorage.removeItem('skillbridge_user')
-          sessionStorage.removeItem('skillbridge_language')
+          clearStoredLanguage()
           navigate('/login')
         }}
         searchQuery={searchQuery}
@@ -159,7 +161,12 @@ const CoursePlayerRoute = () => {
       initialAutoPlayNext={location.state?.autoPlayNext}
       initialNextLessonId={location.state?.nextLessonId}
       onExit={() => {
-        try { window.speechSynthesis?.cancel?.(); } catch (e) { }
+        try {
+          if (document.fullscreenElement) {
+            document.exitFullscreen?.().catch(() => {});
+          }
+          window.speechSynthesis?.cancel?.();
+        } catch (e) { }
         navigate('/')
       }}
       onAssessment={(courseObj, activeLesson, quizQuestions, nextLessonId) => {
@@ -260,7 +267,7 @@ const StudentLoginRoute = () => {
   return (
     <Login
       onSuccess={() => {
-        if (!sessionStorage.getItem('skillbridge_language')) {
+        if (!hasStoredLanguage()) {
           navigate('/language')
         } else {
           navigate('/')
@@ -291,6 +298,12 @@ const AdminLoginRoute = () => {
 const HomeRoute = ({ searchQuery }) => {
   const navigate = useNavigate()
   const handleSelectCourse = (course) => {
+    try {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      }
+    } catch (e) { }
+
     if (course?.id) {
       try {
         const user = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')?.user;

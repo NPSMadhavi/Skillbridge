@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import logo from '../assets/SkillBridge_AI.png'
 import { api } from '../services/api'
+import { persistLanguageSelection, readStoredLanguageCode } from '../utils/language'
+
+function restoreLanguageAfterLogin(user) {
+  const stored = readStoredLanguageCode()
+  if (stored) {
+    persistLanguageSelection(stored)
+    return
+  }
+  const fromProfile = user?.preferredLanguage || user?.preferLanguage
+  if (fromProfile) {
+    persistLanguageSelection(fromProfile)
+  }
+}
 
 const MailIcon = () => (
   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -140,7 +153,7 @@ const Login = ({ onSuccess }) => {
         'skillbridge_user',
         JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       )
-      sessionStorage.setItem('skillbridge_language', 'en')
+      restoreLanguageAfterLogin(res.user)
       onSuccess?.()
     } catch (err) {
       setMessage({ type: 'error', text: err.message || 'Incorrect email or password.' })
@@ -207,7 +220,7 @@ const Login = ({ onSuccess }) => {
         'skillbridge_user',
         JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       )
-      sessionStorage.setItem('skillbridge_language', 'en')
+      restoreLanguageAfterLogin(res.user)
 
       setFaceState('success')
       setFaceCopy('Identity verified')

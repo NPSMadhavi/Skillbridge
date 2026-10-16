@@ -89,7 +89,6 @@ const CountrySelect = forwardRef(function CountrySelect(
     onChange?.(country.name)
     setIsOpen(false)
     setSearch('')
-    onBlur?.()
   }
 
   const handleKeyDown = (e) => {

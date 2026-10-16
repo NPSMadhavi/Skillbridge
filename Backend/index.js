@@ -8,6 +8,7 @@ import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import coursesRoutes from './routes/courses.js';
 import prisma from './config/prisma.js';
+import aiService from './services/aiService.js';
 
 // Load environment variables
 dotenv.config();
@@ -191,6 +192,29 @@ app.listen(PORT, async () => {
 
   // Check the existing database after the server starts.
   await checkDatabaseConnection();
+
+  try {
+    const health = await aiService.checkGatewayHealth();
+    const gatewayUrl = aiService.getGatewayBaseUrl();
+    console.log(`[LLM Gateway] Health OK at ${gatewayUrl} (model: ${health?.model || 'unknown'})`);
+  } catch (e) {
+    console.warn('[LLM Gateway] Health check failed. Tutor chat requires SKILLBRIDGE_LLM_GATEWAY_URL on port 8081.');
+  }
+});
+
+// ============================================================
+// GLOBAL UNCAUGHT ERROR PROTECTION
+// ============================================================
+
+process.on('uncaughtException', (err) => {
+  console.error('[BACKEND:UNCAUGHT_EXCEPTION] Caught error without crashing server:', err?.message || err);
+  if (err?.stack) {
+    console.error(err.stack);
+  }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[BACKEND:UNHANDLED_REJECTION] Caught rejection without crashing server:', reason);
 });
 
 // ============================================================

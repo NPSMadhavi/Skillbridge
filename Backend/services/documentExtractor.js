@@ -2,6 +2,162 @@ import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import mammoth from 'mammoth';
+import axios from 'axios';
+import FormData from 'form-data';
+import { exec } from 'child_process';
+import util from 'util';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import aiService from './aiService.js';
+import { enrichDocumentVisuals, extractEmbeddedRasterImages } from './visualTextService.js';
+import { isGarbageTitle, isBinaryNoiseText } from '../utils/contentQuality.js';
+
+const execPromise = util.promisify(exec);
+
+/**
+ * Renders every slide in a PowerPoint presentation (PPTX/PPT) into high-resolution PNG images.
+ * Uses PowerPoint COM automation on Windows.
+ */
+async function renderPptSlidesToImages(fileBuffer, originalname) {
+  const ext = originalname.split('.').pop()?.toLowerCase() || 'pptx';
+  const tmpDir = path.join(os.tmpdir(), `ppt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const tmpFile = path.join(tmpDir, `presentation.${ext}`);
+  const outDir = path.join(tmpDir, 'slides');
+
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(tmpFile, fileBuffer);
+
+    const psScript = `
+$fullPpt = "${tmpFile.replace(/\\/g, '\\\\')}"
+$fullOut = "${outDir.replace(/\\/g, '\\\\')}"
+$ppt = New-Object -ComObject PowerPoint.Application
+try {
+  $pres = $ppt.Presentations.Open($fullPpt, 1, 0, 0)
+  $pres.SaveAs($fullOut, 18)
+  $pres.Close()
+} finally {
+  $ppt.Quit()
+  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($ppt) | Out-Null
+}
+`;
+    const psFile = path.join(tmpDir, 'export.ps1');
+    fs.writeFileSync(psFile, psScript);
+
+    await execPromise(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 60000 });
+
+    if (!fs.existsSync(outDir)) return [];
+    const files = fs.readdirSync(outDir);
+    const slideImages = [];
+
+    const sortedFiles = files
+      .filter(f => /^Slide\d+\.png$/i.test(f))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/\d+/)?.[0] || '0', 10);
+        const numB = parseInt(b.match(/\d+/)?.[0] || '0', 10);
+        return numA - numB;
+      });
+
+    for (let i = 0; i < sortedFiles.length; i++) {
+      const fileName = sortedFiles[i];
+      const slideNum = parseInt(fileName.match(/\d+/)?.[0] || `${i + 1}`, 10);
+      const imgBuffer = fs.readFileSync(path.join(outDir, fileName));
+      const dataUrl = `data:image/png;base64,${imgBuffer.toString('base64')}`;
+
+      slideImages.push({
+        id: `full_slide_${slideNum}`,
+        dataUrl,
+        fileName,
+        mimetype: 'image/png',
+        sourceSlide: slideNum,
+        name: `Slide ${slideNum}`,
+        descr: `Full slide presentation graphic for slide ${slideNum}`,
+        purpose: `Exact PowerPoint Presentation Slide ${slideNum}`,
+        sizeBytes: imgBuffer.length
+      });
+    }
+
+    return slideImages;
+  } catch (err) {
+    console.warn('[Doc Extractor] PowerPoint COM slide rendering notice:', err.message);
+    return [];
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (e) { }
+  }
+}
+
+/**
+ * Renders every page in a PDF document into high-resolution PNG images using pypdfium2.
+ */
+async function renderPdfPagesToImages(fileBuffer) {
+  const tmpDir = path.join(os.tmpdir(), `pdf_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const tmpFile = path.join(tmpDir, 'document.pdf');
+  const outDir = path.join(tmpDir, 'pages');
+
+  try {
+    fs.mkdirSync(outDir, { recursive: true });
+    fs.writeFileSync(tmpFile, fileBuffer);
+
+    const pyScript = `
+import pypdfium2 as pdfium, sys, os
+pdf = pdfium.PdfDocument(r"${tmpFile}")
+out_dir = r"${outDir}"
+for i, page in enumerate(pdf):
+    image = page.render(scale=2).to_pil()
+    image.save(os.path.join(out_dir, f"Page{i+1}.png"))
+`;
+    const pyFile = path.join(tmpDir, 'render.py');
+    fs.writeFileSync(pyFile, pyScript);
+
+    const pythonExe = fs.existsSync('c:\\prem\\Netopsys\\Skill-Bridge\\ai-service\\.venv\\Scripts\\python.exe')
+      ? 'c:\\prem\\Netopsys\\Skill-Bridge\\ai-service\\.venv\\Scripts\\python.exe'
+      : 'python';
+
+    await execPromise(`"${pythonExe}" "${pyFile}"`, { timeout: 60000 });
+
+    if (!fs.existsSync(outDir)) return [];
+    const files = fs.readdirSync(outDir);
+    const pageImages = [];
+    const sortedFiles = files
+      .filter(f => /^Page\d+\.png$/i.test(f))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/\d+/)?.[0] || '0', 10);
+        const numB = parseInt(b.match(/\d+/)?.[0] || '0', 10);
+        return numA - numB;
+      });
+
+    for (let i = 0; i < sortedFiles.length; i++) {
+      const fileName = sortedFiles[i];
+      const pageNum = parseInt(fileName.match(/\d+/)?.[0] || `${i + 1}`, 10);
+      const imgBuffer = fs.readFileSync(path.join(outDir, fileName));
+      const dataUrl = `data:image/png;base64,${imgBuffer.toString('base64')}`;
+
+      pageImages.push({
+        id: `full_page_${pageNum}`,
+        dataUrl,
+        fileName,
+        mimetype: 'image/png',
+        sourcePage: pageNum,
+        name: `Page ${pageNum}`,
+        descr: `Full document page visual for page ${pageNum}`,
+        purpose: `Exact Document Page ${pageNum}`,
+        sizeBytes: imgBuffer.length
+      });
+    }
+
+    return pageImages;
+  } catch (err) {
+    console.warn('[Doc Extractor] PDF page rendering notice:', err.message);
+    return [];
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (e) { }
+  }
+}
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -282,7 +438,8 @@ function extractPptx(buffer) {
         }
       }
 
-      // Extract images/diagrams on this slide from <p:pic>, <a:blipFill>, <p:graphicFrame>, and slide rels
+      // Extract images actually drawn on THIS slide (pics, grouped pics, fills, background).
+      // Do not attach every media relationship — that copies the same images onto every chunk.
       const slideImages = [];
       if (relsEntry) {
         try {
@@ -296,13 +453,31 @@ function extractPptx(buffer) {
             const type = rel['@_Type'] || '';
             const target = rel['@_Target'] || '';
             if (rel['@_Id'] && target && (type.includes('image') || target.includes('media/'))) {
-              let cleanTarget = target;
-              if (!cleanTarget.startsWith('ppt/')) {
+              let cleanTarget = target.replace(/\\/g, '/');
+              if (!cleanTarget.toLowerCase().startsWith('ppt/')) {
                 cleanTarget = 'ppt/' + cleanTarget.replace(/^\.\.\//, '').replace(/^\//, '');
               }
               rIdToMedia.set(rel['@_Id'], cleanTarget.toLowerCase());
             }
           }
+
+          const collectBlipRIds = (node, out = []) => {
+            if (!node || typeof node !== 'object') return out;
+            if (Array.isArray(node)) {
+              for (const item of node) collectBlipRIds(item, out);
+              return out;
+            }
+            const blip = node['a:blip'];
+            if (blip) {
+              const rId = blip['@_r:embed'] || blip['@_r:link'];
+              if (rId && !out.includes(rId)) out.push(rId);
+            }
+            for (const key of Object.keys(node)) {
+              if (key === 'a:blip') continue;
+              collectBlipRIds(node[key], out);
+            }
+            return out;
+          };
 
           if (rIdToMedia.size > 0) {
             const addImageFromRel = (rId, name = '', descr = '') => {
@@ -312,10 +487,10 @@ function extractPptx(buffer) {
               if (!mediaEntry) return;
 
               const imgBuffer = mediaEntry.getData();
-              if (!imgBuffer || imgBuffer.length < 120) return; // Skip zero/tiny artifacts
+              if (!imgBuffer || imgBuffer.length < 120) return;
 
               const ext = mediaPath.split('.').pop().toLowerCase();
-              if (ext === 'wmf' || ext === 'emf') return; // Skip unsupported binary vector icons
+              if (['wmf', 'emf', 'mp3', 'wav', 'm4a', 'wma', 'mp4', 'bin'].includes(ext)) return;
 
               const mimeMap = {
                 png: 'image/png',
@@ -336,6 +511,7 @@ function extractPptx(buffer) {
                   fileName: mediaPath.split('/').pop(),
                   mediaPath,
                   mimetype,
+                  buffer: imgBuffer,
                   dataUrl,
                   name: name || `Slide ${slideIndex} Visual`,
                   descr: descr || '',
@@ -346,33 +522,26 @@ function extractPptx(buffer) {
               }
             };
 
-            // Inspect <p:pic> shapes
-            const picShapes = Array.isArray(spTree['p:pic']) ? spTree['p:pic'] : [spTree['p:pic']].filter(Boolean);
-            for (const pic of picShapes) {
-              const blip = pic?.['p:blipFill']?.['a:blip'];
-              const rId = blip?.['@_r:embed'] || blip?.['@_r:link'];
-              const cNvPr = pic?.['p:nvPicPr']?.['p:cNvPr'];
-              const name = cNvPr?.['@_name'] || '';
-              const descr = cNvPr?.['@_descr'] || cNvPr?.['@_title'] || '';
-              addImageFromRel(rId, name, descr);
-            }
+            const usedRIds = collectBlipRIds(spTree);
+            const bgTree = slideXml?.['p:sld']?.['p:cSld']?.['p:bg'];
+            collectBlipRIds(bgTree, usedRIds);
 
-            // Inspect <p:sp> with blipFill (shapes with image fills)
-            for (const sp of shapes) {
-              const blip = sp?.['p:spPr']?.['a:blipFill']?.['a:blip'] || sp?.['a:blipFill']?.['a:blip'];
-              if (blip) {
-                const rId = blip['@_r:embed'] || blip['@_r:link'];
-                const cNvPr = sp?.['p:nvSpPr']?.['p:cNvPr'];
-                const name = cNvPr?.['@_name'] || '';
-                const descr = cNvPr?.['@_descr'] || '';
-                addImageFromRel(rId, name, descr);
+            if (usedRIds.length > 0) {
+              for (const rId of usedRIds) {
+                addImageFromRel(rId, `Slide ${slideIndex} Visual`, '');
               }
-            }
-
-            // Fallback: If pics weren't explicitly captured in shape tree but rels exist, map them
-            if (slideImages.length === 0) {
-              for (const [rId] of rIdToMedia.entries()) {
-                addImageFromRel(rId, `Slide ${slideIndex} Visual Reference`, '');
+            } else {
+              // Last resort: only the largest unique photo on this slide, never every shared logo.
+              const ranked = [...rIdToMedia.entries()]
+                .map(([rId, path]) => {
+                  const entry = entryMap.get(path);
+                  const size = entry ? entry.getData().length : 0;
+                  return { rId, path, size };
+                })
+                .filter(item => item.size >= 25000)
+                .sort((a, b) => b.size - a.size);
+              if (ranked[0]) {
+                addImageFromRel(ranked[0].rId, `Slide ${slideIndex} Visual`, '');
               }
             }
           }
@@ -406,6 +575,16 @@ function extractPptx(buffer) {
       if (tables.length > 0) {
         slideText += '\n' + tables.join('\n\n') + '\n';
       }
+      if (slideImages.length > 1) {
+        slideImages.sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0));
+        const largest = slideImages[0];
+        if ((largest.sizeBytes || 0) >= 60000) {
+          const photos = slideImages.filter(img => (img.sizeBytes || 0) >= 50000);
+          slideImages.length = 0;
+          slideImages.push(...photos);
+        }
+      }
+
       if (slideImages.length > 0) {
         slideText += `\n[Visual Content on Slide ${slideIndex}]: ` +
           slideImages.map(img => `${img.name}${img.descr ? ` (${img.descr})` : ''}`).join(', ') + '\n';
@@ -438,6 +617,58 @@ function extractPptx(buffer) {
 }
 
 /**
+ * When PowerPoint COM exports real slide PNGs, those files are the true slide count.
+ * Binary OLE scraping often invents hundreds of fake "slides" from font/metadata noise.
+ */
+function alignSlidesToRendered(slides, renderedSlides) {
+  if (!Array.isArray(renderedSlides) || renderedSlides.length === 0) {
+    return { slides: slides || [], rebuilt: false };
+  }
+
+  const existing = Array.isArray(slides) ? slides : [];
+  const garbageCount = existing.filter(s => isGarbageTitle(s?.title)).length;
+  const garbageRatio = garbageCount / Math.max(1, existing.length);
+  const countMismatch = existing.length > renderedSlides.length * 1.3
+    || existing.length === 0
+    || renderedSlides.length > existing.length * 1.5;
+
+  const shouldRebuild = countMismatch || garbageRatio > 0.35;
+  if (!shouldRebuild) {
+    for (const rImg of renderedSlides) {
+      const targetSlide = existing.find(s => s.slideNumber === rImg.sourceSlide) || existing[rImg.sourceSlide - 1];
+      if (targetSlide) {
+        targetSlide.images = [rImg, ...(targetSlide.images || []).filter(img => img.id !== rImg.id)];
+        targetSlide.fullSlideImage = rImg;
+      }
+    }
+    return { slides: existing, rebuilt: false };
+  }
+
+  const byNum = new Map(existing.map(s => [s.slideNumber, s]));
+  const rebuilt = renderedSlides.map((rImg) => {
+    const prev = byNum.get(rImg.sourceSlide);
+    const keepTitle = prev && !isGarbageTitle(prev.title);
+    return {
+      slideNumber: rImg.sourceSlide,
+      title: keepTitle ? prev.title : `Slide ${rImg.sourceSlide}`,
+      headings: (prev?.headings || []).filter(h => !isGarbageTitle(h)),
+      bulletPoints: prev?.bulletPoints || [],
+      paragraphs: prev?.paragraphs || [],
+      tables: prev?.tables || [],
+      images: [rImg],
+      fullSlideImage: rImg,
+      speakerNotes: prev?.speakerNotes || '',
+      fullText: keepTitle && prev.fullText
+        ? prev.fullText
+        : `--- Slide ${rImg.sourceSlide}: Visual training slide ---\n[Visual Content on Slide ${rImg.sourceSlide}]: Full slide presentation`
+    };
+  });
+
+  console.log(`[Doc Extractor] Rebuilt ${rebuilt.length} real slides from PowerPoint render (was ${existing.length} extracted fragments).`);
+  return { slides: rebuilt, rebuilt: true };
+}
+
+/**
  * Binary PPT extractor fallback (reads ASCII/UTF-16 text streams from legacy .ppt files)
  */
 function extractPptBinary(buffer) {
@@ -450,7 +681,7 @@ function extractPptBinary(buffer) {
   let match;
   while ((match = utf16Regex.exec(rawStr)) !== null) {
     const decoded = Buffer.from(match[0], 'binary').toString('utf16le').trim();
-    if (decoded.length >= 4 && !/^\s+$/.test(decoded)) {
+    if (decoded.length >= 8 && !isBinaryNoiseText(decoded)) {
       textMatches.push(decoded);
     }
   }
@@ -459,53 +690,261 @@ function extractPptBinary(buffer) {
   const asciiRegex = /[\x20-\x7E\t\r\n]{8,}/g;
   while ((match = asciiRegex.exec(rawStr)) !== null) {
     const clean = match[0].replace(/\0/g, '').trim();
-    if (clean.length >= 8 && !textMatches.includes(clean)) {
-      // Filter out binary metadata noise
-      if (!clean.includes('Microsoft') && !clean.includes('Font') && !clean.includes('Theme')) {
-        textMatches.push(clean);
-      }
+    if (clean.length >= 12 && !textMatches.includes(clean) && !isBinaryNoiseText(clean)) {
+      textMatches.push(clean);
     }
   }
 
-  // Segment into approximate slides
+  // Segment into approximate slides. Cap hard so OLE noise cannot become 200+ lessons.
+  const MAX_HINT_SLIDES = 80;
   let currentSlideNum = 1;
   let currentTexts = [];
 
   for (const t of textMatches) {
+    if (currentSlideNum > MAX_HINT_SLIDES) break;
     currentTexts.push(t);
-    if (currentTexts.join(' ').length > 600) {
-      const slideTitle = currentTexts[0] || `Slide ${currentSlideNum}`;
+    if (currentTexts.join(' ').length > 800) {
+      const rawTitle = currentTexts.find(line => !isGarbageTitle(line)) || `Slide ${currentSlideNum}`;
+      const slideTitle = isGarbageTitle(rawTitle) ? `Slide ${currentSlideNum}` : rawTitle.slice(0, 80);
       slides.push({
         slideNumber: currentSlideNum,
-        title: slideTitle.slice(0, 80),
+        title: slideTitle,
         headings: [],
-        bulletPoints: currentTexts.slice(1).map(b => `- ${b}`),
-        paragraphs: currentTexts,
+        bulletPoints: currentTexts.slice(1, 8).map(b => `- ${b}`),
+        paragraphs: currentTexts.slice(0, 8),
         tables: [],
         speakerNotes: '',
-        fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + currentTexts.join('\n')
+        fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + currentTexts.slice(0, 8).join('\n')
       });
       currentSlideNum++;
       currentTexts = [];
     }
   }
 
-  if (currentTexts.length > 0) {
-    const slideTitle = currentTexts[0] || `Slide ${currentSlideNum}`;
+  if (currentTexts.length > 0 && currentSlideNum <= MAX_HINT_SLIDES) {
+    const rawTitle = currentTexts.find(line => !isGarbageTitle(line)) || `Slide ${currentSlideNum}`;
+    const slideTitle = isGarbageTitle(rawTitle) ? `Slide ${currentSlideNum}` : rawTitle.slice(0, 80);
     slides.push({
       slideNumber: currentSlideNum,
-      title: slideTitle.slice(0, 80),
+      title: slideTitle,
       headings: [],
-      bulletPoints: currentTexts.slice(1).map(b => `- ${b}`),
-      paragraphs: currentTexts,
+      bulletPoints: currentTexts.slice(1, 8).map(b => `- ${b}`),
+      paragraphs: currentTexts.slice(0, 8),
       tables: [],
       speakerNotes: '',
-      fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + currentTexts.join('\n')
+      fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + currentTexts.slice(0, 8).join('\n')
     });
   }
 
+  const embeddedImages = extractEmbeddedRasterImages(buffer);
+  if (embeddedImages.length > 0 && slides.length === 0) {
+    const imageCap = Math.min(embeddedImages.length, 80);
+    for (let i = 0; i < imageCap; i++) {
+      const img = embeddedImages[i];
+      img.slideNumber = i + 1;
+      img.slideTitle = `Slide ${i + 1}`;
+      slides.push({
+        slideNumber: i + 1,
+        title: `Slide ${i + 1}`,
+        headings: [],
+        bulletPoints: [],
+        paragraphs: [],
+        tables: [],
+        images: [img],
+        speakerNotes: '',
+        fullText: `--- Slide ${i + 1}: Visual training slide ---\n[Visual Content on Slide ${i + 1}]: ${img.name}`
+      });
+    }
+  } else if (embeddedImages.length > 0) {
+    for (let i = 0; i < Math.min(embeddedImages.length, slides.length); i++) {
+      const target = slides[i];
+      target.images = target.images || [];
+      embeddedImages[i].slideNumber = target.slideNumber;
+      target.images.push(embeddedImages[i]);
+    }
+  }
+
   const fullText = slides.map(s => s.fullText).join('\n\n');
-  return { slides, fullText };
+  return { slides, fullText, images: slides.flatMap(s => s.images || []) };
+}
+
+/**
+ * Renders a single PDF page to plain text with line breaks preserved.
+ */
+async function renderPdfPageText(pageData) {
+  const textContent = await pageData.getTextContent({
+    normalizeWhitespace: false,
+    disableCombineTextItems: false
+  });
+  let lastY;
+  let text = '';
+  for (const item of textContent.items || []) {
+    if (lastY == item.transform[5] || !lastY) {
+      text += item.str;
+    } else {
+      text += '\n' + item.str;
+    }
+    lastY = item.transform[5];
+  }
+  return text;
+}
+
+function splitTextIntoPages(text, startPage = 1) {
+  const pages = [];
+  const paragraphs = String(text || '').split(/\n\s*\n/);
+  let currentPageText = '';
+  let pageNumber = startPage;
+
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    if (currentPageText.length + trimmed.length > 1400 && currentPageText.length > 0) {
+      pages.push({
+        page_number: pageNumber,
+        text: currentPageText.trim(),
+        title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
+      });
+      pageNumber += 1;
+      currentPageText = trimmed + '\n\n';
+    } else {
+      currentPageText += trimmed + '\n\n';
+    }
+  }
+  if (currentPageText.trim().length > 0) {
+    pages.push({
+      page_number: pageNumber,
+      text: currentPageText.trim(),
+      title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
+    });
+  }
+  return pages;
+}
+
+/**
+ * Transcribes an uploaded audio or video file using Whisper and structures it into
+ * coherent, high-value learning chunks using LLM intelligence.
+ */
+async function extractAudioFile(buffer, originalname, mimetype) {
+  const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+  let transcription = '';
+  let detectedLanguage = 'en';
+
+  // 1. Try local Python faster-whisper microservice
+  try {
+    const form = new FormData();
+    form.append('file', buffer, {
+      filename: originalname || 'audio.mp3',
+      contentType: mimetype || 'audio/mpeg'
+    });
+
+    const pyRes = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/transcribe`, form, {
+      headers: form.getHeaders(),
+      timeout: 120000
+    });
+
+    if (pyRes.data?.text && typeof pyRes.data.text === 'string' && pyRes.data.text.trim().length > 0) {
+      transcription = pyRes.data.text.trim();
+      detectedLanguage = pyRes.data.detected_language || 'en';
+      console.log(`[Doc Extractor:Audio] Python faster-whisper transcribed ${transcription.length} chars (detected: ${detectedLanguage})`);
+    }
+  } catch (pyErr) {
+    console.warn(`[Doc Extractor:Audio] Python whisper offline or failed: ${pyErr.message}`);
+  }
+
+  // 2. Try OpenAI Whisper fallback if API key is configured
+  if (!transcription) {
+    const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY;
+    if (apiKey) {
+      try {
+        const form = new FormData();
+        form.append('file', buffer, {
+          filename: originalname || 'audio.mp3',
+          contentType: mimetype || 'audio/mpeg'
+        });
+        form.append('model', 'whisper-1');
+
+        const oaRes = await axios.post('https://api.openai.com/v1/audio/transcriptions', form, {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            ...form.getHeaders()
+          },
+          timeout: 120000
+        });
+
+        if (oaRes.data?.text) {
+          transcription = oaRes.data.text.trim();
+          console.log(`[Doc Extractor:Audio] OpenAI Whisper transcribed ${transcription.length} chars.`);
+        }
+      } catch (oaErr) {
+        console.warn('[Doc Extractor:Audio] OpenAI Whisper failed:', oaErr.message);
+      }
+    }
+  }
+
+  if (!transcription || transcription.length < 15) {
+    throw new Error('Unable to transcribe audio file. Please ensure the audio contains clear speech and that the AI Whisper service is running.');
+  }
+
+  // 3. Take LLM help to extract meaning, analyze topics, and synthesize structured knowledge chunks
+  let chunks = [];
+  try {
+    const cleanName = originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+    const systemPrompt = `You are a Master Instructional Designer and Audio Content Architect.
+Analyze the transcribed audio recording from "${cleanName}".
+Extract all key procedures, safety protocols, operational facts, and training instructions.
+Divide the material into sequential, comprehensive learning chunks.
+For each chunk, provide:
+- page_number: sequential integer (1, 2, 3...)
+- title: concise, specific topic title representing this audio segment
+- text: comprehensive, detailed transcript and clear teaching explanation for this section
+- bulletPoints: array of 3-5 crucial procedural takeaways or verified rules
+- duration: estimated duration string (e.g. "06:30")
+
+Return ONLY valid JSON matching:
+{
+  "chunks": [
+    {
+      "page_number": 1,
+      "title": "Clear Topic Title",
+      "text": "Detailed transcript and thorough conceptual explanation...",
+      "bulletPoints": ["Point 1", "Point 2", "Point 3"],
+      "duration": "06:30"
+    }
+  ]
+}`;
+    const userPrompt = `Audio Recording: "${cleanName}"\n\nFull Transcription:\n${transcription.slice(0, 32000)}`;
+    const llmRes = await aiService._callLLM(systemPrompt, userPrompt, true);
+    const parsed = aiService._parseJsonObject(llmRes);
+    if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
+      chunks = parsed.chunks.map((c, i) => ({
+        page_number: i + 1,
+        title: c.title || `Audio Segment ${i + 1}`,
+        text: c.text || '',
+        bulletPoints: Array.isArray(c.bulletPoints) ? c.bulletPoints : [],
+        duration: c.duration || '07:00'
+      }));
+      console.log(`[Doc Extractor:Audio] LLM structured audio into ${chunks.length} distinct knowledge chunks.`);
+    }
+  } catch (llmErr) {
+    console.warn(`[Doc Extractor:Audio] LLM audio chunking fallback: ${llmErr.message}`);
+  }
+
+  // Fallback: segment raw transcript into structured chunks if LLM was unavailable
+  if (chunks.length === 0) {
+    const rawPages = splitTextIntoPages(transcription);
+    chunks = rawPages.map((p, i) => {
+      const sentences = p.text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 15);
+      return {
+        page_number: i + 1,
+        title: p.title || `Audio Segment ${i + 1}`,
+        text: p.text,
+        bulletPoints: sentences.slice(0, 4),
+        duration: '06:00'
+      };
+    });
+  }
+
+  return { text: transcription, chunks, detectedLanguage };
 }
 
 /**
@@ -541,6 +980,21 @@ export async function extractDocument(file) {
       const binRes = extractPptBinary(buffer);
       slides = binRes.slides;
       text = binRes.fullText;
+      images = binRes.images || [];
+    }
+
+    // Render exact high-resolution slide presentation images (PowerPoint COM)
+    try {
+      const renderedSlides = await renderPptSlidesToImages(buffer, originalname);
+      if (renderedSlides.length > 0) {
+        console.log(`[Doc Extractor] Rendered ${renderedSlides.length} exact PowerPoint presentation slide images.`);
+        const aligned = alignSlidesToRendered(slides, renderedSlides);
+        slides = aligned.slides;
+        text = slides.map(s => s.fullText).join('\n\n');
+        images = [...renderedSlides, ...(images || []).filter(img => !String(img.id || '').startsWith('full_slide_'))];
+      }
+    } catch (rErr) {
+      console.warn('[Doc Extractor] Notice rendering slide images:', rErr.message);
     }
   }
   // 2. Legacy PPT Extraction
@@ -549,27 +1003,89 @@ export async function extractDocument(file) {
     const pptRes = extractPptBinary(buffer);
     slides = pptRes.slides;
     text = pptRes.fullText;
-    console.log(`[Doc Extractor] PPT extracted: ${slides.length} slides, ${text.length} characters.`);
+    images = pptRes.images || [];
+    console.log(`[Doc Extractor] PPT extracted: ${slides.length} slides, ${images.length} visuals/images, ${text.length} characters.`);
+
+    // Render exact high-resolution slide presentation images (PowerPoint COM)
+    try {
+      const renderedSlides = await renderPptSlidesToImages(buffer, originalname);
+      if (renderedSlides.length > 0) {
+        console.log(`[Doc Extractor] Rendered ${renderedSlides.length} exact PowerPoint presentation slide images.`);
+        const aligned = alignSlidesToRendered(slides, renderedSlides);
+        slides = aligned.slides;
+        text = slides.map(s => s.fullText).join('\n\n');
+        images = [...renderedSlides, ...(images || []).filter(img => !String(img.id || '').startsWith('full_slide_'))];
+      }
+    } catch (rErr) {
+      console.warn('[Doc Extractor] Notice rendering slide images:', rErr.message);
+    }
   }
-  // 3. PDF Extraction
+  // 3. PDF Extraction — collect real per-page text. Try newer pdf.js first;
+  // v1.10.100 rejects many modern Word/Chrome PDFs with "bad XRef entry".
   else if (ext === 'pdf' || mimetype === 'application/pdf') {
     fileType = 'pdf';
-    const pdfData = await pdfParse(buffer);
-    text = (pdfData.text || '').replace(/\r\n/g, '\n');
-
-    const rawPages = text.split(/\f|\u000c/);
-    let pageNumber = 1;
-    for (const rawText of rawPages) {
-      const cleanText = rawText.trim();
-      if (cleanText.length > 10) {
-        pages.push({
-          page_number: pageNumber++,
-          text: cleanText,
-          title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${pageNumber}`
+    const pdfVersions = ['v2.0.550', 'v1.10.100', 'v1.10.88', 'v1.9.426'];
+    let lastPdfErr = null;
+    let parsed = false;
+    for (const version of pdfVersions) {
+      try {
+        const collectedPages = [];
+        const pdfData = await pdfParse(new Uint8Array(buffer), {
+          version,
+          pagerender: async (pageData) => {
+            const pageText = await renderPdfPageText(pageData);
+            const cleanText = (pageText || '').trim();
+            if (cleanText.length > 0) {
+              collectedPages.push({
+                page_number: collectedPages.length + 1,
+                text: cleanText,
+                title: cleanText.split('\n').find(l => l.trim())?.slice(0, 80) || `Page ${collectedPages.length + 1}`
+              });
+            }
+            return pageText || '';
+          }
         });
+        pages = collectedPages;
+        text = (pdfData.text || pages.map(p => p.text).join('\n\n')).replace(/\r\n/g, '\n');
+        if (pages.length === 0 && text.trim().length > 10) {
+          const formFeedPages = text.split(/\f|\u000c/).map(p => p.trim()).filter(p => p.length > 10);
+          pages = formFeedPages.length > 1
+            ? formFeedPages.map((cleanText, idx) => ({
+                page_number: idx + 1,
+                text: cleanText,
+                title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${idx + 1}`
+              }))
+            : splitTextIntoPages(text);
+        }
+        parsed = true;
+        console.log(`[Doc Extractor] PDF extracted with ${version}: ${pages.length} pages, ${text.length} characters.`);
+        break;
+      } catch (pdfErr) {
+        lastPdfErr = pdfErr;
+        console.warn(`[Doc Extractor] PDF parse with ${version} failed:`, pdfErr.message);
       }
     }
-    console.log(`[Doc Extractor] PDF extracted: ${pages.length} pages, ${text.length} characters.`);
+    if (!parsed) {
+      throw new Error('Failed to extract text from PDF. The file may be scanned, encrypted, or corrupted.');
+    }
+
+    // Render exact high-resolution PDF document page images
+    try {
+      const renderedPages = await renderPdfPagesToImages(buffer);
+      if (renderedPages.length > 0) {
+        console.log(`[Doc Extractor] Rendered ${renderedPages.length} exact PDF document page images.`);
+        for (const rImg of renderedPages) {
+          const targetPage = pages.find(p => p.page_number === rImg.sourcePage) || pages[rImg.sourcePage - 1];
+          if (targetPage) {
+            targetPage.images = [rImg, ...(targetPage.images || []).filter(img => img.id !== rImg.id)];
+            targetPage.pageImage = rImg;
+          }
+        }
+        images = [...renderedPages, ...images];
+      }
+    } catch (rErr) {
+      console.warn('[Doc Extractor] Notice rendering PDF page images:', rErr.message);
+    }
   }
   // 4. DOCX / DOC Extraction
   else if (
@@ -612,6 +1128,19 @@ export async function extractDocument(file) {
     text = rawRtf
       .replace(/\{\*?\\[^{}]+}|[{}]|\\\n?[A-Za-z]+\n?(?:-?\d+)?[ ]?/g, ' ')
       .trim();
+  }
+  // 6. Audio and Video Files (MP3, WAV, M4A, OGG, AAC, WEBM, MP4)
+  else if (
+    ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'webm', 'mp4', 'm4v'].includes(ext) ||
+    mimetype.startsWith('audio/') ||
+    mimetype.startsWith('video/')
+  ) {
+    fileType = ext || 'audio';
+    console.log(`[Doc Extractor] Audio/Video file detected: "${originalname}" (Size: ${(buffer.length / 1024).toFixed(1)} KB). Transcribing speech and extracting learning chunks...`);
+    const audioRes = await extractAudioFile(buffer, originalname, mimetype);
+    text = audioRes.text;
+    pages = audioRes.chunks || [];
+    console.log(`[Doc Extractor] Audio transcribed successfully: ${text.length} characters divided into ${pages.length} structured learning chunks.`);
   } else {
     // Universal fallback
     try {
@@ -631,34 +1160,10 @@ export async function extractDocument(file) {
 
   // If pages/slides are not already structured, build structured page segments (~1200-1500 chars)
   if (pages.length === 0 && slides.length === 0 && text.length > 0) {
-    const paragraphs = text.split(/\n\s*\n/);
-    let currentPageText = '';
-    let pageNumber = 1;
-
-    for (const para of paragraphs) {
-      const trimmed = para.trim();
-      if (!trimmed) continue;
-      if (currentPageText.length + trimmed.length > 1400 && currentPageText.length > 0) {
-        pages.push({
-          page_number: pageNumber++,
-          text: currentPageText.trim(),
-          title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
-        });
-        currentPageText = trimmed + '\n\n';
-      } else {
-        currentPageText += trimmed + '\n\n';
-      }
-    }
-    if (currentPageText.trim().length > 0) {
-      pages.push({
-        page_number: pageNumber++,
-        text: currentPageText.trim(),
-        title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
-      });
-    }
+    pages = splitTextIntoPages(text);
   }
 
-  return {
+  const doc = {
     fileType,
     fileName: originalname,
     text,
@@ -666,6 +1171,14 @@ export async function extractDocument(file) {
     slides,
     images
   };
+
+  // Image-only PPT/PDF slides: read visible text from pictures so ARIA can teach from them
+  const hasVisuals = (slides || []).some(s => (s.images || []).length > 0) || (images || []).length > 0;
+  if (hasVisuals) {
+    await enrichDocumentVisuals(doc);
+  }
+
+  return doc;
 }
 
 export default {

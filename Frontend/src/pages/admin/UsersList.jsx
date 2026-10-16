@@ -37,6 +37,10 @@ const UsersList = () => {
 
   const [deletingUser, setDeletingUser] = useState(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [adminPassword, setAdminPassword] = useState('')
+  const [showAdminPassword, setShowAdminPassword] = useState(false)
+  const [deletePasswordError, setDeletePasswordError] = useState('')
+  const [unassignSelection, setUnassignSelection] = useState([])
 
   // Course assignment state
   const [allCourses, setAllCourses] = useState([])
@@ -44,18 +48,67 @@ const UsersList = () => {
   const [assignedCourseSelection, setAssignedCourseSelection] = useState([])
   const [savingAssignments, setSavingAssignments] = useState(false)
 
-  const handleConfirmDelete = async () => {
+  const deletingUserAssignedCourses = useMemo(() => {
+    if (!deletingUser) return []
+    if (deletingUser.assignedCourses && deletingUser.assignedCourses.length > 0) {
+      return deletingUser.assignedCourses
+    }
+    if (deletingUser.assignedCourseIds && deletingUser.assignedCourseIds.length > 0) {
+      return deletingUser.assignedCourseIds.map(id => {
+        const found = allCourses.find(c => c.id === id)
+        return found || { id, title: `Course (${id.slice(0, 8)})` }
+      })
+    }
+    return []
+  }, [deletingUser, allCourses])
+
+  const allAssignedCoursesChecked =
+    deletingUserAssignedCourses.length === 0 ||
+    deletingUserAssignedCourses.every(c => unassignSelection.includes(c.id))
+
+  const toggleUnassignCourse = (courseId) => {
+    setUnassignSelection(prev =>
+      prev.includes(courseId)
+        ? prev.filter(id => id !== courseId)
+        : [...prev, courseId]
+    )
+  }
+
+  const selectAllUnassign = () => {
+    setUnassignSelection(deletingUserAssignedCourses.map(c => c.id))
+  }
+
+  const clearAllUnassign = () => {
+    setUnassignSelection([])
+  }
+
+  const handleConfirmDelete = async (e) => {
+    e?.preventDefault?.()
     if (!deletingUser) return
+
+    if (!allAssignedCoursesChecked) {
+      setDeletePasswordError('Please check the box(es) to unassign all assigned courses before deleting this user.')
+      return
+    }
+
+    if (!adminPassword || !adminPassword.trim()) {
+      setDeletePasswordError('Admin password is required to authorize deletion.')
+      return
+    }
+    setDeletePasswordError('')
     setIsDeleting(true)
     try {
-      await api.deleteUser(deletingUser.id)
+      await api.deleteUser(deletingUser.id, adminPassword.trim())
       setUsers(prev => prev.filter(u => u.id !== deletingUser.id))
       if (selectedUser?.id === deletingUser.id) {
         setSelectedUser(null)
       }
-      toast.success('Learner account deleted successfully.')
+      toast.success(`User "${deletingUser.fullName}" unassigned from courses and deleted successfully.`)
       setDeletingUser(null)
+      setAdminPassword('')
+      setUnassignSelection([])
     } catch (err) {
+      setDeletePasswordError(err.message || 'Failed to delete user.')
       toast.error(err.message || 'Failed to delete user.')
     } finally {
       setIsDeleting(false)
@@ -465,7 +518,13 @@ const UsersList = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setDeletingUser(user)}
+                            onClick={() => {
+                              setDeletingUser(user);
+                              setUnassignSelection([]);
+                              setAdminPassword('');
+                              setShowAdminPassword(false);
+                              setDeletePasswordError('');
+                            }}
                             className="inline-flex cursor-pointer items-center justify-center h-8 w-8 rounded-lg border border-line bg-ink text-muted hover:border-danger/40 hover:text-danger hover:bg-danger/10 transition"
                             title="Delete user"
                           >
@@ -664,6 +723,10 @@ const UsersList = () => {
                   const u = selectedUser;
                   setSelectedUser(null);
                   setDeletingUser(u);
+                  setUnassignSelection([]);
+                  setAdminPassword('');
+                  setShowAdminPassword(false);
+                  setDeletePasswordError('');
                 }}
                 className="cursor-pointer rounded-xl border border-danger/40 bg-danger/10 px-4 py-2.5 text-xs sm:text-sm font-semibold text-danger hover:bg-danger/20 transition inline-flex items-center gap-1.5"
               >
@@ -703,43 +766,187 @@ const UsersList = () => {
                 <h2 id="delete-modal-title" className="font-display text-lg font-bold text-fg">
                   Delete User Account
                 </h2>
-                <p className="text-xs text-muted">This action is permanent and cannot be undone.</p>
+                <p className="text-xs text-muted">Permanent deletion requires admin verification</p>
               </div>
             </div>
 
-            <div className="mt-4 p-3.5 rounded-2xl bg-ink/60 border border-line/60 space-y-1.5 text-sm">
-              <p className="text-fg font-semibold">{deletingUser.fullName}</p>
-              <p className="text-xs text-muted font-mono">{deletingUser.email} • FIN: {deletingUser.finNumber}</p>
-              <p className="text-xs text-danger pt-1">
-                ⚠️ All course assignments and progress records for this student will also be removed.
-              </p>
+            {/* User Info & Course Unassignment Warning */}
+            <div className="mt-4 p-4 rounded-2xl bg-ink/70 border border-line space-y-2.5 text-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-fg font-bold text-sm">{deletingUser.fullName}</p>
+                  <p className="text-xs text-muted font-mono">{deletingUser.email} • FIN: {deletingUser.finNumber}</p>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-bold uppercase border border-line">
+                  {deletingUser.role || 'STUDENT'}
+                </span>
+              </div>
+
+              {/* Step 1: Checkbox Course Unassignment */}
+              <div className="pt-2.5 border-t border-line/60">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-bold text-orange uppercase tracking-wider flex items-center gap-1.5">
+                    <span>📋</span> Step 1: Check to Unassign Courses
+                  </span>
+                  {deletingUserAssignedCourses.length > 0 && (
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition ${
+                        allAssignedCoursesChecked
+                          ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                          : 'bg-orange/15 text-orange border-orange/30'
+                      }`}
+                    >
+                      {unassignSelection.length} of {deletingUserAssignedCourses.length} Unassigned
+                    </span>
+                  )}
+                </div>
+
+                {deletingUserAssignedCourses.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-[11px] text-muted">
+                      <span>Select course(s) to unassign:</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={selectAllUnassign}
+                          className="text-sky hover:underline font-semibold cursor-pointer border-0 bg-transparent p-0 text-[11px]"
+                        >
+                          Select All
+                        </button>
+                        <span>•</span>
+                        <button
+                          type="button"
+                          onClick={clearAllUnassign}
+                          className="text-muted hover:text-fg font-semibold cursor-pointer border-0 bg-transparent p-0 text-[11px]"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                      {deletingUserAssignedCourses.map((c) => {
+                        const isChecked = unassignSelection.includes(c.id)
+                        return (
+                          <label
+                            key={c.id}
+                            className={`flex items-center gap-2.5 p-2 rounded-xl border cursor-pointer transition text-xs select-none ${
+                              isChecked
+                                ? 'bg-orange/10 border-orange/40 text-fg shadow-xs'
+                                : 'bg-ink/60 border-line hover:border-line/90 text-muted'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleUnassignCourse(c.id)}
+                              className="h-4 w-4 rounded border-line text-orange accent-orange cursor-pointer"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className={`font-semibold truncate ${isChecked ? 'text-fg' : 'text-muted'}`}>
+                                {c.title}
+                              </p>
+                            </div>
+                            <span
+                              className={`text-[10px] px-2 py-0.5 rounded-md font-bold uppercase shrink-0 border ${
+                                isChecked
+                                  ? 'bg-orange/20 text-orange border-orange/30'
+                                  : 'bg-muted/10 text-muted border-line'
+                              }`}
+                            >
+                              {isChecked ? '✕ Unassign' : 'Assigned'}
+                            </span>
+                          </label>
+                        )
+                      })}
+                    </div>
+
+                    {!allAssignedCoursesChecked ? (
+                      <p className="text-[11px] text-amber-400 mt-1.5 flex items-center gap-1 leading-snug">
+                        <span>⚠️</span> Please check the box to unassign all courses before admin deletes this user.
+                      </p>
+                    ) : (
+                      <p className="text-[11px] text-emerald-400 mt-1.5 flex items-center gap-1 leading-snug font-medium">
+                        <span>✓</span> All assigned courses marked for unassignment.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-emerald-400 font-medium italic mt-1 flex items-center gap-1">
+                    <span>✓</span> No active courses assigned to this user. You can proceed directly.
+                  </p>
+                )}
+              </div>
             </div>
 
-            <div className="mt-6 flex items-center justify-end gap-3">
-              <button
-                type="button"
-                disabled={isDeleting}
-                onClick={() => setDeletingUser(null)}
-                className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-xs sm:text-sm font-semibold text-fg hover:border-sky/40 transition disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isDeleting}
-                onClick={handleConfirmDelete}
-                className="cursor-pointer rounded-xl bg-danger px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition hover:bg-danger/90 disabled:opacity-50 border-0 flex items-center gap-1.5"
-              >
-                {isDeleting ? (
-                  <>
-                    <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                    Deleting...
-                  </>
-                ) : (
-                  'Yes, Delete User'
+            {/* Step 2: Admin Password Verification Input Form */}
+            <form onSubmit={handleConfirmDelete} className="mt-4 space-y-3">
+              <div>
+                <label className="text-[11px] font-bold uppercase tracking-wider text-muted flex items-center justify-between">
+                  <span>Step 2: Enter Admin Password to Authorize</span>
+                  <span className="text-danger">*Required</span>
+                </label>
+                <div className="relative mt-1.5">
+                  <input
+                    type={showAdminPassword ? 'text' : 'password'}
+                    required
+                    autoFocus
+                    value={adminPassword}
+                    onChange={(e) => {
+                      setAdminPassword(e.target.value)
+                      if (deletePasswordError) setDeletePasswordError('')
+                    }}
+                    placeholder="Enter your admin password"
+                    className="w-full rounded-xl border border-line bg-ink/80 px-4 py-2.5 pr-10 text-xs sm:text-sm text-fg outline-none transition placeholder:text-muted/60 focus:border-danger focus:ring-1 focus:ring-danger/30"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminPassword((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted hover:text-fg text-xs p-1 cursor-pointer border-0 bg-transparent"
+                    title={showAdminPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showAdminPassword ? '🙈' : '👁️'}
+                  </button>
+                </div>
+                {deletePasswordError && (
+                  <p className="text-xs text-danger font-medium mt-1.5 flex items-center gap-1 animate-fadeIn">
+                    <span>⚠️</span> {deletePasswordError}
+                  </p>
                 )}
-              </button>
-            </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => {
+                    setDeletingUser(null)
+                    setAdminPassword('')
+                    setDeletePasswordError('')
+                    setUnassignSelection([])
+                  }}
+                  className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-xs sm:text-sm font-semibold text-fg hover:border-sky/40 transition disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isDeleting || !allAssignedCoursesChecked || !adminPassword.trim()}
+                  className="cursor-pointer rounded-xl bg-danger hover:bg-danger/90 px-5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-lg transition disabled:opacity-50 disabled:cursor-not-allowed border-0 flex items-center gap-1.5"
+                >
+                  {isDeleting ? (
+                    <>
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                      Unassigning & Deleting...
+                    </>
+                  ) : !allAssignedCoursesChecked ? (
+                    'Unassign Courses First'
+                  ) : (
+                    'Authorize & Delete'
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>,
         document.body

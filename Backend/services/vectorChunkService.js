@@ -4,6 +4,8 @@
  * validation, pgvector embeddings, and hybrid semantic & metadata retrieval directly in PostgreSQL.
  */
 import aiService from './aiService.js';
+import { detectDominantScript } from '../utils/language.js';
+import { isGarbageTitle } from '../utils/contentQuality.js';
 
 export class VectorChunkService {
   constructor() {
@@ -73,7 +75,15 @@ export class VectorChunkService {
       chunks = aiService._getStructuralSemanticChunks(fileName, fullText, meta);
     }
 
-    return this.validateChunks(chunks, fullText);
+    let validated = this.validateChunks(chunks, fullText);
+    if (validated.length === 0) {
+      console.warn('[VectorChunkService] Validated chunk list was empty. Using structural page/slide chunker.');
+      validated = this.validateChunks(
+        aiService._getStructuralSemanticChunks(fileName, fullText, meta),
+        fullText
+      );
+    }
+    return validated;
   }
 
   /**
@@ -104,6 +114,7 @@ export class VectorChunkService {
 
       // Filter out trivial noise, broken headers, or fragments under 40 chars
       if (text.length < 40) continue;
+      if (concept && isGarbageTitle(concept) && text.length < 120) continue;
 
       // Filter exact duplicate texts
       const normalizedText = text.toLowerCase().replace(/\s+/g, ' ');
@@ -215,7 +226,7 @@ export class VectorChunkService {
       return [];
     }
 
-    console.log(`[pgvector] Generated ${semanticChunks.length} semantic chunks for course ${courseId}. Generating OpenAI vector embeddings...`);
+    console.log(`[pgvector] Generated ${semanticChunks.length} semantic chunks for course ${courseId}. Generating vector embeddings...`);
 
     // 2. Generate embeddings from the FINAL rich semantic chunks
     let embeddings = [];
@@ -226,9 +237,9 @@ export class VectorChunkService {
         return `${topicPrefix}${conceptPrefix}${c.chunkText}`;
       });
       embeddings = await aiService.getEmbeddings(textsToEmbed, 768);
-      console.log(`[pgvector] Successfully computed ${embeddings.length} OpenAI vector embeddings.`);
+      console.log(`[pgvector] Successfully computed ${embeddings.length} vector embeddings (dim=${embeddings[0]?.length || 0}).`);
     } catch (e) {
-      console.warn(`[pgvector] Failed to compute OpenAI embeddings:`, e.message);
+      console.warn(`[pgvector] Failed to compute embeddings:`, e.message);
     }
 
     // 3. Store into PostgreSQL pgvector CourseChunk table
@@ -243,25 +254,27 @@ export class VectorChunkService {
           curr.lessons = curr.lessons.map((lesson, idx) => {
             const lessonSlides = Array.isArray(lesson.sourceSlides) ? lesson.sourceSlides : [];
             
-            // 1. First try matching by concept/title
-            let targetChunk = semanticChunks.find(c => {
-              if (!c.concept || !lesson.title) return false;
-              const cConcept = c.concept.toLowerCase();
-              const lTitle = lesson.title.toLowerCase();
-              return cConcept === lTitle || lTitle.includes(cConcept) || cConcept.includes(lTitle);
-            });
-
-            // 2. Second try matching by source slide intersection
-            if (!targetChunk && lessonSlides.length > 0) {
+            // 1. Match this lesson to its own slides so image-PPT lessons stay unique
+            let targetChunk = null;
+            if (lessonSlides.length > 0) {
               targetChunk = semanticChunks.find(c => {
                 const cSlides = Array.isArray(c.sourceSlides) ? c.sourceSlides : [];
                 return cSlides.some(s => lessonSlides.includes(s));
               });
             }
-
-            // 3. Third: Fall back to 1-to-1 index matching (Lesson 1 -> Chunk 0, Lesson 2 -> Chunk 1, etc.)
             if (!targetChunk) {
-              targetChunk = semanticChunks[idx % semanticChunks.length];
+              targetChunk = semanticChunks.find(c => Number(c.sourcePage) === Number(lesson.id) || Number(c.sourcePage) === idx + 1);
+            }
+            if (!targetChunk) {
+              targetChunk = semanticChunks.find(c => {
+                if (!c.concept || !lesson.title) return false;
+                const cConcept = c.concept.toLowerCase();
+                const lTitle = lesson.title.toLowerCase();
+                return cConcept === lTitle;
+              });
+            }
+            if (!targetChunk) {
+              targetChunk = semanticChunks[idx] || semanticChunks[semanticChunks.length - 1];
             }
 
             const concept = targetChunk.concept || lesson.title;
@@ -269,23 +282,55 @@ export class VectorChunkService {
             const slides = targetChunk.sourceSlides || lesson.sourceSlides;
 
             let cleanText = (targetChunk.chunkText || '')
+              .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
+              .replace(/Slide\s*\d+:?\s*---*/gi, '')
+              .replace(/Slide\s*\d+:\s*/gi, '')
               .replace(/^###[^\n]+\n/g, '')
               .replace(/^\*\*Topic:[^\n]+\n/g, '')
               .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
               .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
               .trim();
 
+            // Rejoin fragmented lines into complete sentences
+            const rawLines = cleanText.split('\n').map(l => l.trim()).filter(Boolean);
+            const cleanBlocks = [];
+            let buffer = '';
+            for (const line of rawLines) {
+              const isBullet = /^[-*•➔\d\.]+\s+/.test(line);
+              const cleanLine = line.replace(/^[-*•➔\d\.]+\s+/, '').trim();
+              if (!cleanLine) continue;
+              if (isBullet) {
+                if (buffer) { cleanBlocks.push(buffer); buffer = ''; }
+                buffer = cleanLine;
+              } else if (buffer && !/[.!?]$/.test(buffer)) {
+                buffer += ' ' + cleanLine;
+              } else {
+                if (buffer) cleanBlocks.push(buffer);
+                buffer = cleanLine;
+              }
+            }
+            if (buffer) cleanBlocks.push(buffer);
+            const cleanContentText = cleanBlocks.join('\n\n');
+
             let keyPoints = targetChunk.keyPoints || [];
             if (typeof keyPoints === 'string') {
               try { keyPoints = JSON.parse(keyPoints); } catch (e) { keyPoints = []; }
             }
+            keyPoints = (keyPoints || [])
+              .map(kp => String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())
+              .filter(kp => kp.length > 5);
 
             const sections = [];
-            const summary = targetChunk.semanticSummary || `This module focuses on the core principles, operational requirements, and safety protocols for ${concept}.`;
+            let summary = (targetChunk.semanticSummary || `In this module, we focus on the core principles, operational requirements, and safety protocols for ${concept}.`)
+              .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
+              .replace(/Slide\s*\d+:\s*/gi, '')
+              .replace(/\s+/g, ' ')
+              .trim();
+
             sections.push(`### 💡 ${concept}\n${summary}`);
 
-            if (cleanText && cleanText.length > 20) {
-              sections.push(`#### 🎯 Operational Standards & Instructions\n${cleanText}`);
+            if (cleanContentText && cleanContentText.length > 15) {
+              sections.push(`#### 🎯 Operational Standards & Instructions\n${cleanContentText}`);
             }
 
             if (Array.isArray(keyPoints) && keyPoints.length > 0) {
@@ -297,12 +342,15 @@ export class VectorChunkService {
             sections.push(`#### 📌 Key Takeaways\n- **Discipline & Safety:** Consistent execution of ${concept} prevents incidents and maintains high operational standards.\n- **Quality & Habit:** Master this standard to build safe, repeatable daily practices.`);
 
             const expText = sections.join('\n\n');
+            const sourceLang = detectDominantScript(expText);
+            const explanations = { ...(lesson.explanations || {}) };
+            explanations[sourceLang] = expText;
             return {
               ...lesson,
               title: lesson.title === 'undefined' ? concept : lesson.title,
               sourceSlides: Array.isArray(slides) && slides.length > 0 ? slides : lesson.sourceSlides,
-              explanation: expText,
-              explanations: { ...(lesson.explanations || {}), en: expText }
+              explanation: sourceLang === 'en' ? expText : lesson.explanation,
+              explanations
             };
           });
 
@@ -483,6 +531,52 @@ export class VectorChunkService {
    * @param {object} options - Options: { includeNeighbors: boolean, topicFilter: string, conceptFilter: string, lessonTitle: string }.
    * @returns {Promise<Array<object>>} Retrieved chunks with score, source references, and pedagogical context.
    */
+  _keywordScore(queryText, chunk) {
+    const terms = String(queryText || '')
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter(t => t.length > 3);
+    if (terms.length === 0) return 0;
+    const hay = `${chunk.concept || ''} ${chunk.topic || ''} ${chunk.text || chunk.chunkText || ''}`.toLowerCase();
+    let hits = 0;
+    for (const term of terms) {
+      if (hay.includes(term)) hits += 1;
+    }
+    return hits / terms.length;
+  }
+
+  async backfillMissingEmbeddings(prisma, courseId) {
+    const needEmbed = await prisma.$queryRawUnsafe(
+      `SELECT "id", "chunkIndex", "chunkText"
+       FROM "CourseChunk"
+       WHERE "courseId" = $1 AND "embedding" IS NULL
+       ORDER BY "chunkIndex" ASC`,
+      courseId
+    );
+    if (!needEmbed || needEmbed.length === 0) return 0;
+
+    const vectors = await aiService.getEmbeddings(needEmbed.map(r => r.chunkText), 768);
+    let updated = 0;
+    for (let i = 0; i < needEmbed.length; i++) {
+      const vec = vectors[i];
+      if (!Array.isArray(vec) || vec.length === 0) continue;
+      try {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "CourseChunk" SET "embedding" = $1::vector WHERE "id" = $2`,
+          `[${vec.join(',')}]`,
+          needEmbed[i].id
+        );
+        updated += 1;
+      } catch (err) {
+        console.warn(`[pgvector] Failed to backfill embedding for chunk ${needEmbed[i].chunkIndex}:`, err.message);
+      }
+    }
+    if (updated > 0) {
+      console.log(`[pgvector] Backfilled ${updated} missing embeddings for course ${courseId}.`);
+    }
+    return updated;
+  }
+
   async querySimilarChunks(prisma, courseId, queryText, topK = 5, options = {}) {
     if (!queryText || !queryText.trim()) return [];
 
@@ -491,6 +585,12 @@ export class VectorChunkService {
       const queryVector = await aiService.getEmbedding(queryText, 768);
       if (queryVector && Array.isArray(queryVector)) {
         vectorResults = await this.searchSimilarChunks(prisma, courseId, queryVector, topK * 2);
+      }
+      if (!vectorResults || vectorResults.length === 0) {
+        await this.backfillMissingEmbeddings(prisma, courseId);
+        if (queryVector && Array.isArray(queryVector)) {
+          vectorResults = await this.searchSimilarChunks(prisma, courseId, queryVector, topK * 2);
+        }
       }
     } catch (e) {
       console.warn(`[pgvector RAG] Vector search notice (${e.message}). Falling back to text retrieval.`);
@@ -519,6 +619,8 @@ export class VectorChunkService {
             boost += 0.10;
           }
         }
+
+        boost += this._keywordScore(queryText, item) * 0.3;
 
         return {
           ...item,
@@ -577,11 +679,10 @@ export class VectorChunkService {
     try {
       const dbChunks = await prisma.courseChunk.findMany({
         where: { courseId },
-        orderBy: { chunkIndex: 'asc' },
-        take: topK
+        orderBy: { chunkIndex: 'asc' }
       });
 
-      return dbChunks.map(c => ({
+      const mapped = dbChunks.map(c => ({
         id: c.id,
         chunk_index: c.chunkIndex,
         page_number: c.sourcePage || c.chunkIndex + 1,
@@ -593,8 +694,10 @@ export class VectorChunkService {
         chunkType: c.chunkType,
         key_points: c.keyPoints,
         related_concepts: c.relatedConcepts,
-        similarity: 0.5
+        similarity: 0.5 + this._keywordScore(queryText, { ...c, text: c.chunkText })
       }));
+      mapped.sort((a, b) => b.similarity - a.similarity);
+      return mapped.slice(0, topK);
     } catch (err) {
       console.warn(`[pgvector RAG] Fallback database retrieval error:`, err.message);
       return [];

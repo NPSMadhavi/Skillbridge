@@ -483,25 +483,57 @@ const CoursePlayer = ({
   const [playbackRate, setPlaybackRate] = useState(1)
   const [showCC, setShowCC] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
-
-  const toggleFullscreen = () => {
-    if (!playerRef.current) return
-    if (!document.fullscreenElement) {
-      playerRef.current.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(console.warn)
-    } else {
-      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(console.warn)
-    }
-  }
+  const [chatCollapsed, setChatCollapsed] = useState(false)
 
   // Centralized Voice Tutor & Always-On Hands-Free states
   const [tutorVoiceState, setTutorVoiceState] = useState(TutorState.IDLE)
-  const voiceManagerRef = useRef(null)
   const [recording, setRecording] = useState(false)
   const [mediaRecorder, setMediaRecorder] = useState(null)
   const [handsFreeVoice, setHandsFreeVoice] = useState(true)
   const [voiceStatusText, setVoiceStatusText] = useState('')
   const [isAriaSpeaking, setIsAriaSpeaking] = useState(false)
 
+  const requestPlayerFullscreen = () => {
+    if (!playerRef.current) return
+    if (document.fullscreenElement) {
+      setIsFullscreen(true)
+      return
+    }
+    const req = playerRef.current.requestFullscreen || playerRef.current.webkitRequestFullscreen
+    if (!req) return
+    Promise.resolve(req.call(playerRef.current))
+      .then(() => setIsFullscreen(true))
+      .catch(() => {})
+  }
+
+  const toggleFullscreen = () => {
+    if (!playerRef.current) return
+    if (!document.fullscreenElement) {
+      requestPlayerFullscreen()
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {})
+    }
+  }
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement))
+    document.addEventListener('fullscreenchange', onFsChange)
+    document.addEventListener('webkitfullscreenchange', onFsChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
+      document.removeEventListener('webkitfullscreenchange', onFsChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (playing) {
+      setChatCollapsed(true)
+    } else if (!isFullscreen) {
+      setChatCollapsed(false)
+    }
+  }, [playing, isFullscreen])
+
+  const voiceManagerRef = useRef(null)
   const wasPlayingRef = useRef(false)
   const wasLecturePlayingRef = useRef(false)
   const savedLecturePositionRef = useRef(0)
@@ -515,6 +547,7 @@ const CoursePlayer = ({
   const handsFreeVoiceRef = useRef(true)
   const playingRef = useRef(false)
   const micStreamRef = useRef(null)
+  const lastAriaSpokenTimeRef = useRef(0)
 
   // Scroll references for transcripts / chalkboard notes
   const activeSentenceRef = useRef(null)
@@ -719,6 +752,7 @@ const CoursePlayer = ({
         }
         setIsAriaSpeaking(false)
         isAriaSpeakingRef.current = false
+        lastAriaSpokenTimeRef.current = Date.now()
         voiceManagerRef.current?.setTutorSpeaking(false, cleanText)
         onEndCallback?.()
       }
@@ -819,7 +853,13 @@ const CoursePlayer = ({
   const handleVoiceQuestion = async (userSpeech) => {
     if (!userSpeech || isAnsweringRef.current || isAriaSpeakingRef.current) return
     const rawSpeech = userSpeech.trim()
-    if (rawSpeech.length < 2 || isNoiseOrHallucination(rawSpeech)) {
+    if (rawSpeech.length < 3 || isNoiseOrHallucination(rawSpeech)) {
+      return
+    }
+
+    // Guard against microphone hearing speaker audio right after TTS finishes (reverberation)
+    if (Date.now() - (lastAriaSpokenTimeRef.current || 0) < 1800) {
+      console.log(`[VOICE:ECHO_REJECTED] Ignored speech captured during/right after TTS playback: "${rawSpeech}"`)
       return
     }
 
@@ -831,13 +871,31 @@ const CoursePlayer = ({
       'yes im listening', 'yes i am listening',
       'continuing to the course', 'continuing to course', 'resuming course', 'resuming lecture',
       'hello i am aria', 'i am aria', 'i am aria your personal ai tutor',
-      '我在听', '请问有什么可以帮您', '我在听请问', '请问', '正在继续课程',
-      'ya saya mendengar', 'sila beritahu saya', 'saya mendengar', 'menyambung semula kursus',
-      'சொல்லுங்கள் நான் கேட்கிறேன்', 'நான் கேட்கிறேன்', 'சொல்லுங்கள்', 'பாடத்தைத் தொடர்கிறேன்',
-      'বলুন আমি শুনছি', 'আমি শুনছি', 'হ্যাঁ বলুন', 'কোর্সে ফিরে যাচ্ছি'
+      'i didnt catch your question can you ask again', 'i didnt catch your question',
+      'didnt catch your question', 'can you ask again', 'please ask again',
+      'i did not catch a question please ask me something about this lesson',
+      'i did not catch a question', 'please ask me something',
+      'i m ready to help with your course questions', 'how can i help you', 'what would you like to know',
+      'i ll check check check', 'check check check', 'hello dear hello dear', 'hello dear',
+      '我在听', '请问有什么可以帮您', '我在听请问', '请问', '正在继续课程', '我没有听清您的提问', '请再问一次',
+      'ya saya mendengar', 'sila beritahu saya', 'saya mendengar', 'menyambung semula kursus', 'sila tanya semula',
+      'சொல்லுங்கள் நான் கேட்கிறேன்', 'நான் கேட்கிறேன்', 'சொல்லுங்கள்', 'பாடத்தைத் தொடர்கிறேன்', 'மீண்டும் கேளுங்கள்',
+      'বলুন আমি শুনছি', 'আমি শুনছি', 'হ্যাঁ বলুন', 'কোর্সে ফিরে যাচ্ছি', 'আবার জিজ্ঞাসা করুন'
     ]
-    if (selfEchoPhrases.some(e => norm === e || (norm.length < 25 && (norm.includes(e) || e.includes(norm))))) {
+    if (selfEchoPhrases.some(e => norm === e || (norm.length < 35 && (norm.includes(e) || e.includes(norm))))) {
       console.log(`[VOICE:ECHO_REJECTED] Ignored self-greeting echo in handleVoiceQuestion: "${rawSpeech}"`)
+      return
+    }
+
+    // Reject repetitive word loops (Whisper hallucinations e.g. "check check check")
+    const words = norm.split(/\s+/).filter(Boolean)
+    const unique = new Set(words)
+    if (words.length >= 3 && unique.size <= 1) {
+      console.log(`[VOICE:REJECT] Repetitive phrase rejected: "${rawSpeech}"`)
+      return
+    }
+    if (words.length >= 4 && unique.size <= 2) {
+      console.log(`[VOICE:REJECT] Low-variety repetitive phrase rejected: "${rawSpeech}"`)
       return
     }
 
@@ -864,7 +922,19 @@ const CoursePlayer = ({
     }
 
     const cleanQuestion = extractQuestionFromWakeWord(rawSpeech) || rawSpeech
-    if (!cleanQuestion || cleanQuestion.length < 2) {
+    if (!cleanQuestion || cleanQuestion.length < 3 || isNoiseOrHallucination(cleanQuestion)) {
+      return
+    }
+
+    // Require substance: questions must have at least 2 distinct words or a direct inquiry word
+    const cleanWords = cleanQuestion.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean)
+    const cleanUnique = new Set(cleanWords)
+    if (cleanWords.length < 2 && !['why', 'how', 'what', 'who', 'when', 'where', 'help', 'explain'].includes(cleanWords[0])) {
+      console.log(`[VOICE:REJECT] Single-word non-question rejected: "${cleanQuestion}"`)
+      return
+    }
+    if (cleanWords.length >= 3 && cleanUnique.size <= 1) {
+      console.log(`[VOICE:REJECT] Repetitive question rejected: "${cleanQuestion}"`)
       return
     }
 
@@ -981,7 +1051,7 @@ const CoursePlayer = ({
           const transcription = (res?.text || '').trim()
           console.log(`[VOICE:TRANSCRIPTION] Result: "${transcription}"`)
 
-          if (!transcription || isNoiseOrHallucination(transcription) || transcription.length < 2) {
+          if (!transcription || isNoiseOrHallucination(transcription) || transcription.length < 3) {
             if (!isWakeDetection && manager.state !== TutorState.SLEEPING) {
               manager.setState(TutorState.FOLLOW_UP_LISTENING)
               manager.resetFollowUpTimeout()
@@ -995,7 +1065,7 @@ const CoursePlayer = ({
               interruptLectureAndWake()
 
               const cleanQuestion = extractQuestionFromWakeWord(transcription)
-              if (cleanQuestion && cleanQuestion.length >= 2 && !isNoiseOrHallucination(cleanQuestion)) {
+              if (cleanQuestion && cleanQuestion.length >= 3 && !isNoiseOrHallucination(cleanQuestion)) {
                 console.log(`[VOICE] Wake phrase included question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
                 setTimeout(() => {
                   handleVoiceQuestion(cleanQuestion)
@@ -1236,34 +1306,35 @@ const CoursePlayer = ({
   const activeVisual = useMemo(() => {
     const list = (lessonVisuals && lessonVisuals.length > 0) ? lessonVisuals : (activeLesson?.visuals || []);
     if (!list || list.length === 0) return null;
-    if (!sentences || sentences.length === 0) return list[0] || null;
 
-    const currentSentence = (sentences[currentSentenceIdx] || '').toLowerCase();
+    const sizeOf = (vis) => vis.sizeBytes || (typeof vis.dataUrl === 'string' ? vis.dataUrl.length : 0);
+    const isFullSlide = (vis) =>
+      String(vis.id || '').startsWith('full_slide') ||
+      String(vis.id || '').startsWith('full_page') ||
+      String(vis.purpose || '').toLowerCase().includes('exact powerpoint') ||
+      String(vis.purpose || '').toLowerCase().includes('exact document page');
 
-    // 1. Check keyword and purpose match against active sentence
-    for (const vis of list) {
-      const keywords = Array.isArray(vis.triggerKeywords) ? vis.triggerKeywords : [];
-      const matched = keywords.some(kw => kw && kw.length > 2 && currentSentence.includes(kw.toLowerCase()));
-      if (matched) return vis;
+    const photos = list.filter((vis) =>
+      (vis.dataUrl || vis.url) && (isFullSlide(vis) || sizeOf(vis) >= 50000)
+    );
+    const pool = photos.length > 0 ? photos : list.filter((vis) => vis.dataUrl || vis.url);
+    if (pool.length === 0) return null;
 
-      if (vis.purpose && currentSentence.includes(vis.purpose.toLowerCase().slice(0, 18))) {
-        return vis;
-      }
-      if (vis.name && currentSentence.includes(vis.name.toLowerCase().slice(0, 15))) {
-        return vis;
-      }
+    const ranked = [...pool].sort((a, b) => {
+      if (isFullSlide(a) !== isFullSlide(b)) return isFullSlide(a) ? -1 : 1;
+      return sizeOf(b) - sizeOf(a);
+    });
+
+    if (ranked.length === 1) return ranked[0];
+
+    const sourceSlides = Array.isArray(activeLesson?.sourceSlides) ? activeLesson.sourceSlides : [];
+    if (sourceSlides.length > 0) {
+      const bySlide = ranked.find((vis) => sourceSlides.includes(vis.sourceSlide || vis.sourcePage));
+      if (bySlide) return bySlide;
     }
 
-    // 2. If multiple visuals exist, distribute them proportionally across the sentences of the lesson
-    if (list.length > 1) {
-      const bucketSize = Math.ceil(sentences.length / list.length);
-      const visIdx = Math.min(list.length - 1, Math.floor(currentSentenceIdx / Math.max(1, bucketSize)));
-      return list[visIdx];
-    }
-
-    // 3. If single visual, display it throughout the lesson
-    return list[0];
-  }, [lessonVisuals, activeLesson?.visuals, sentences, currentSentenceIdx]);
+    return ranked[0];
+  }, [lessonVisuals, activeLesson?.visuals, activeLesson?.sourceSlides]);
 
   const getRealLessonDurationStr = (lesson, activeExp = null, idx = 0) => {
     // Check active loaded explanation, or the lesson's stored explanation
@@ -1402,6 +1473,8 @@ const CoursePlayer = ({
         window.speechSynthesis.resume();
       } catch (e) { }
       setPlaying(true);
+      setChatCollapsed(true);
+      requestPlayerFullscreen();
     } else {
       try {
         window.speechSynthesis.cancel();
@@ -1517,6 +1590,7 @@ const CoursePlayer = ({
             console.log(`[PERF:PLAYBACK_START] Playback active (Concept ${idx + 1}/${sentences.length}, Total Startup Latency: ${startupLatency}ms)`);
             setIsAriaSpeaking(true);
             isAriaSpeakingRef.current = true;
+            voiceManagerRef.current?.noteSpokenText?.(spokenText);
             setPipelineState('PLAYING');
 
             // Background pre-warming of next concept without blocking current playback
@@ -1547,6 +1621,7 @@ const CoursePlayer = ({
             if (isCancelled || !playingRef.current) return;
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
+            lastAriaSpokenTimeRef.current = Date.now();
             setCurrentSentenceIdx((prev) => {
               const next = prev + 1;
               if (playingRef.current && !isCancelled) {
@@ -1828,7 +1903,11 @@ const CoursePlayer = ({
       </div>
 
       {/* Main 3-Column Grid Layout - Dynamically Proportioned for Scaled Screens */}
-      <main className="w-full px-3 sm:px-4 pb-2.5 sm:pb-3 grid grid-cols-1 lg:grid-cols-[210px_1fr_240px] xl:grid-cols-[240px_1fr_260px] gap-2.5 sm:gap-3 flex-1 min-h-0 overflow-visible lg:overflow-hidden">
+      <main className={`w-full px-3 sm:px-4 pb-2.5 sm:pb-3 grid grid-cols-1 gap-2.5 sm:gap-3 flex-1 min-h-0 overflow-visible lg:overflow-hidden ${
+        chatCollapsed
+          ? 'lg:grid-cols-[210px_1fr_52px] xl:grid-cols-[240px_1fr_52px]'
+          : 'lg:grid-cols-[210px_1fr_240px] xl:grid-cols-[240px_1fr_260px]'
+      }`}>
 
         {/* LEFT COLUMN: Course Card & Modules List */}
         <section className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 shadow-xs flex flex-col min-h-[220px] lg:h-full lg:min-h-0 overflow-hidden">
@@ -1904,6 +1983,8 @@ const CoursePlayer = ({
                                 setCurrentSentenceIdx(0)
                                 setElapsedSeconds(0)
                                 setPlaying(true)
+                                setChatCollapsed(true)
+                                requestPlayerFullscreen()
                               }
                             }}
                             className={`w-full flex items-center gap-2 p-2.5 rounded-xl border text-left transition cursor-pointer ${isActive
@@ -2043,79 +2124,85 @@ const CoursePlayer = ({
                   ) : (
                     <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
                       {/* PPT Slide Visual Display Card (When concept visual exists) */}
-                      {activeVisual && (activeVisual.dataUrl || activeVisual.url) && (
-                        <div className="shrink-0 mb-2 sm:mb-2.5 rounded-xl overflow-hidden border border-slate-700/70 bg-slate-900/90 shadow-md relative group transition-all duration-300 animate-fadeIn">
-                          <div className="relative flex items-center justify-center bg-black/50 p-1.5 max-h-[140px] sm:max-h-[170px] lg:max-h-[185px]">
-                            <img
-                              src={activeVisual.dataUrl || activeVisual.url}
-                              alt={activeVisual.descr || activeVisual.name || 'Lesson Diagram'}
-                              className="max-h-[130px] sm:max-h-[160px] lg:max-h-[175px] w-auto max-w-full object-contain rounded-lg shadow cursor-zoom-in hover:scale-[1.02] transition-transform duration-200"
-                              onClick={() => setEnlargedVisual(activeVisual)}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setEnlargedVisual(activeVisual)}
-                              className="absolute bottom-1.5 right-1.5 px-2 py-0.5 rounded bg-slate-950/85 hover:bg-[#ff8c21] text-white text-[9px] font-bold flex items-center gap-1 backdrop-blur-md border border-white/20 transition cursor-pointer"
-                              title="Click to enlarge diagram"
-                            >
-                              <span className="hidden sm:inline">Enlarge</span>
-                            </button>
-                          </div>
-                          <div className="px-2.5 py-1 bg-slate-950/90 border-t border-slate-800 flex items-center justify-between gap-2 text-[10px]">
-                            <span className="font-bold text-[#ff8c21] flex items-center gap-1.5 truncate">
-                              <span>Slide {activeVisual.sourceSlide || 'Visual'}</span>
-                              {activeVisual.purpose && <span className="text-slate-400 font-medium truncate">• {activeVisual.purpose}</span>}
-                            </span>
-                            <span className="text-[8px] text-slate-500 font-bold shrink-0 uppercase tracking-wider">PPT SLIDE GRAPHIC</span>
+                      {activeVisual && (activeVisual.dataUrl || activeVisual.url) ? (
+                        <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
+                          <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-slate-700/80 bg-slate-950/80 shadow-lg relative group flex flex-col">
+                            <div className="relative flex-1 min-h-0 flex items-center justify-center p-2 bg-black/40 overflow-hidden">
+                              <img
+                                src={activeVisual.dataUrl || activeVisual.url}
+                                alt={activeVisual.descr || activeVisual.name || 'Presentation Slide'}
+                                className="max-h-full max-w-full w-auto h-auto object-contain rounded-lg shadow-xl cursor-zoom-in hover:scale-[1.01] transition-transform duration-200"
+                                onClick={() => setEnlargedVisual(activeVisual)}
+                                title="Click to view full-resolution slide"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setEnlargedVisual(activeVisual)}
+                                className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-[#ff8c21] text-white text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md border border-white/20 transition cursor-pointer shadow-md"
+                                title="Click to enlarge diagram"
+                              >
+                                <span>🔍</span>
+                                <span className="hidden sm:inline">Enlarge Slide</span>
+                              </button>
+                            </div>
+                            <div className="shrink-0 px-3 py-1 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between gap-2 text-[10px]">
+                              <span className="font-bold text-[#ff8c21] flex items-center gap-1.5 truncate">
+                                <span>Slide {activeVisual.sourceSlide || (activeLessonIndex + 1)}</span>
+                                <span className="text-slate-300 font-medium truncate">• {activeLesson?.title || activeVisual.name}</span>
+                              </span>
+                              <span className="text-[9px] text-emerald-400 font-extrabold shrink-0 uppercase tracking-wider bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                                PRESENTATION SLIDE
+                              </span>
+                            </div>
                           </div>
                         </div>
-                      )}
+                      ) : (
+                        /* Fallback interactive board notes list when no slide image */
+                        <div
+                          ref={notesScrollRef}
+                          className="flex-1 min-h-0 space-y-1.5 sm:space-y-2 overflow-y-auto pr-1 text-left my-0.5 scroll-smooth no-scrollbar"
+                        >
+                          {sentences.map((sentenceText, sIdx) => {
+                            const isCurrent = sIdx === currentSentenceIdx
+                            const isPast = sIdx < currentSentenceIdx
+                            const cleanedText = cleanForBoard(sentenceText)
 
-                      {/* Interactive Board Notes List (Teacher explaining concept by concept with auto-scroll) */}
-                      <div
-                        ref={notesScrollRef}
-                        className="flex-1 min-h-0 space-y-1.5 sm:space-y-2 overflow-y-auto pr-1 text-left my-0.5 scroll-smooth no-scrollbar"
-                      >
-                        {sentences.map((sentenceText, sIdx) => {
-                          const isCurrent = sIdx === currentSentenceIdx
-                          const isPast = sIdx < currentSentenceIdx
-                          const cleanedText = cleanForBoard(sentenceText)
-
-                          return (
-                            <div
-                              key={sIdx}
-                              ref={isCurrent ? activeSentenceRef : null}
-                              onClick={() => {
-                                window.speechSynthesis?.cancel?.();
-                                setCurrentSentenceIdx(sIdx);
-                                currentSentenceIdxRef.current = sIdx;
-                                if (totalSeconds > 0 && sentences.length > 0) {
-                                  const newSec = Math.min(totalSeconds, Math.round((sIdx / Math.max(1, sentences.length)) * totalSeconds));
-                                  setElapsedSeconds(newSec);
-                                  elapsedSecondsRef.current = newSec;
-                                  if (activeLesson?.id && !isLessonDone(activeLesson.id)) {
-                                    saveLessonPlayback(activeLesson.id, sIdx, newSec);
+                            return (
+                              <div
+                                key={sIdx}
+                                ref={isCurrent ? activeSentenceRef : null}
+                                onClick={() => {
+                                  window.speechSynthesis?.cancel?.();
+                                  setCurrentSentenceIdx(sIdx);
+                                  currentSentenceIdxRef.current = sIdx;
+                                  if (totalSeconds > 0 && sentences.length > 0) {
+                                    const newSec = Math.min(totalSeconds, Math.round((sIdx / Math.max(1, sentences.length)) * totalSeconds));
+                                    setElapsedSeconds(newSec);
+                                    elapsedSecondsRef.current = newSec;
+                                    if (activeLesson?.id && !isLessonDone(activeLesson.id)) {
+                                      saveLessonPlayback(activeLesson.id, sIdx, newSec);
+                                    }
                                   }
-                                }
-                              }}
-                              className={`p-2 sm:p-2.5 rounded-xl transition-all duration-300 cursor-pointer ${isCurrent
-                                ? 'bg-[#ff8c21]/20 border-l-4 border-[#ff8c21] shadow-xs text-white scale-[1.01]'
-                                : isPast
-                                  ? 'bg-slate-800/50 border-l-2 border-slate-600/60 text-slate-300 hover:bg-slate-800/70'
-                                  : 'bg-slate-800/20 border-l-2 border-slate-700/30 text-slate-400 opacity-60 hover:opacity-90'
-                                }`}
-                              title="Click to jump to this concept"
-                            >
-                              <p className="text-xs sm:text-[13px] lg:text-sm leading-relaxed font-medium flex items-start gap-2 sm:gap-2.5">
-                                <span className={`text-[9px] sm:text-[10px] mt-1 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
-                                  {isCurrent ? '●' : '○'}
-                                </span>
-                                <span className="flex-1">{cleanedText}</span>
-                              </p>
-                            </div>
-                          )
-                        })}
-                      </div>
+                                }}
+                                className={`p-2 sm:p-2.5 rounded-xl transition-all duration-300 cursor-pointer ${isCurrent
+                                  ? 'bg-[#ff8c21]/20 border-l-4 border-[#ff8c21] shadow-xs text-white scale-[1.01]'
+                                  : isPast
+                                    ? 'bg-slate-800/50 border-l-2 border-slate-600/60 text-slate-300 hover:bg-slate-800/70'
+                                    : 'bg-slate-800/20 border-l-2 border-slate-700/30 text-slate-400 opacity-60 hover:opacity-90'
+                                  }`}
+                                title="Click to jump to this concept"
+                              >
+                                <p className="text-xs sm:text-[13px] lg:text-sm leading-relaxed font-medium flex items-start gap-2 sm:gap-2.5">
+                                  <span className={`text-[9px] sm:text-[10px] mt-1 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
+                                    {isCurrent ? '●' : '○'}
+                                  </span>
+                                  <span className="flex-1">{cleanedText}</span>
+                                </p>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2262,6 +2349,21 @@ const CoursePlayer = ({
         </section>
 
         {/* RIGHT COLUMN: Ask ARIA Chat Panel */}
+        {chatCollapsed ? (
+          <section className="hidden lg:flex bg-white rounded-2xl border border-slate-200/80 shadow-xs h-full min-h-0 overflow-hidden flex-col items-center py-3 gap-3">
+            <button
+              type="button"
+              onClick={() => setChatCollapsed(false)}
+              className="flex flex-col items-center gap-2 px-1 py-2 text-[#0f1b2d] hover:text-[#ff8c21] transition cursor-pointer border-0 bg-transparent"
+              title="Open Ask ARIA"
+            >
+              <svg className="h-5 w-5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span className="text-[9px] font-extrabold tracking-wide [writing-mode:vertical-rl] rotate-180">Ask ARIA</span>
+            </button>
+          </section>
+        ) : (
         <section className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 pb-2 sm:pb-2.5 shadow-xs flex flex-col justify-between min-h-[260px] lg:h-full lg:min-h-0 overflow-hidden">
           {/* Header */}
           <div className="shrink-0 flex items-center justify-between border-b border-slate-100 pb-2 sm:pb-2.5">
@@ -2272,6 +2374,7 @@ const CoursePlayer = ({
               <h3 className="text-xs sm:text-sm font-bold text-[#0f1b2d]">Ask ARIA</h3>
             </div>
 
+            <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setHandsFreeVoice(v => !v)}
@@ -2284,6 +2387,17 @@ const CoursePlayer = ({
               <span className={`h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full ${handsFreeVoice ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`} />
               {handsFreeVoice ? 'Always-On' : 'Mic Off'}
             </button>
+            <button
+              type="button"
+              onClick={() => setChatCollapsed(true)}
+              className="hidden lg:inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition cursor-pointer bg-transparent"
+              title="Minimize Ask ARIA"
+            >
+              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M4 10.75A.75.75 0 0 1 4.75 10h10.5a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1-.75-.75Z" />
+              </svg>
+            </button>
+            </div>
           </div>
 
           {/* Chat Messages Feed */}
@@ -2344,6 +2458,7 @@ const CoursePlayer = ({
             </button>
           </form>
         </section>
+        )}
       </main>
 
       {/* Full-Screen High-Resolution PPT Diagram Lightbox Modal */}

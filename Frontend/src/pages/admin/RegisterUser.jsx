@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 import CountrySelect from '../../components/CountrySelect'
+import FaceEnrollmentModal from '../../components/face/FaceEnrollmentModal'
 
 const LANGUAGES = [
   { value: 'en', label: 'English' },
@@ -140,45 +141,40 @@ const RegisterUser = () => {
   const [showPassword, setShowPassword] = useState(false)
   const [saving, setSaving] = useState(false)
   const [statusBanner, setStatusBanner] = useState(null)
-  const [cameraOpen, setCameraOpen] = useState(false)
-  const [cameraError, setCameraError] = useState('')
-  const [capturing, setCapturing] = useState(false)
+  const [enrollmentModalOpen, setEnrollmentModalOpen] = useState(false)
+  const [faceEnrollment, setFaceEnrollment] = useState(null)
 
-  const videoRef = useRef(null)
-  const streamRef = useRef(null)
   const fullNameRef = useRef(null)
   const finNumberRef = useRef(null)
   const emailRef = useRef(null)
   const passwordRef = useRef(null)
   const countryRef = useRef(null)
 
-  const stopCamera = () => {
-    streamRef.current?.getTracks().forEach((track) => track.stop())
-    streamRef.current = null
-    if (videoRef.current) videoRef.current.srcObject = null
-  }
-
-  useEffect(() => {
-    return () => stopCamera()
-  }, [])
+  const formRef = useRef(form)
+  formRef.current = form
 
   const updateField = (key, value) => {
     if (key === 'faceIdData' && !value) {
       setExistingFaceUser(null)
+      setFaceEnrollment(null)
     }
     setForm((prev) => {
       const next = { ...prev, [key]: value }
-      if (touched[key] || errors[key]) {
+      formRef.current = next
+      if (touched[key] || errors[key] || key === 'country') {
         const err = validateField(key, value)
         setErrors((prevErr) => ({ ...prevErr, [key]: err || undefined }))
       }
       return next
     })
+    if (key === 'country') {
+      setTouched((prev) => ({ ...prev, country: true }))
+    }
   }
 
   const handleBlur = async (key) => {
     setTouched((prev) => ({ ...prev, [key]: true }))
-    const err = validateField(key, form[key])
+    const err = validateField(key, formRef.current[key])
     if (err) {
       setErrors((prev) => ({ ...prev, [key]: err }))
       return
@@ -217,123 +213,12 @@ const RegisterUser = () => {
     setErrors((prev) => ({ ...prev, [key]: undefined }))
   }
 
-  const openCamera = async () => {
-    setCameraError('')
-    setCameraOpen(true)
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
-        audio: false,
-      })
-      streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
-    } catch {
-      setCameraError('Camera access denied or unavailable. Allow camera permission to enroll Face ID.')
-    }
-  }
-
-  const closeCamera = () => {
-    stopCamera()
-    setCameraOpen(false)
-    setCapturing(false)
-  }
-
-  const captureFace = async () => {
-    const video = videoRef.current
-    if (!video || !video.videoWidth) {
-      setCameraError('Camera is not ready yet. Wait a moment and try again.')
-      return
-    }
-
-    setCapturing(true)
-    setCameraError('')
-    const capturedImages = []
-    
-    try {
-      for (let i = 0; i < 3; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 300))
-        const canvas = document.createElement('canvas')
-        canvas.width = video.videoWidth
-        canvas.height = video.videoHeight
-        const ctx = canvas.getContext('2d')
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-        capturedImages.push(canvas.toDataURL('image/jpeg', 0.86))
-      }
-
-      // Check if face is already recognized and registered to an existing user
-      let check = null
-      try {
-        check = await api.checkUserExists({ faceIdData: capturedImages })
-        console.log('[Face Duplicate Check Result]:', check)
-      } catch (checkErr) {
-        console.warn('Face duplicate check warning:', checkErr)
-        const errMsg = checkErr.message || ''
-        if (
-          errMsg.toLowerCase().includes('face') ||
-          errMsg.toLowerCase().includes('already exists') ||
-          errMsg.toLowerCase().includes('already registered')
-        ) {
-          const matchedUser = checkErr.matchedUser || { fullName: 'Registered User' }
-          setExistingFaceUser(matchedUser)
-          setForm((prev) => ({
-            ...prev,
-            faceIdData: capturedImages[0],
-            faceIdDataList: capturedImages,
-          }))
-          setErrors((prev) => ({
-            ...prev,
-            faceIdData: errMsg,
-          }))
-          setCapturing(false)
-          closeCamera()
-          toast.error(errMsg)
-          return
-        }
-        setCapturing(false)
-        setCameraError(errMsg || 'Failed to verify face uniqueness. Please try again.')
-        toast.error(errMsg || 'Failed to verify face uniqueness.')
-        return
-      }
-
-      if (check && check.exists && check.field === 'faceIdData') {
-        const matchedUser = check.user || {}
-        setExistingFaceUser(matchedUser)
-        setForm((prev) => ({
-          ...prev,
-          faceIdData: capturedImages[0],
-          faceIdDataList: capturedImages,
-        }))
-        const msg = check.message || `User already exists with this face (${matchedUser.fullName || 'Registered User'}).`
-        setErrors((prev) => ({
-          ...prev,
-          faceIdData: msg,
-        }))
-        setCapturing(false)
-        closeCamera()
-        toast.error(msg)
-        return
-      }
-
-      setExistingFaceUser(null)
-      setForm((prev) => ({
-        ...prev,
-        faceIdData: capturedImages[0],
-        faceIdDataList: capturedImages,
-      }))
-      setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-      setCapturing(false)
-      closeCamera()
-      toast.success('Face ID verified and captured successfully!')
-    } catch (err) {
-      setCapturing(false)
-      const errTxt = err.message || 'Failed to capture face biometric data. Please try again.'
-      setCameraError(errTxt)
-      toast.error(errTxt)
-    }
+  const handleEnrollmentComplete = (enrollmentResult) => {
+    setExistingFaceUser(null)
+    setFaceEnrollment(enrollmentResult)
+    updateField('faceIdData', enrollmentResult.thumbnailImage)
+    setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+    toast.success('Live Face ID enrolled and liveness verified!')
   }
 
   const handleSubmit = async (event) => {
@@ -379,9 +264,11 @@ const RegisterUser = () => {
         email: form.email.trim().toLowerCase(),
         password: form.password,
         country: form.country.trim(),
-        faceIdData: form.faceIdDataList || form.faceIdData,
+        faceIdData: form.faceIdData,
+        faceEnrollment: faceEnrollment,
       })
       setForm(emptyForm)
+      setFaceEnrollment(null)
       setTouched(emptyTouched)
       setExistingFaceUser(null)
       setErrors({})
@@ -389,8 +276,11 @@ const RegisterUser = () => {
       setStatusBanner({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
     } catch (err) {
       const errorMsg = err.message || 'Registration failed.'
-      if (errorMsg.toLowerCase().includes('face') || err.matchedUser) {
+      if (err.matchedUser || errorMsg.toLowerCase().includes('already exists') || errorMsg.toLowerCase().includes('already registered')) {
         setExistingFaceUser(err.matchedUser || { fullName: 'Registered User' })
+        setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
+      } else if (errorMsg.toLowerCase().includes('face') || errorMsg.toLowerCase().includes('biometric')) {
+        setExistingFaceUser(null)
         setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
       } else if (errorMsg.toLowerCase().includes('fin number')) {
         setErrors((prev) => ({ ...prev, finNumber: errorMsg }))
@@ -433,7 +323,7 @@ const RegisterUser = () => {
               value={form.fullName}
               onChange={(e) => updateField('fullName', e.target.value)}
               onBlur={() => handleBlur('fullName')}
-              placeholder="e.g. Prem Sai"
+              placeholder="Enter full name"
               aria-invalid={!!errors.fullName}
               aria-describedby={errors.fullName ? 'fullName-error' : undefined}
               className={getFieldClass(!!errors.fullName)}
@@ -512,7 +402,7 @@ const RegisterUser = () => {
               value={form.email}
               onChange={(e) => updateField('email', e.target.value)}
               onBlur={() => handleBlur('email')}
-              placeholder="user@company.com"
+              placeholder="Enter email"
               aria-invalid={!!errors.email}
               aria-describedby={errors.email ? 'email-error' : undefined}
               className={getFieldClass(!!errors.email)}
@@ -664,15 +554,25 @@ const RegisterUser = () => {
                 </div>
               ) : (
                 <div className="flex flex-col gap-3 rounded-2xl border border-ok/25 bg-ok/5 p-4 sm:flex-row sm:items-center">
-                  <img
-                    src={form.faceIdData}
-                    alt="Captured Face ID"
-                    className="h-24 w-24 rounded-xl object-cover shadow-sm"
-                  />
+                  <div className="relative">
+                    <img
+                      src={form.faceIdData}
+                      alt="Enrolled Face ID"
+                      className="h-24 w-24 rounded-xl object-cover shadow-sm border border-ok/30"
+                    />
+                    <span className="absolute -bottom-1 -right-1 bg-ok text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">
+                      ✓ LIVE
+                    </span>
+                  </div>
                   <div className="flex-1">
-                    <p className="font-semibold text-ok">Face ID enrolled</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-ok">Face ID Enrolled</p>
+                      <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+                        3D Liveness Verified
+                      </span>
+                    </div>
                     <p className="mt-1 text-sm text-muted">
-                      Biometric snapshot captured and verified unique. Ready to save with this user.
+                      5-point pose challenge completed and biometrics cryptographically signed.
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
@@ -680,9 +580,9 @@ const RegisterUser = () => {
                         onClick={() => {
                           setExistingFaceUser(null)
                           setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-                          openCamera()
+                          setEnrollmentModalOpen(true)
                         }}
-                        className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40"
+                        className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40 transition"
                       >
                         Recapture
                       </button>
@@ -690,10 +590,11 @@ const RegisterUser = () => {
                         type="button"
                         onClick={() => {
                           updateField('faceIdData', '')
+                          setFaceEnrollment(null)
                           setExistingFaceUser(null)
                           setErrors((prev) => ({ ...prev, faceIdData: undefined }))
                         }}
-                        className="cursor-pointer rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-sm font-semibold text-danger"
+                        className="cursor-pointer rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-sm font-semibold text-danger transition"
                       >
                         Remove
                       </button>
@@ -704,16 +605,22 @@ const RegisterUser = () => {
             ) : (
               <button
                 type="button"
-                onClick={openCamera}
-                className={`flex w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed px-4 py-8 text-center transition ${
+                onClick={() => {
+                  setExistingFaceUser(null)
+                  setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                  setEnrollmentModalOpen(true)
+                }}
+                className={`flex w-full cursor-pointer flex-col items-center justify-center gap-2.5 rounded-2xl border border-dashed px-4 py-8 text-center transition ${
                   errors.faceIdData
                     ? 'border-rose-400 bg-rose-500/5 hover:bg-rose-500/10'
                     : 'border-sky/40 bg-sky/5 hover:bg-sky/10'
                 }`}
               >
-                <span className={`grid h-12 w-12 place-items-center rounded-full ${
-                  errors.faceIdData ? 'bg-rose-500/15 text-rose-500' : 'bg-sky/15 text-sky'
-                }`}>
+                <span
+                  className={`grid h-12 w-12 place-items-center rounded-full ${
+                    errors.faceIdData ? 'bg-rose-500/15 text-rose-500' : 'bg-sky/15 text-sky'
+                  }`}
+                >
                   <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                     <path
                       d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M8 21H6a3 3 0 0 1-3-3v-2M16 21h2a3 3 0 0 0 3-3v-2"
@@ -726,8 +633,14 @@ const RegisterUser = () => {
                     <path d="M10 15.2c.8.9 3.2.9 4 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
                 </span>
-                <span className="font-display font-semibold text-fg">Capture Face ID</span>
-                <span className="text-sm text-muted">Use the camera to enroll biometric data</span>
+                <div>
+                  <span className="font-display font-semibold text-fg block">
+                    Start Guided Face Enrollment
+                  </span>
+                  <span className="text-xs text-muted block mt-0.5">
+                    Real-time webcam 5-pose liveness challenge (MediaPipe Face Landmarker)
+                  </span>
+                </div>
               </button>
             )}
             {errors.faceIdData && !existingFaceUser && (
@@ -751,8 +664,6 @@ const RegisterUser = () => {
             </p>
           )}
 
-
-
           <div className="sm:col-span-2 flex flex-col gap-3 sm:flex-row">
             <button
               type="submit"
@@ -772,63 +683,12 @@ const RegisterUser = () => {
         </form>
       </section>
 
-      {cameraOpen && createPortal(
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="face-capture-title"
-        >
-          <div className="relative w-full max-w-md rounded-3xl border border-line bg-panel p-6 shadow-2xl animate-rise-in my-auto">
-            <h2 id="face-capture-title" className="font-display text-xl font-semibold text-fg">
-              Capture Face ID
-            </h2>
-            <p className="mt-1 text-sm text-muted">Center the face in the frame, then capture.</p>
-
-            <div className="relative mt-4 overflow-hidden rounded-2xl border border-line bg-navy/90">
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                className="aspect-4/3 w-full scale-x-[-1] object-cover"
-              />
-              <div className="pointer-events-none absolute inset-6 rounded-[28px] border-2 border-sky/70" />
-              {capturing && (
-                <div className="absolute inset-0 grid place-items-center bg-navy/40">
-                  <p className="rounded-full bg-panel px-3 py-1.5 text-sm font-semibold text-fg">
-                    Capturing…
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {cameraError && (
-              <p className="mt-3 rounded-[10px] border border-danger/25 bg-danger/10 px-3 py-2 text-sm text-danger">
-                {cameraError}
-              </p>
-            )}
-
-            <div className="mt-4 flex gap-2.5">
-              <button
-                type="button"
-                onClick={closeCamera}
-                className="flex-1 cursor-pointer rounded-xl border border-line bg-transparent px-3 py-3 font-semibold text-muted hover:text-fg"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={captureFace}
-                disabled={capturing}
-                className="flex-1 cursor-pointer rounded-xl border-0 bg-sky px-3 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {capturing ? 'Verifying & Saving…' : cameraError ? 'Try Again' : 'Capture'}
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      {/* Guided 5-Pose Real-Time Face Enrollment Modal */}
+      <FaceEnrollmentModal
+        isOpen={enrollmentModalOpen}
+        onClose={() => setEnrollmentModalOpen(false)}
+        onEnrollmentComplete={handleEnrollmentComplete}
+      />
     </div>
   )
 }

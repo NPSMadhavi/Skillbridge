@@ -73,6 +73,33 @@ export const api = {
     return res.json();
   },
 
+  // Start Server-Managed Guided Face Enrollment Session
+  startFaceEnrollmentSession: async () => {
+    const res = await fetch(`${API_BASE_URL}/admin/face-enrollment/start`, {
+      method: 'POST',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to start face enrollment session.');
+    }
+    return res.json();
+  },
+
+  // Complete Server-Verified Guided Face Enrollment
+  completeFaceEnrollment: async (enrollmentPayload) => {
+    const res = await fetch(`${API_BASE_URL}/admin/face-enrollment/complete`, {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify(enrollmentPayload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Face enrollment validation failed.');
+    }
+    return res.json();
+  },
+
   // Admin User List
   getUsers: async () => {
     const res = await fetch(`${API_BASE_URL}/admin/users`, {
@@ -126,14 +153,19 @@ export const api = {
     return res.json();
   },
 
-  // Admin Delete User
-  deleteUser: async (id) => {
+  // Admin Delete User (requires admin password verification and unassigns courses)
+  deleteUser: async (id, adminPassword) => {
     const res = await fetch(`${API_BASE_URL}/admin/users/${id}`, {
       method: 'DELETE',
-      headers: getHeaders(true),
+      headers: {
+        ...getHeaders(true),
+        'Content-Type': 'application/json',
+        'x-admin-password': adminPassword || '',
+      },
+      body: JSON.stringify({ adminPassword }),
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       throw new Error(err.error || 'Failed to delete user.');
     }
     return res.json();

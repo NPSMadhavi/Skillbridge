@@ -42,23 +42,21 @@ export const checkUserExists = async (req, res) => {
         select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true, faceEmbedding: true },
       });
 
-      if (candidates.length > 0) {
-        const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
-        if (verifyResult && verifyResult.matched && verifyResult.id) {
-          const matchedUser = candidates.find((c) => c.id === verifyResult.id);
-          return res.json({
-            exists: true,
-            field: 'faceIdData',
-            message: `User already exists with this face (${matchedUser?.fullName || 'Registered User'} - FIN: ${matchedUser?.finNumber || 'N/A'}).`,
-            user: {
-              id: matchedUser?.id,
-              fullName: matchedUser?.fullName,
-              finNumber: matchedUser?.finNumber,
-              email: matchedUser?.email,
-              faceImage: matchedUser?.faceImage,
-            },
-          });
-        }
+      const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
+      if (verifyResult && verifyResult.matched && verifyResult.id) {
+        const matchedUser = candidates.find((c) => c.id === verifyResult.id);
+        return res.json({
+          exists: true,
+          field: 'faceIdData',
+          message: `User already exists with this face (${matchedUser?.fullName || 'Registered User'} - FIN: ${matchedUser?.finNumber || 'N/A'}).`,
+          user: {
+            id: matchedUser?.id,
+            fullName: matchedUser?.fullName,
+            finNumber: matchedUser?.finNumber,
+            email: matchedUser?.email,
+            faceImage: matchedUser?.faceImage,
+          },
+        });
       }
     }
 
@@ -70,7 +68,7 @@ export const checkUserExists = async (req, res) => {
 };
 
 export const registerUser = async (req, res) => {
-  const { fullName, finNumber, preferLanguage, email, password, faceIdData, country, assignedCourseIds } = req.body;
+  const { fullName, finNumber, preferLanguage, email, password, faceIdData, faceEnrollment, country, assignedCourseIds } = req.body;
 
   if (!fullName || !finNumber || !preferLanguage || !email || !password || !country) {
     return res.status(400).json({ error: 'All fields are required.' });
@@ -89,7 +87,42 @@ export const registerUser = async (req, res) => {
     }
 
     let faceEmbedding = null;
-    if (faceIdData) {
+    let faceImage = null;
+
+    if (faceEnrollment && faceEnrollment.encryptedEmbedding) {
+      faceEmbedding = faceEnrollment.encryptedEmbedding;
+      faceImage = faceEnrollment.thumbnailImage || null;
+
+      // Check if enrolled face matches any existing user
+      try {
+        const candidates = await prisma.user.findMany({
+          where: { faceEmbedding: { not: null } },
+          select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true, faceEmbedding: true },
+        });
+
+        if (candidates.length > 0 && faceImage) {
+          const verifyResult = await pythonService.verifyFace(faceImage, candidates);
+          if (verifyResult && verifyResult.matched && verifyResult.id) {
+            const matchedUser = candidates.find((c) => c.id === verifyResult.id);
+            const matchedName = matchedUser?.fullName ? ` (${matchedUser.fullName} - FIN: ${matchedUser.finNumber})` : '';
+            return res.status(400).json({
+              error: `User already exists with this face${matchedName}.`,
+              matchedUser: {
+                id: matchedUser?.id,
+                fullName: matchedUser?.fullName,
+                finNumber: matchedUser?.finNumber,
+                email: matchedUser?.email,
+                faceImage: matchedUser?.faceImage,
+              },
+            });
+          }
+        }
+      } catch (err) {
+        if (err.message && (err.message.includes('already exists') || err.message.includes('already registered'))) {
+          return res.status(400).json({ error: err.message });
+        }
+      }
+    } else if (faceIdData) {
       try {
         // Check if face is already registered to any existing user
         const candidates = await prisma.user.findMany({
@@ -116,6 +149,7 @@ export const registerUser = async (req, res) => {
         }
 
         faceEmbedding = await pythonService.registerFace(faceIdData);
+        faceImage = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
       } catch (err) {
         if (err.message && (err.message.includes('already exists') || err.message.includes('already registered'))) {
           return res.status(400).json({ error: err.message });
@@ -125,7 +159,6 @@ export const registerUser = async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const faceImage = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
 
     const newUser = await prisma.user.create({
       data: {
@@ -532,26 +565,104 @@ export const getUserProgress = async (req, res) => {
 
 export const deleteUser = async (req, res) => {
   const { id } = req.params;
+  const adminPassword = req.body?.adminPassword || req.headers['x-admin-password'];
+
+  if (!adminPassword || typeof adminPassword !== 'string' || !adminPassword.trim()) {
+    return res.status(400).json({ error: 'Admin password is required to delete a user.' });
+  }
 
   try {
-    const user = await prisma.user.findUnique({ where: { id } });
+    // 1. Authenticate admin using the provided admin password
+    const adminId = req.user?.id;
+    const adminEmail = req.user?.email;
+
+    let admin = null;
+    if (adminId) {
+      admin = await prisma.admin.findUnique({ where: { id: adminId } });
+    }
+    if (!admin && adminEmail) {
+      admin = await prisma.admin.findUnique({ where: { email: adminEmail } });
+    }
+    // Fallback: check if admin is in User table with ADMIN role
+    if (!admin) {
+      if (adminId) {
+        admin = await prisma.user.findFirst({ where: { id: adminId, role: 'ADMIN' } });
+      }
+      if (!admin && adminEmail) {
+        admin = await prisma.user.findFirst({ where: { email: adminEmail, role: 'ADMIN' } });
+      }
+    }
+
+    if (!admin || !admin.passwordHash) {
+      return res.status(401).json({ error: 'Admin identity could not be verified.' });
+    }
+
+    const isPasswordValid = await bcrypt.compare(adminPassword.trim(), admin.passwordHash);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Incorrect admin password. Deletion cancelled.' });
+    }
+
+    // 2. Fetch user to delete along with assigned courses
+    const user = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        assignments: {
+          include: {
+            course: {
+              select: { id: true, title: true }
+            }
+          }
+        }
+      }
+    });
+
     if (!user) {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    // Delete related records first
-    await prisma.userCourseAssignment.deleteMany({ where: { userId: id } });
+    // 3. First, unassign all courses assigned to this user
+    const assignedCoursesCount = user.assignments?.length || 0;
+    if (assignedCoursesCount > 0) {
+      console.log(`[DeleteUser] Unassigning ${assignedCoursesCount} course(s) from user ${user.fullName} (${user.id}) before deletion`);
+      await prisma.userCourseAssignment.deleteMany({ where: { userId: id } });
+    }
+
+    // 4. Delete user progress records
     await prisma.courseProgress.deleteMany({ where: { userId: id } });
 
-    // Delete user record
+    // 5. Finally, delete user record
     await prisma.user.delete({ where: { id } });
 
+    console.log(`[DeleteUser] Successfully unassigned ${assignedCoursesCount} course(s) and deleted user ${user.fullName} (${user.id}).`);
+
     res.json({
-      message: 'User deleted successfully.',
+      message: 'User unassigned from all courses and deleted successfully.',
       userId: id,
+      unassignedCoursesCount: assignedCoursesCount
     });
   } catch (error) {
     console.error('Delete user error:', error);
     res.status(500).json({ error: error.message || 'An error occurred while deleting user.' });
   }
 };
+
+export const startFaceEnrollment = async (req, res) => {
+  try {
+    const session = await pythonService.startFaceEnrollmentSession();
+    res.json(session);
+  } catch (error) {
+    console.error('Start face enrollment error:', error);
+    res.status(error.statusCode || 500).json({ error: error.message || 'Failed to start face enrollment session.' });
+  }
+};
+
+export const completeFaceEnrollment = async (req, res) => {
+  try {
+    const result = await pythonService.completeFaceEnrollment(req.body);
+    res.json(result);
+  } catch (error) {
+    console.error('Complete face enrollment error:', error);
+    res.status(error.statusCode || 400).json({ error: error.message || 'Face enrollment verification failed.' });
+  }
+};
+

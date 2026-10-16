@@ -1,12 +1,7 @@
 import { useMemo, useState } from 'react'
+import { LANGUAGE_OPTIONS, persistLanguageSelection, readStoredLanguageCode } from '../utils/language'
 
-const languages = [
-  { value: 'en', code: 'EN', name: 'English', native: 'English' },
-  { value: 'zh', code: 'ZH', name: 'Chinese (中文)', native: '中文' },
-  { value: 'ms', code: 'MS', name: 'Malay (Bahasa Melayu)', native: 'Bahasa Melayu' },
-  { value: 'ta', code: 'TA', name: 'Tamil (தமிழ்)', native: 'தமிழ்' },
-  { value: 'bn', code: 'BN', name: 'Bangla (বাংলা)', native: 'বাংলা' },
-]
+const languages = LANGUAGE_OPTIONS
 
 const stars = [
   { top: '8%', left: '12%', size: 2, delay: '0s' },
@@ -24,7 +19,11 @@ const stars = [
 ]
 
 const Language = ({ onContinue }) => {
-  const [selected, setSelected] = useState('EN')
+  const [selected, setSelected] = useState(() => {
+    const stored = readStoredLanguageCode()
+    const match = languages.find((item) => item.value === stored)
+    return match?.code || 'EN'
+  })
 
   const starNodes = useMemo(
     () =>
@@ -48,7 +47,7 @@ const Language = ({ onContinue }) => {
 
   const handleContinue = () => {
     const language = languages.find((item) => item.code === selected)
-    sessionStorage.setItem('skillbridge_language', JSON.stringify(language))
+    persistLanguageSelection(language?.value || 'en')
     onContinue?.(language)
   }
 

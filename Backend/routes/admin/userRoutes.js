@@ -8,6 +8,8 @@ import {
   deleteUser,
   assignCoursesToUser,
   toggleUserStatus,
+  startFaceEnrollment,
+  completeFaceEnrollment,
 } from '../../controllers/admin/userController.js';
 import { authenticateToken, requireRole } from '../../middleware/auth.js';
 
@@ -16,6 +18,8 @@ const router = express.Router();
 // Protected admin user management routes
 router.post('/register', authenticateToken, requireRole(['ADMIN']), registerUser);
 router.post('/check-user', authenticateToken, requireRole(['ADMIN']), checkUserExists);
+router.post('/face-enrollment/start', authenticateToken, requireRole(['ADMIN']), startFaceEnrollment);
+router.post('/face-enrollment/complete', authenticateToken, requireRole(['ADMIN']), completeFaceEnrollment);
 router.get('/users', authenticateToken, requireRole(['ADMIN']), getUsers);
 router.get('/users/:id/progress', authenticateToken, requireRole(['ADMIN']), getUserProgress);
 router.put('/users/:id', authenticateToken, requireRole(['ADMIN']), updateUser);

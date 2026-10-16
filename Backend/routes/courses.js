@@ -7,6 +7,7 @@ import aiService from '../services/aiService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
 import documentExtractor from '../services/documentExtractor.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
+import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
 
 const router = express.Router();
 const upload = multer({
@@ -38,8 +39,13 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     const docResult = await extractDocumentContent(req.file);
     const { text: textContent, pages, slides, fileType } = docResult;
 
+    const imageCount = (slides || []).reduce((n, s) => n + ((s.images || []).length), 0) + ((docResult.images || []).length);
     if (!textContent || textContent.length < 30) {
-      return res.status(400).json({ error: 'Failed to extract text from document. The file might be empty, password-protected, or scanned images only.' });
+      return res.status(400).json({
+        error: imageCount > 0
+          ? 'The PowerPoint is image-based, but no readable training text could be found in the slide pictures. Try a PPTX with clearer photos, or add slide titles/notes.'
+          : 'Failed to extract text from document. The file might be empty, password-protected, or scanned images only.'
+      });
     }
 
     const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
@@ -217,6 +223,25 @@ router.get('/:id', authenticateToken, async (req, res) => {
     const course = await prisma.course.findUnique({
       where: { id: req.params.id },
       include: {
+        chunks: {
+          orderBy: { chunkIndex: 'asc' },
+          select: {
+            id: true,
+            chunkIndex: true,
+            chunkText: true,
+            topic: true,
+            subtopic: true,
+            concept: true,
+            chunkType: true,
+            sourcePage: true,
+            sourceSlides: true,
+            sourceSection: true,
+            keyPoints: true,
+            relatedConcepts: true,
+            semanticSummary: true,
+            metadata: true
+          }
+        },
         _count: {
           select: { assignments: true },
         },
@@ -232,8 +257,100 @@ router.get('/:id', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
     }
 
+    let curriculumData = typeof course.curriculum === 'string'
+      ? JSON.parse(course.curriculum)
+      : (course.curriculum || {});
+
+    // Parse slide blocks from fileText if available for rich fallback
+    const slideBlockMap = new Map();
+    if (course.fileText) {
+      const blocks = course.fileText.split(/(?=--- Slide \d+:)/);
+      for (const b of blocks) {
+        const match = b.match(/--- Slide (\d+):\s*(.*?)\s*---/);
+        if (match) {
+          const sNum = parseInt(match[1], 10);
+          const sTitle = match[2]?.trim() || `Slide ${sNum}`;
+          const lines = b.replace(/--- Slide \d+:[^\n]+\n/, '').split('\n').map(l => l.trim()).filter(Boolean);
+          const bullets = lines.filter(l => l.startsWith('- ') || l.startsWith('* ') || /^\d+\.\s/.test(l));
+          const tables = lines.filter(l => l.includes('|'));
+          const paragraphs = lines.filter(l => !l.startsWith('- ') && !l.startsWith('* ') && !/^\d+\.\s/.test(l) && !l.includes('|') && !l.startsWith('#') && !l.startsWith('['));
+          slideBlockMap.set(sNum, {
+            slideNumber: sNum,
+            title: sTitle,
+            bulletPoints: bullets,
+            tables,
+            paragraphs,
+            fullText: b.trim()
+          });
+        }
+      }
+    }
+
+    // Enrich lessons with authentic slide / chunk data
+    if (Array.isArray(curriculumData.lessons)) {
+      curriculumData.lessons = curriculumData.lessons.map((lesson, idx) => {
+        const sNums = Array.isArray(lesson.sourceSlides) ? lesson.sourceSlides : [idx + 1];
+        const sNum = sNums[0] || (idx + 1);
+
+        // Find matching chunk from pgvector CourseChunk table
+        const matchedChunk = (course.chunks || []).find(c => {
+          if (Array.isArray(c.sourceSlides) && c.sourceSlides.includes(sNum)) return true;
+          if (c.sourcePage === sNum) return true;
+          return false;
+        }) || (course.chunks && course.chunks[idx]);
+
+        const slideBlock = slideBlockMap.get(sNum);
+
+        let slideData = lesson.slideData;
+        if (!slideData) {
+          if (slideBlock) {
+            slideData = {
+              slideNumber: slideBlock.slideNumber,
+              title: slideBlock.title || lesson.title,
+              headings: [],
+              bulletPoints: slideBlock.bulletPoints || [],
+              paragraphs: slideBlock.paragraphs || [],
+              tables: slideBlock.tables || [],
+              speakerNotes: '',
+              fullText: slideBlock.fullText || '',
+              images: lesson.visuals || []
+            };
+          } else if (matchedChunk) {
+            const lines = (matchedChunk.chunkText || '').split('\n').map(l => l.trim()).filter(Boolean);
+            const bullets = lines.filter(l => l.startsWith('- ') || l.startsWith('* ') || /^\d+\.\s/.test(l));
+            const tables = lines.filter(l => l.includes('|'));
+            const paragraphs = lines.filter(l => !l.startsWith('- ') && !l.startsWith('* ') && !/^\d+\.\s/.test(l) && !l.includes('|') && !l.startsWith('#'));
+            slideData = {
+              slideNumber: matchedChunk.sourcePage || sNum,
+              title: matchedChunk.concept || lesson.title,
+              headings: [matchedChunk.topic].filter(Boolean),
+              bulletPoints: bullets.length > 0 ? bullets : (matchedChunk.keyPoints || []),
+              paragraphs,
+              tables,
+              speakerNotes: '',
+              fullText: matchedChunk.chunkText || '',
+              images: lesson.visuals || (matchedChunk.metadata?.visuals || [])
+            };
+          }
+        }
+
+        return {
+          ...lesson,
+          sourceSlides: sNums,
+          slideData,
+          chunkData: matchedChunk ? {
+            chunkIndex: matchedChunk.chunkIndex,
+            title: matchedChunk.concept || lesson.title,
+            text: matchedChunk.chunkText || '',
+            bulletPoints: matchedChunk.keyPoints || []
+          } : null
+        };
+      });
+    }
+
     res.json({
       ...course,
+      curriculum: curriculumData,
       assignedUsersCount: course._count?.assignments || 0,
     });
   } catch (error) {
@@ -262,23 +379,55 @@ function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', mat
   const topic = targetChunk.topic || matchingLesson?.chapterTitle || matchingLesson?.moduleTitle || courseTitle;
 
   let rawText = (targetChunk.text || targetChunk.chunkText || '')
+    .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
+    .replace(/Slide\s*\d+:?\s*---*/gi, '')
+    .replace(/Slide\s*\d+:\s*/gi, '')
     .replace(/^###[^\n]+\n/g, '')
     .replace(/^\*\*Topic:[^\n]+\n/g, '')
     .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
     .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
     .trim();
 
+  // Rejoin fragmented lines from PowerPoint line wraps into coherent sentences
+  const rawLines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const cleanBlocks = [];
+  let buffer = '';
+  for (const line of rawLines) {
+    const isBullet = /^[-*•➔\d\.]+\s+/.test(line);
+    const cleanLine = line.replace(/^[-*•➔\d\.]+\s+/, '').trim();
+    if (!cleanLine) continue;
+    if (isBullet) {
+      if (buffer) { cleanBlocks.push(buffer); buffer = ''; }
+      buffer = cleanLine;
+    } else if (buffer && !/[.!?]$/.test(buffer)) {
+      buffer += ' ' + cleanLine;
+    } else {
+      if (buffer) cleanBlocks.push(buffer);
+      buffer = cleanLine;
+    }
+  }
+  if (buffer) cleanBlocks.push(buffer);
+  const cleanContentText = cleanBlocks.join('\n\n');
+
   let keyPoints = targetChunk.key_points || targetChunk.keyPoints || [];
   if (typeof keyPoints === 'string') {
     try { keyPoints = JSON.parse(keyPoints); } catch(e) { keyPoints = []; }
   }
+  keyPoints = (keyPoints || [])
+    .map(kp => String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())
+    .filter(kp => kp.length > 5);
 
   const sections = [];
-  const summary = targetChunk.semanticSummary || `This lesson provides a comprehensive breakdown of ${concept} within ${topic}.`;
+  let summary = (targetChunk.semanticSummary || `In this lesson, we study the core standards, operational requirements, and protocols for ${concept}.`)
+    .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
+    .replace(/Slide\s*\d+:\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   sections.push(`### 💡 ${concept}\n${summary}`);
 
-  if (rawText && rawText.length > 20) {
-    sections.push(`#### 🎯 Operational Principles & Standards\n${rawText}`);
+  if (cleanContentText && cleanContentText.length > 15) {
+    sections.push(`#### 🎯 Operational Principles & Standards\n${cleanContentText}`);
   }
 
   if (Array.isArray(keyPoints) && keyPoints.length > 0) {
@@ -314,24 +463,6 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
       return res.status(400).json({ error: 'Lesson title is required.' });
     }
 
-    const resolveLanguageInfo = (lang) => {
-      if (!lang) return { code: 'en', name: 'English', speechCode: 'en-US' };
-      const l = String(lang).toLowerCase().trim();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
-        return { code: 'zh', name: 'Chinese (中文)', speechCode: 'zh-CN' };
-      }
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
-        return { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' };
-      }
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
-        return { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' };
-      }
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
-        return { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' };
-      }
-      return { code: 'en', name: 'English', speechCode: 'en-US' };
-    };
-
     const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
     const targetLanguage = targetLangInfo.name;
     const lessonIdStr = String(req.params.lessonId);
@@ -354,7 +485,12 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
         const cachedExplanation = existingLesson.explanations?.[targetLangInfo.code] ||
           (targetLangInfo.code === 'en' ? existingLesson.explanation : null);
 
-        if (cachedExplanation && typeof cachedExplanation === 'string' && cachedExplanation.trim().length > 30) {
+        if (
+          cachedExplanation &&
+          typeof cachedExplanation === 'string' &&
+          cachedExplanation.trim().length > 30 &&
+          textMatchesLanguage(cachedExplanation, targetLangInfo.code)
+        ) {
           const fetchDuration = Date.now() - fetchStartTime;
           console.log(`[PERF:LESSON_FETCH_END] Served lesson "${lessonTitle}" directly from PostgreSQL DB cache in ${fetchDuration}ms (0 network / 0 LLM latency)`);
           return res.json({
@@ -400,19 +536,30 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
       }
     }
 
-    // Synthesize structured blackboard lesson notes in target language
+    // Synthesize structured blackboard lesson notes in the selected language only.
+    // Source chunks (OCR / PPT) may be Bangla even when the student chose English.
     let explanation;
-    if (targetLangInfo.code === 'en') {
-      explanation = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+    const sourceScript = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+    const sourceAlreadyInTarget = textMatchesLanguage(sourceScript, targetLangInfo.code);
+
+    if (targetLangInfo.code === 'en' && sourceAlreadyInTarget) {
+      explanation = sourceScript;
     } else {
-      // Multilingual synthesis for Chinese, Malay, Tamil, Bangla
-      const baseEnglishExp = synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
       try {
         console.log(`[PERF:LLM_START] Generating lesson explanation in ${targetLanguage} (${targetLangInfo.code})...`);
-        explanation = await aiService.explainLesson(course.title, lessonTitle, baseEnglishExp, targetLanguage);
+        explanation = await aiService.explainLesson(course.title, lessonTitle, sourceScript, targetLanguage);
         console.log(`[PERF:LLM_END] Multilingual explanation generated in ${targetLanguage}`);
       } catch (err) {
         console.warn(`[PERF:LLM_END] AI multilingual fallback triggered for ${targetLanguage}:`, err.message);
+        explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
+      }
+    }
+
+    if (explanation && !textMatchesLanguage(explanation, targetLangInfo.code)) {
+      try {
+        console.log(`[Language Lock] Regenerating lesson "${lessonTitle}" because output was not ${targetLanguage}`);
+        explanation = await aiService.explainLesson(course.title, lessonTitle, sourceScript, targetLanguage);
+      } catch (err) {
         explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
       }
     }
@@ -429,9 +576,11 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
         );
         if (targetLesson) {
           if (!targetLesson.explanations) targetLesson.explanations = {};
-          targetLesson.explanations[targetLangInfo.code] = explanation;
-          if (targetLangInfo.code === 'en') {
-            targetLesson.explanation = explanation;
+          if (textMatchesLanguage(explanation, targetLangInfo.code)) {
+            targetLesson.explanations[targetLangInfo.code] = explanation;
+            if (targetLangInfo.code === 'en') {
+              targetLesson.explanation = explanation;
+            }
           }
           await prisma.course.update({
             where: { id: course.id },
@@ -482,24 +631,6 @@ router.post('/:id/lessons/:lessonId/quiz', authenticateToken, async (req, res) =
     if (!lessonTitle) {
       return res.status(400).json({ error: 'Lesson title is required.' });
     }
-
-    const resolveLanguageInfo = (lang) => {
-      if (!lang) return { code: 'en', name: 'English', speechCode: 'en-US' };
-      const l = String(lang).toLowerCase().trim();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
-        return { code: 'zh', name: 'Chinese (中文)', speechCode: 'zh-CN' };
-      }
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
-        return { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' };
-      }
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
-        return { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' };
-      }
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
-        return { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' };
-      }
-      return { code: 'en', name: 'English', speechCode: 'en-US' };
-    };
 
     const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
     const targetLanguage = targetLangInfo.name;
@@ -699,27 +830,29 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Message is required.' });
     }
 
-    const resolveLanguageInfo = (lang) => {
-      if (!lang) return { code: 'en', name: 'English', speechCode: 'en-US' };
-      const l = String(lang).toLowerCase().trim();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) {
-        return { code: 'zh', name: 'Chinese (中文)', speechCode: 'zh-CN' };
-      }
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) {
-        return { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' };
-      }
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) {
-        return { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' };
-      }
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
-        return { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' };
-      }
-      return { code: 'en', name: 'English', speechCode: 'en-US' };
-    };
-
     const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
     const targetLanguage = targetLangInfo.name;
     console.log(`[RAG Chat Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
+
+    const normalizeForEcho = (value) => String(value || '')
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const questionNorm = normalizeForEcho(message);
+    const conceptNorm = normalizeForEcho(currentConcept);
+    if (conceptNorm.length > 40 && questionNorm.length > 40) {
+      const qWords = questionNorm.split(' ').filter(w => w.length > 3);
+      const cSet = new Set(conceptNorm.split(' ').filter(w => w.length > 3));
+      const overlap = qWords.length ? qWords.filter(w => cSet.has(w)).length / qWords.length : 0;
+      if (overlap >= 0.55 || conceptNorm.includes(questionNorm) || questionNorm.includes(conceptNorm.slice(0, 80))) {
+        return res.json({
+          reply: 'I did not catch a question. Please ask me something about this lesson.',
+          text: 'I did not catch a question. Please ask me something about this lesson.',
+          language: targetLangInfo
+        });
+      }
+    }
 
     // Retrieve semantic context matching student query from PostgreSQL pgvector
     const ragChatStartTime = Date.now();
@@ -737,7 +870,8 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       console.warn(`[PERF:RAG_END] pgvector RAG query notice (${ragChatDuration}ms):`, e.message);
     }
 
-    const contextText = chunks.length > 0
+    const MAX_CONTEXT_CHARS = 8000;
+    let contextText = chunks.length > 0
       ? chunks.map(c => {
           const src = c.source_slides?.length
             ? `Slides ${c.source_slides.join(', ')}`
@@ -746,47 +880,47 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
           const topicTag = c.topic ? `[Topic: ${c.topic}]` : '';
           return `${conceptTag} ${topicTag} (${src})\n${c.text}`;
         }).join('\n\n')
-      : (course.fileText || '').slice(0, 15000);
+      : (course.fileText || '').slice(0, MAX_CONTEXT_CHARS);
+    if (contextText.length > MAX_CONTEXT_CHARS) {
+      contextText = contextText.slice(0, MAX_CONTEXT_CHARS);
+    }
+    const hasCourseContext = !!(contextText && contextText.trim());
 
-    const systemPrompt = `You are ARIA, the intelligent AI Tutor for SkillBridge.
+    const systemPrompt = `You are ARIA, a patient and accurate AI Tutor for SkillBridge.
+You explain concepts clearly, use appropriate examples, and adapt explanations to the learner's level.
 You are actively teaching the course: "${course.title}" (Current Lesson: "${lessonTitle || 'Overview'}").
 ${currentConcept ? `The student is currently viewing / listening to this lesson concept: "${currentConcept}".` : ''}
 Selected Teaching Language: ${targetLanguage}.
 
 CRITICAL CONCISE & UNDERSTANDABLE TUTORING RULES:
+0. ANSWER THE STUDENT QUESTION ONLY: Reply to the text after "Student Question:". Do not repeat, continue, or narrate the Active Lesson Concept or retrieved course context unless the student asked for that. If the student question is missing, is the same as the lesson script, or is not a real question, say you did not catch the question and ask them to ask again in one short sentence.
 1. SHORT & DIRECT (MAX 2-3 SENTENCES): Keep your answer SHORT, CONCISE, and TO THE POINT. Deliver at most 2 to 3 clear, conversational sentences (around 35-60 words). Never output long essays, large lists of bullet points, or multiple paragraphs.
 2. SIMPLE & INTUITIVE: Explain the concept in plain, simple, easily digestible words that any beginner can understand immediately.
 3. VOICE & AUDIO FRIENDLY: Your answer will be spoken aloud to the student in real-time via text-to-speech. Short and clear answers allow the student to quickly understand without lengthy interruptions to their lesson.
-4. TARGET TEACHING LANGUAGE: Generate your ENTIRE answer in ${targetLanguage} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
-5. CROSS-LINGUAL UNDERSTANDING: If the student asks in English or another language, understand the intent and respond fluently in ${targetLanguage}.
+4. TARGET TEACHING LANGUAGE: Generate your ENTIRE answer in ${targetLanguage} only (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)). Do not mix Bangla with English or any other language.
+5. CROSS-LINGUAL UNDERSTANDING: If the student asks in English or another language, understand the intent and respond fluently in ${targetLanguage}. If course excerpts are in another language, translate the answer into ${targetLanguage}.
 6. TECHNICAL TERMS: Keep essential technical keywords (e.g. React, API, Database, State, Function, Loop, Component) in their standard form alongside the explanation in ${targetLanguage}.
-7. GROUNDING: Base your explanation on the course concepts and current lesson context.
-8. FRIENDLY TONE: Warm, natural, direct, and encouraging.`;
+7. GROUNDING: When retrieved course material is provided, base your explanation on that context and the current lesson. Do not replace document-grounded answers with unrelated generic answers.
+8. SOURCE HONESTY: If the available course material does not contain enough information to answer accurately, say so clearly and give a brief general explanation without inventing source-specific facts, slide numbers, or document details.
+9. FRIENDLY TONE: Warm, natural, direct, and encouraging.
+${hasCourseContext ? 'Relevant course excerpts are included in the student message. Use them when they apply.' : 'No matching course excerpts were retrieved for this question. Do not invent course-document facts.'}`;
 
-    const userPrompt = `Retrieved Course Context:\n${contextText}\n\n${currentConcept ? `Active Lesson Concept:\n${currentConcept}\n\n` : ''}Student Question:\n${message}\n\nSelected Response Language:\n${targetLanguage}`;
+    const userPrompt = `${hasCourseContext ? `Retrieved Course Context:\n${contextText}\n\n` : 'Retrieved Course Context: [none]\n\n'}${currentConcept ? `Active Lesson Concept:\n${currentConcept}\n\n` : ''}Student Question:\n${message}\n\nSelected Response Language:\n${targetLanguage}`;
 
     const llmChatStartTime = Date.now();
-    console.log(`[PERF:LLM_START] Generating tutor answer via LLM in ${targetLanguage}...`);
+    console.log(`[PERF:LLM_START] Generating tutor answer via local LLM gateway in ${targetLanguage} (${chunks.length} RAG chunks)...`);
 
     let reply;
     try {
       reply = await aiService._callLLM(systemPrompt, userPrompt, false, conversationHistory || []);
       const llmChatDuration = Date.now() - llmChatStartTime;
-      console.log(`[PERF:LLM_END] Generated tutor answer via LLM in ${llmChatDuration}ms.`);
+      console.log(`[PERF:LLM_END] Generated tutor answer via local LLM gateway in ${llmChatDuration}ms.`);
     } catch (e) {
       const llmChatDuration = Date.now() - llmChatStartTime;
-      console.warn(`[PERF:LLM_END] AI call in chat fallback triggered (${llmChatDuration}ms):`, e.message);
-      if (targetLangInfo.code === 'zh') {
-        reply = `非常好的一点！在 ${course.title} 中，理解这个概念对于掌握核心技能非常重要。如果您有更多疑问，欢迎随时提问！`;
-      } else if (targetLangInfo.code === 'ms') {
-        reply = `Soalan yang bagus! Dalam ${course.title}, memahami konsep ini membina asas yang kukuh. Sila tanya jika anda perlukan penjelasan lanjut!`;
-      } else if (targetLangInfo.code === 'ta') {
-        reply = `அருமையான கேள்வி! ${course.title} பாடத்தில், இந்தக் கருத்தைப் புரிந்து கொள்வது உங்கள் அறிவை வலுவாக்கும். கூடுதல் விவரங்கள் தேவைப்பட்டால் தாராளமாக கேளுங்கள்!`;
-      } else if (targetLangInfo.code === 'bn') {
-        reply = `চমৎকার প্রশ্ন! ${course.title} কোর্সে এই ধারণাটি বোঝা অত্যন্ত জরুরি। আপনার আর কোনো প্রশ্ন থাকলে নির্দ্বিধায় জিজ্ঞাসা করুন!`;
-      } else {
-        reply = `Great question! In ${course.title}, understanding this concept builds strong core foundations. Feel free to ask more details!`;
-      }
+      console.warn(`[PERF:LLM_END] Local LLM gateway unavailable for tutor chat (${llmChatDuration}ms).`);
+      return res.status(e.status && e.status >= 400 ? e.status : 503).json({
+        error: 'The AI tutor is temporarily unavailable. Please try again in a moment.'
+      });
     }
 
     res.json({ reply, text: reply, language: targetLangInfo });
@@ -829,8 +963,13 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
       const docResult = await extractDocumentContent(req.file);
       const { text: textContent, pages, slides, fileType } = docResult;
 
+      const imageCount = (slides || []).reduce((n, s) => n + ((s.images || []).length), 0) + ((docResult.images || []).length);
       if (!textContent || textContent.length < 30) {
-        return res.status(400).json({ error: 'Failed to extract text from new document. File may be empty or unreadable.' });
+        return res.status(400).json({
+          error: imageCount > 0
+            ? 'The PowerPoint is image-based, but no readable training text could be found in the slide pictures. Try a PPTX with clearer photos, or add slide titles/notes.'
+            : 'Failed to extract text from new document. File may be empty or unreadable.'
+        });
       }
 
       const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;

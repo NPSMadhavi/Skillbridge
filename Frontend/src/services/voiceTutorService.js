@@ -141,11 +141,9 @@ const WAKE_WORD_PATTERNS = [
   // ENGLISH
   // ----------------------------------------------------------
 
-  /\b(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|hallo)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
+  /\b(?:hey|hi|hello|ok|okay|ask|yo)?\s*(?:aria|arya|aarya|ariya|auria|area)\b/i,
 
-  /\b(?:here\s+ya|hear\s+ya|hey\s+ya|heya|hiya|hi\s+ya|hariya|harya|haria)\b/i,
-
-  /\b(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
+  /\b(?:aria|arya|aarya|ariya|area)\b/i,
 
 
   // ----------------------------------------------------------
@@ -154,41 +152,39 @@ const WAKE_WORD_PATTERNS = [
 
   /(?:嘿|嗨|你好|喂|请问|问一下|小)?\s*(?:阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu,
 
-  /(?:嘿|嗨|你好)?\s*(?:aria|arya|ariya)/iu,
+  /(?:嘿|嗨|你好)\s*(?:aria|arya|ariya)/iu,
 
 
   // ----------------------------------------------------------
   // MALAY
   // ----------------------------------------------------------
 
-  /\b(?:hai|helo|hello|hey|haya|hei|tolong|boleh)?\s*(?:aria|arya|area|aarya|ariya|auria|oria|arria)\b/i,
-
-  /\b(?:hai|helo|hello|hey)\s+(?:aria|arya|area|ariya)\b/i,
+  /\b(?:hai|helo|hello|hey)\s+(?:aria|arya|ariya)\b/i,
 
 
   // ----------------------------------------------------------
   // TAMIL
   // ----------------------------------------------------------
 
-  /(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)?\s*(?:ஆரியா|ஆர்யா|அரியா|ஏரியா)/iu,
+  /(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)?\s*(?:ஆரியா|ஆர்யா|அரியா)/iu,
 
-  /(?:ஹே|ஹாய்|ஹலோ)?\s*(?:aria|arya|ariya)/iu,
+  /(?:ஹே|ஹாய்|ஹலோ)\s*(?:aria|arya|ariya)/iu,
 
 
   // ----------------------------------------------------------
   // BANGLA
   // ----------------------------------------------------------
 
-  /(?:হে|হেই|হাই|হ্যালো|নমস্কার|ওহে)?\s*(?:আরিয়া|আরিয়া|আর্য|এরিয়া|এরিয়া)/iu,
+  /(?:হে|হেই|হাই|হ্যালো|নমস্কার|ওহে)?\s*(?:আরিয়া|আরিয়া|আর্য)/iu,
 
-  /(?:হে|হাই|হ্যালো)?\s*(?:aria|arya|ariya)/iu,
+  /(?:হে|হাই|হ্যালো)\s*(?:aria|arya|ariya)/iu,
 
 
   // ----------------------------------------------------------
   // GENERIC NATIVE SCRIPT
   // ----------------------------------------------------------
 
-  /(?:एरिया|आरिया|आर्या|ஆரியா|ஆர்யா|அரியா|ஏரியா|আরিয়া|আরিয়া|আর্য|এরিয়া|এরিয়া|阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu
+  /(?:आरिया|आर्या|ஆரியா|ஆர்யா|அரியா|আরিয়া|আরিয়া|আর্য|阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu
 ];
 
 
@@ -198,7 +194,7 @@ const WAKE_WORD_PATTERNS = [
 
 export const KNOWN_SELF_ECHO_PATTERNS = [
 
-  // English
+  // English greetings & acknowledgments
   /\b(?:yes|yeah|ya)?\s*(?:tell\s+me|im\s+listening|i\s+am\s+listening|listening|please\s+tell\s+me)\b/i,
 
   /\b(?:yes\s+tell\s+me|tell\s+me\s+i'm\s+listening|tell\s+me\s+im\s+listening|yes\s+i'm\s+listening|yes\s+im\s+listening)\b/i,
@@ -207,17 +203,26 @@ export const KNOWN_SELF_ECHO_PATTERNS = [
 
   /\b(?:hello\s+i\s+am\s+aria|i\s+am\s+aria|your\s+personal\s+ai\s+tutor)\b/i,
 
+  // ARIA fallback & prompt echoes (CRITICAL - prevents self-talking loop!)
+  /\b(?:i\s+didn'?t\s+catch\s+(?:your\s+)?question|didn'?t\s+catch\s+(?:your\s+)?question|can\s+you\s+ask\s+again|could\s+you\s+(?:please\s+)?ask\s+again|please\s+ask\s+again|ask\s+(?:your\s+question\s+)?again)\b/i,
+
+  /\b(?:i\s+did\s+not\s+catch|did\s+not\s+catch\s+a\s+question|please\s+ask\s+me\s+something|ask\s+me\s+something\s+about\s+this\s+lesson)\b/i,
+
+  /\b(?:i'?m\s+ready\s+to\s+help\s+with\s+your\s+course\s+questions|how\s+can\s+i\s+help\s+you|what\s+would\s+you\s+like\s+to\s+know)\b/i,
+
+  /\b(?:i'?ll\s+check\s+check\s+check|check\s+check\s+check|hello\s+dear)\b/i,
+
   // Chinese
-  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么|正在继续课程|继续课程)/iu,
+  /(?:我在听|请问有什么可以帮您|我在听请问|请问有什么|正在继续课程|继续课程|我没有听清您的提问|请再问一次|请重新提问)/iu,
 
   // Malay
-  /\b(?:ya\s+saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu|menyambung\s+semula\s+kursus|menyambung\s+ke\s+kursus)\b/i,
+  /\b(?:ya\s+saya\s+mendengar|sila\s+beritahu\s+saya|saya\s+mendengar|sila\s+beritahu|menyambung\s+semula\s+kursus|menyambung\s+ke\s+kursus|saya\s+tidak\s+dapat\s+menangkap\s+soalan|sila\s+tanya\s+semula)\b/i,
 
   // Tamil
-  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்|பாடத்தைத்\s*தொடர்கிறேன்|பாடத்தைத்\s*தொடர்கிறது)/iu,
+  /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்|பாடத்தைத்\s*தொடர்கிறேன்|பாடத்தைத்\s*தொடர்கிறது|உங்கள்\s*கேள்வி\s*புரியவில்லை|மீண்டும்\s*கேளுங்கள்)/iu,
 
   // Bangla
-  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি|কোর্সে\s*ফিরে\s*যাচ্ছি|ক্লাস\s*চালু\s*করছি)/iu
+  /(?:হ্যাঁ\s*বলুন|আমি\s*শুনছি|বলুন\s*আমি\s*শুনছি|আমি\s*শুনছি|কোর্সে\s*ফিরে\s*যাচ্ছি|ক্লাস\s*চালু\s*করছি|প্রশ্নটি\s*বুঝতে\s*পারিনি|আবার\s*জিজ্ঞাসা\s*করুন)/iu
 ];
 
 
@@ -226,16 +231,10 @@ const ARIA_VARIANTS_SET = new Set([
   // English
   'aria',
   'arya',
-  'area',
   'aarya',
   'ariya',
   'auria',
-  'oria',
-  'arria',
-  'heya',
-  'hiya',
-  'harya',
-  'haria',
+  'area',
 
   // Chinese
   '阿莉娅',
@@ -248,14 +247,11 @@ const ARIA_VARIANTS_SET = new Set([
   'ஆரியா',
   'ஆர்யா',
   'அரியா',
-  'ஏரியா',
 
   // Bangla
   'আরিয়া',
   'আরিয়া',
-  'আর্য',
-  'এরিয়া',
-  'এরিয়া'
+  'আর্য'
 ]);
 
 
@@ -384,27 +380,74 @@ export const extractQuestionFromWakeWord = (
    NOISE / HALLUCINATION DETECTION
 ============================================================ */
 
-export const isNoiseOrHallucination = (
-  text
-) => {
-
+export const isNoiseOrHallucination = (text) => {
   if (!text) {
     return true;
   }
 
-  const t =
-    normalizeTranscript(text);
+  const t = normalizeTranscript(text);
 
-  if (t.length < 2) {
+  if (!t || t.length < 3) {
     return true;
   }
 
+  // 1. Repeated character babble (e.g. "aaaaa", ".....", "hehehehe")
+  if (/(.)\1{4,}/.test(t)) {
+    return true;
+  }
 
+  // 2. Tokenize into words
+  const words = t.split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    return true;
+  }
+
+  // 3. Consecutive word repetition (e.g. "check check check", "hello hello hello")
+  let maxConsecutive = 1;
+  let currentConsecutive = 1;
+  for (let i = 1; i < words.length; i++) {
+    if (words[i] === words[i - 1]) {
+      currentConsecutive++;
+      if (currentConsecutive > maxConsecutive) {
+        maxConsecutive = currentConsecutive;
+      }
+    } else {
+      currentConsecutive = 1;
+    }
+  }
+  if (maxConsecutive >= 3) {
+    return true;
+  }
+
+  // 4. Low vocabulary variety / Whisper repetition loops (e.g. "hello dear hello dear hello hello hello")
+  const uniqueWords = new Set(words);
+  if (words.length >= 3 && uniqueWords.size <= 1) {
+    return true;
+  }
+  if (words.length >= 4 && uniqueWords.size <= 2) {
+    return true;
+  }
+  if (words.length >= 6 && uniqueWords.size <= 3) {
+    return true;
+  }
+
+  // 5. 2-word phrase repetition loops (e.g. "hello dear hello dear")
+  if (words.length >= 4 && words.length % 2 === 0) {
+    const half = words.length / 2;
+    const firstHalf = words.slice(0, half).join(' ');
+    const secondHalf = words.slice(half).join(' ');
+    if (firstHalf === secondHalf) {
+      return true;
+    }
+  }
+
+  // 6. Common noise, hallucination, and echo prompts
   const noisePhrases = [
-
+    'blank audio',
     'blank_audio',
     'silence',
     'music',
+    'applause',
 
     'i am sorry',
     'im sorry',
@@ -445,17 +488,31 @@ export const isNoiseOrHallucination = (
     'tell me',
     'listening',
     'im listening',
-    'i am listening'
-  ];
+    'i am listening',
 
+    // Echoes of ARIA prompts & test phrases
+    'check',
+    'check check',
+    'check check check',
+    'testing',
+    'testing testing',
+    'testing 1 2 3',
+    'one two three',
+    'hello dear',
+    'hello dear hello dear',
+    'hello hello',
+    'i didnt catch your question',
+    'didnt catch your question',
+    'can you ask again',
+    'could you ask again',
+    'ask again',
+    'please ask again'
+  ];
 
   return noisePhrases.some(
     (phrase) =>
       t === phrase ||
-      (
-        t.length < 20 &&
-        t.includes(phrase)
-      )
+      (t.length < 35 && (t.includes(phrase) || phrase.includes(t)))
   );
 };
 
@@ -701,15 +758,26 @@ export class VoiceTutorManager {
      */
 
 
-    if (
-      isPlaying &&
-      this.isRecording
-    ) {
+    if (isPlaying) {
+      if (this.isRecording) {
+        this.stopMediaRecording();
+        this.clearBuffers();
+      }
+      // Lecture audio must not be treated as a follow-up question.
+      if (
+        this.state === TutorState.FOLLOW_UP_LISTENING ||
+        this.state === TutorState.ACTIVE_LISTENING
+      ) {
+        this.setState(TutorState.SLEEPING);
+      }
+    }
+  }
 
-      this.stopMediaRecording();
-
-      this.clearBuffers();
-
+  noteSpokenText(spokenText = '') {
+    if (!spokenText) return;
+    this.recentAriaUtterances.push(spokenText);
+    if (this.recentAriaUtterances.length > 12) {
+      this.recentAriaUtterances.shift();
     }
   }
 
@@ -1174,11 +1242,20 @@ export class VoiceTutorManager {
            * - In ACTIVE_LISTENING / FOLLOW_UP_LISTENING: records user question.
            * - In SLEEPING: records speech candidates for Whisper wake-word / interruption detection.
            */
+          if (this.isTutorSpeaking || Date.now() < this.ttsMutedUntil) {
+            this.speechFramesCount = 0;
+            return;
+          }
+
           if (
             this.state === TutorState.ACTIVE_LISTENING ||
             this.state === TutorState.FOLLOW_UP_LISTENING ||
             this.state === TutorState.SLEEPING
           ) {
+            if (this.isLecturePlaying && this.state !== TutorState.SLEEPING) {
+              this.speechFramesCount = 0;
+              return;
+            }
             if (rms >= this.options.speechRmsThreshold) {
               this.speechFramesCount += 1;
 
@@ -1597,26 +1674,30 @@ export class VoiceTutorManager {
             }
 
 
-            const transcript =
+            let transcript =
               result[0]
                 .transcript
                 .trim();
 
+            for (let alt = 0; alt < result.length; alt++) {
+              const cand = result[alt]?.transcript?.trim();
+              if (cand && containsWakeWord(cand)) {
+                transcript = cand;
+                break;
+              }
+            }
 
             if (!transcript) {
               continue;
             }
 
-
             const isFinal =
               result.isFinal;
-
 
             this.log(
               LogCategory.TRANSCRIPTION,
               `Wake ASR ${isFinal ? 'FINAL' : 'INTERIM'} (${rec.lang}): "${transcript}"`
             );
-
 
             this.handleTranscriptEvent(
               transcript,
@@ -2559,7 +2640,7 @@ export class VoiceTutorManager {
 
       this.ttsMutedUntil =
         Date.now() +
-        1000;
+        1800;
 
 
       this.clearBuffers();
@@ -2626,7 +2707,7 @@ export class VoiceTutorManager {
 
           }
 
-        }, 1000);
+        }, 1800);
     }
   }
 

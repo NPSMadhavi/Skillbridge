@@ -74,6 +74,47 @@ class PythonService {
       throw err;
     }
   }
+
+  /**
+   * Starts a server-managed guided face enrollment session.
+   * @returns {Promise<{session_id: string, expires_at: number, steps: Array<string>, nonce: string}>}
+   */
+  async startFaceEnrollmentSession() {
+    try {
+      const response = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/face/enrollment/start`);
+      return response.data;
+    } catch (error) {
+      console.error('Error starting face enrollment session in Python AI service:', error.response?.data || error.message);
+      const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND';
+      const message = isConnError
+        ? 'AI Microservice is not running. Please start the AI service on port 8000.'
+        : (error.response?.data?.detail || error.message || 'Failed to start face enrollment session.');
+      const err = new Error(message);
+      err.statusCode = error.response?.status || 500;
+      throw err;
+    }
+  }
+
+  /**
+   * Verifies multi-pose frames, liveness anti-spoofing, and completes enrollment.
+   * @param {Object} payload { session_id, frames: { look_straight, look_up, turn_left, turn_right, look_down }, metadata }
+   * @returns {Promise<{success: boolean, session_id: string, encrypted_embedding: string, thumbnail_image: string, liveness_verified: boolean}>}
+   */
+  async completeFaceEnrollment(payload) {
+    try {
+      const response = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/face/enrollment/complete`, payload);
+      return response.data;
+    } catch (error) {
+      console.error('Error completing face enrollment in Python AI service:', error.response?.data || error.message);
+      const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND';
+      const message = isConnError
+        ? 'AI Microservice is not running. Please start the AI service on port 8000.'
+        : (error.response?.data?.detail || error.message || 'Face enrollment validation failed.');
+      const err = new Error(message);
+      err.statusCode = error.response?.status || 400;
+      throw err;
+    }
+  }
 }
 
 export default new PythonService();

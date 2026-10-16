@@ -100,10 +100,6 @@ const AdminLayout = () => {
       >
         <div className="flex items-center gap-3 border-b border-line px-5 py-5">
           <img src={logo} alt="SkillBridge" className="h-10 w-auto rounded-lg" />
-          <div>
-            <p className="font-display text-sm font-semibold text-fg">Admin</p>
-            <p className="text-[0.7rem] tracking-[0.12em] text-sky uppercase">Console</p>
-          </div>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1.5 p-4" aria-label="Admin">
