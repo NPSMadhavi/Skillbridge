@@ -447,78 +447,33 @@ export const isNoiseOrHallucination = (text) => {
   }
 
   // 6. Common noise, hallucination, and echo prompts
-  const noisePhrases = [
-    'blank audio',
-    'blank_audio',
-    'silence',
-    'music',
-    'applause',
+  // Single words that are only noise if uttered completely by themselves
+  const singleWordNoise = new Set([
+    'you', 'so', 'bye', 'goodbye', 'okay bye', 'yes', 'yeah', 'ok', 'okay',
+    'tell me', 'listening', 'im listening', 'i am listening', 'check', 'testing'
+  ]);
 
-    'i am sorry',
-    'im sorry',
-    'sorry',
+  if (singleWordNoise.has(t)) {
+    return true;
+  }
 
-    'thank you',
-    'thank you for watching',
-    'thanks for watching',
-    'thanks',
+  // Exact hallucination phrases
+  const exactHallucinations = new Set([
+    'blank audio', 'blank_audio', 'silence', 'music', 'applause',
+    'thank you', 'thank you for watching', 'thanks for watching', 'thanks',
+    'see you in the next video', 'see you in the next one', 'see you next time', 'see you later',
+    'i will see you', 'i will see you in the next', 'subtitles by', 'subscribe to',
+    'subscribe', 'like and subscribe', 'translated by',
+    'check check', 'check check check', 'testing testing', 'testing 1 2 3',
+    'one two three', 'hello dear hello dear', 'hello hello'
+  ]);
 
-    'see you in the next video',
-    'see you in the next one',
-    'see you next time',
-    'see you later',
+  if (exactHallucinations.has(t)) {
+    return true;
+  }
 
-    'i will see you',
-    'i will see you in the next',
-
-    'subtitles by',
-    'subscribe to',
-    'subscribe',
-    'like and subscribe',
-
-    'translated by',
-
-    'you',
-    'so',
-
-    'bye',
-    'goodbye',
-    'okay bye',
-
-    'yes',
-    'yeah',
-    'ok',
-    'okay',
-
-    'tell me',
-    'listening',
-    'im listening',
-    'i am listening',
-
-    // Echoes of ARIA prompts & test phrases
-    'check',
-    'check check',
-    'check check check',
-    'testing',
-    'testing testing',
-    'testing 1 2 3',
-    'one two three',
-    'hello dear',
-    'hello dear hello dear',
-    'hello hello',
-    'i didnt catch your question',
-    'didnt catch your question',
-    'can you ask again',
-    'could you ask again',
-    'ask again',
-    'please ask again'
-  ];
-
-  return noisePhrases.some(
-    (phrase) =>
-      t === phrase ||
-      (t.length < 35 && (t.includes(phrase) || phrase.includes(t)))
-  );
+  // Long exact phrases
+  return false;
 };
 
 
@@ -2178,8 +2133,34 @@ export class VoiceTutorManager {
       this.state === TutorState.FOLLOW_UP_LISTENING
     ) {
       if (!isFinal) {
+        // Buffer latest interim text with a debounce timer so user speech is processed even if isFinal is delayed
+        this._latestInterimText = text;
+        if (this._interimDebounceTimer) {
+          clearTimeout(this._interimDebounceTimer);
+        }
+        this._interimDebounceTimer = setTimeout(() => {
+          if (
+            (this.state === TutorState.ACTIVE_LISTENING || this.state === TutorState.FOLLOW_UP_LISTENING) &&
+            this._latestInterimText &&
+            this._latestInterimText.length >= 2
+          ) {
+            const pending = this._latestInterimText;
+            this._latestInterimText = '';
+            const cleanPending = extractQuestionFromWakeWord(pending) || pending;
+            if (cleanPending && cleanPending.length >= 2 && !this.isTranscriptSelfEcho(cleanPending) && !isNoiseOrHallucination(cleanPending)) {
+              this.log(LogCategory.TRANSCRIPTION, `Interim speech finalized via debounce: "${cleanPending}"`);
+              this.processUserQuestion(cleanPending);
+            }
+          }
+        }, 1200);
         return;
       }
+
+      if (this._interimDebounceTimer) {
+        clearTimeout(this._interimDebounceTimer);
+        this._interimDebounceTimer = null;
+      }
+      this._latestInterimText = '';
 
       const clean =
         extractQuestionFromWakeWord(text);
