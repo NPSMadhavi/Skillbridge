@@ -12,6 +12,7 @@ import { resolveTenant } from './middleware/tenantMiddleware.js';
 import prisma from './config/prisma.js';
 import masterPrisma from './config/masterPrisma.js';
 import aiService from './services/aiService.js';
+import { tenantService } from './services/tenantService.js';
 
 // Load environment variables
 dotenv.config();
@@ -54,6 +55,7 @@ app.use((req, res, next) => {
 async function checkDatabaseConnection() {
   try {
     await prisma.$connect();
+    await tenantService.ensureDefaultCompany();
 
     console.log('========================================');
     console.log('DATABASE CONNECTION: SUCCESS');

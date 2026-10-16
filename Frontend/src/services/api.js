@@ -24,7 +24,14 @@ const getHeaders = (role = false) => {
     }
 
     // Attach tenant header for multi-database routing
-    const tenantId = sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
+    const tenantId =
+      adminSession?.tenant ||
+      adminSession?.slug ||
+      userSession?.tenant ||
+      userSession?.slug ||
+      sessionStorage.getItem('skillbridge_tenant') ||
+      localStorage.getItem('skillbridge_tenant') ||
+      'default';
     if (tenantId) {
       headers['x-tenant-id'] = tenantId;
     }

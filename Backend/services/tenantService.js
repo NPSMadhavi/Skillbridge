@@ -97,6 +97,18 @@ export const tenantService = {
     });
 
     if (!company) {
+      if (normalizedCode === 'default') {
+        const defaultDbUrl = process.env.DATABASE_URL || 'postgresql://postgres:praveen@localhost:5432/skillbridge?schema=public';
+        const client = new PrismaClient({
+          datasources: {
+            db: {
+              url: defaultDbUrl
+            }
+          }
+        });
+        tenantClients.set('default', client);
+        return client;
+      }
       throw new Error(`Company with code '${tenantCode}' was not found.`);
     }
 

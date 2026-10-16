@@ -141,17 +141,6 @@ const AdminLayout = () => {
       >
         <div className="flex items-center gap-3 border-b border-line px-5 py-4">
           <img src={logo} alt="SkillBridge" className="h-10 w-auto rounded-lg" />
-          <div className="min-w-0">
-            <p className="font-display text-sm font-semibold text-fg truncate">
-              {companyName}
-            </p>
-            <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-[10px] tracking-wide text-sky uppercase font-bold">Slug:</span>
-              <span className="font-mono text-[11px] text-fg font-semibold bg-ink px-1.5 py-0.5 rounded border border-line truncate max-w-[125px]">
-                {slug}
-              </span>
-            </div>
-          </div>
         </div>
 
         <nav className="flex flex-1 flex-col gap-1.5 p-4 overflow-y-auto" aria-label="Admin">
@@ -169,10 +158,6 @@ const AdminLayout = () => {
         </nav>
 
         <div className="border-t border-line p-4 space-y-2.5">
-          <div className="rounded-xl bg-ink p-3 space-y-1.5 text-xs">
-
-          </div>
-
           <div className="rounded-xl bg-ink px-3 py-2">
             <p className="text-[10px] uppercase font-bold text-muted">Signed in as</p>
             <p className="truncate text-xs font-semibold text-fg">{admin.email}</p>
@@ -219,7 +204,6 @@ const AdminLayout = () => {
                   </button>
                 </span>
               </div>
-              <p className="hidden text-xs text-muted sm:block">Manage users and Face ID enrollment</p>
             </div>
           </div>
 

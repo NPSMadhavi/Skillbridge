@@ -109,7 +109,8 @@ const CoursePlayerRoute = () => {
   const [accessError, setAccessError] = useState('')
 
   useEffect(() => {
-    if (id && !course) {
+    const hasFullVisuals = Boolean(course?.fileText || course?.lessons?.[0]?.visuals?.length);
+    if (id && (!course || !hasFullVisuals)) {
       setLoading(true)
       setAccessError('')
       api.getCourseDetail(id)
@@ -166,7 +167,7 @@ const CoursePlayerRoute = () => {
       onExit={() => {
         try {
           if (document.fullscreenElement) {
-            document.exitFullscreen?.().catch(() => {});
+            document.exitFullscreen?.().catch(() => { });
           }
           window.speechSynthesis?.cancel?.();
         } catch (e) { }
@@ -301,12 +302,6 @@ const AdminLoginRoute = () => {
 const HomeRoute = ({ searchQuery }) => {
   const navigate = useNavigate()
   const handleSelectCourse = (course) => {
-    try {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen?.().catch(() => {});
-      }
-    } catch (e) { }
-
     if (course?.id) {
       try {
         const user = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')?.user;

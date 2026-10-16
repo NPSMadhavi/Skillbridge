@@ -1,3 +1,4 @@
+import jwt from 'jsonwebtoken';
 import { tenantService } from '../services/tenantService.js';
 import { tenantStorage } from '../config/prisma.js';
 
@@ -18,9 +19,36 @@ export const resolveTenant = async (req, res, next) => {
       req.body?.tenantCode ||
       req.body?.companyCode;
 
-    // 2. If user is authenticated and token contains tenantCode, use it
+    // 2. Decode from JWT token if Authorization header is present
+    const authHeader = req.headers['authorization'];
+    if ((!rawTenant || rawTenant === 'default') && authHeader) {
+      const token = authHeader.split(' ')[1];
+      if (token) {
+        try {
+          const decoded = jwt.decode(token);
+          if (decoded?.tenantCode) {
+            rawTenant = decoded.tenantCode;
+          }
+        } catch {
+          // ignore decode failure
+        }
+      }
+    }
+
     if (!rawTenant && req.user?.tenantCode) {
       rawTenant = req.user.tenantCode;
+    }
+
+    // 3. For login/auth requests where tenant is not provided or is 'default', attempt resolution via email
+    if ((!rawTenant || rawTenant === 'default') && req.body?.email) {
+      try {
+        const comp = await tenantService.findCompanyByAdminEmail(req.body.email);
+        if (comp) {
+          rawTenant = comp.code;
+        }
+      } catch (err) {
+        // Fallback to default if lookup fails
+      }
     }
 
     // Default to 'default' if not explicitly provided

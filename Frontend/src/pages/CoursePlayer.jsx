@@ -473,15 +473,25 @@ const CoursePlayer = ({
 
   const requestPlayerFullscreen = () => {
     if (!playerRef.current) return
-    if (document.fullscreenElement) {
+    if (document.fullscreenElement === playerRef.current) {
       setIsFullscreen(true)
       return
     }
-    const req = playerRef.current.requestFullscreen || playerRef.current.webkitRequestFullscreen
-    if (!req) return
-    Promise.resolve(req.call(playerRef.current))
-      .then(() => setIsFullscreen(true))
-      .catch(() => {})
+    const doRequest = () => {
+      const req = playerRef.current?.requestFullscreen || playerRef.current?.webkitRequestFullscreen
+      if (!req) return
+      Promise.resolve(req.call(playerRef.current))
+        .then(() => setIsFullscreen(true))
+        .catch(() => { })
+    }
+
+    if (document.fullscreenElement && document.fullscreenElement !== playerRef.current) {
+      Promise.resolve(document.exitFullscreen?.())
+        .then(() => setTimeout(doRequest, 50))
+        .catch(() => doRequest())
+    } else {
+      doRequest()
+    }
   }
 
   const toggleFullscreen = () => {
@@ -489,7 +499,7 @@ const CoursePlayer = ({
     if (!document.fullscreenElement) {
       requestPlayerFullscreen()
     } else {
-      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {})
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => { })
     }
   }
 
@@ -620,25 +630,102 @@ const CoursePlayer = ({
     if (!voices || voices.length === 0) return null
     const l = (langCode || 'en').toLowerCase()
 
-    if (l === 'zh') {
-      const v = voices.find(v => v.lang.toLowerCase().startsWith('zh') || v.lang.toLowerCase().includes('chinese') || v.lang.toLowerCase().includes('cmn'))
-      if (v) return v
-    } else if (l === 'ms') {
-      const v = voices.find(v => v.lang.toLowerCase().startsWith('ms') || v.lang.toLowerCase().startsWith('id'))
-      if (v) return v
-    } else if (l === 'ta') {
-      const v = voices.find(v => v.lang.toLowerCase().startsWith('ta') || v.lang.toLowerCase().includes('tamil'))
-      if (v) return v
-    } else if (l === 'bn') {
-      const v = voices.find(v => v.lang.toLowerCase().startsWith('bn') || v.lang.toLowerCase().includes('bengali') || v.lang.toLowerCase().includes('bangla'))
-      if (v) return v
-    } else if (l === 'en') {
-      const v = voices.find(v => v.lang.toLowerCase().startsWith('en'))
-      if (v) return v
+    // Explicitly exclude robotic David and user-disliked Aria voices
+    const isDisallowed = (name) => {
+      const n = (name || '').toLowerCase()
+      return n.includes('aria') || n.includes('david')
     }
 
-    const match = voices.find(v => v.lang.toLowerCase().startsWith(l))
-    return match || voices.find(v => v.lang.startsWith('en')) || voices[0]
+    if (l === 'en') {
+      const enVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en') && !isDisallowed(v.name))
+
+      // 1. Google US English / Google UK English Female (The authentic Veda gTTS voice)
+      const googleVoice = enVoices.find(v => {
+        const n = v.name.toLowerCase()
+        return n.includes('google us english') || n.includes('google uk english female') || n.includes('google')
+      })
+      if (googleVoice) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${googleVoice.name} (${googleVoice.lang})`)
+        return googleVoice
+      }
+
+      // 2. Microsoft Jenny (Natural) - The warm, gentle, authentic educator voice
+      const jennyVoice = enVoices.find(v => {
+        const n = v.name.toLowerCase()
+        return n.includes('jenny') && n.includes('natural')
+      })
+      if (jennyVoice) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${jennyVoice.name} (${jennyVoice.lang})`)
+        return jennyVoice
+      }
+
+      // 3. Microsoft Ava / Emma / Sonia / Neerja (Natural)
+      const naturalVoice = enVoices.find(v => {
+        const n = v.name.toLowerCase()
+        return (n.includes('ava') || n.includes('emma') || n.includes('sonia') || n.includes('neerja')) && n.includes('natural')
+      })
+      if (naturalVoice) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${naturalVoice.name} (${naturalVoice.lang})`)
+        return naturalVoice
+      }
+
+      // 4. Any other Microsoft Natural female/neutral voice (excluding male voices)
+      const anyNatural = enVoices.find(v => {
+        const n = v.name.toLowerCase()
+        return n.includes('natural') && !n.includes('guy') && !n.includes('christopher') && !n.includes('brian') && !n.includes('male')
+      })
+      if (anyNatural) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${anyNatural.name} (${anyNatural.lang})`)
+        return anyNatural
+      }
+
+      // 5. Microsoft Zira Desktop (Clear Windows female voice)
+      const ziraVoice = enVoices.find(v => v.name.toLowerCase().includes('zira'))
+      if (ziraVoice) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${ziraVoice.name} (${ziraVoice.lang})`)
+        return ziraVoice
+      }
+
+      // 6. Apple / WebKit natural voices (Samantha, Karen, Victoria)
+      const appleVoice = enVoices.find(v => {
+        const n = v.name.toLowerCase()
+        return n.includes('samantha') || n.includes('karen') || n.includes('victoria')
+      })
+      if (appleVoice) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${appleVoice.name} (${appleVoice.lang})`)
+        return appleVoice
+      }
+
+      // 7. Any other non-disallowed English voice (preferring female or neutral)
+      const fallbackEn = enVoices.find(v => !v.name.toLowerCase().includes('male')) || enVoices[0]
+      if (fallbackEn) {
+        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${fallbackEn.name} (${fallbackEn.lang})`)
+        return fallbackEn
+      }
+    } else if (l === 'zh') {
+      const zhVoices = voices.filter(v => v.lang.toLowerCase().startsWith('zh') || v.lang.toLowerCase().includes('chinese') || v.lang.toLowerCase().includes('cmn'))
+      const bestZh = zhVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('xiaoxiao'))
+      if (bestZh) return bestZh
+      if (zhVoices.length > 0) return zhVoices[0]
+    } else if (l === 'ms') {
+      const msVoices = voices.filter(v => v.lang.toLowerCase().startsWith('ms') || v.lang.toLowerCase().startsWith('id') || v.lang.toLowerCase().includes('malay') || v.lang.toLowerCase().includes('indonesian'))
+      const bestMs = msVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('yasmin'))
+      if (bestMs) return bestMs
+      if (msVoices.length > 0) return msVoices[0]
+    } else if (l === 'ta') {
+      const taVoices = voices.filter(v => v.lang.toLowerCase().startsWith('ta') || v.lang.toLowerCase().includes('tamil'))
+      const bestTa = taVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('pallavi'))
+      if (bestTa) return bestTa
+      if (taVoices.length > 0) return taVoices[0]
+    } else if (l === 'bn') {
+      const bnVoices = voices.filter(v => v.lang.toLowerCase().startsWith('bn') || v.lang.toLowerCase().includes('bengali') || v.lang.toLowerCase().includes('bangla'))
+      const bestBn = bnVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('tanishaa'))
+      if (bestBn) return bestBn
+      if (bnVoices.length > 0) return bnVoices[0]
+    }
+
+    const match = voices.find(v => v.lang.toLowerCase().startsWith(l) && !isDisallowed(v.name))
+    return match || voices.find(v => v.lang.startsWith('en') && !isDisallowed(v.name)) || voices[0]
   }
 
   // Auto-resume lecture from the exact saved concept/sentence position
@@ -716,7 +803,7 @@ const CoursePlayer = ({
       const matchedVoice = selectVoiceForLanguage(voices, selectedLanguageCode)
       if (matchedVoice) utterance.voice = matchedVoice
       utterance.rate = 0.95
-      utterance.pitch = 1.05
+      utterance.pitch = 1.0
 
       // Global reference to prevent browser GC bug
       window._skillbridgeCurrentUtterance = utterance
@@ -1616,7 +1703,7 @@ const CoursePlayer = ({
               utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
             }
             utterance.rate = 0.95;
-            utterance.pitch = 1.05;
+            utterance.pitch = 1.0;
           }
           utteranceRef.current = utterance; // Prevent GC cancellation bug
 
@@ -1648,7 +1735,7 @@ const CoursePlayer = ({
                   nextUtterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
                 }
                 nextUtterance.rate = 0.95;
-                nextUtterance.pitch = 1.05;
+                nextUtterance.pitch = 1.0;
                 ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx + 1}`, nextUtterance);
                 const preDuration = Math.round(performance.now() - preStartTime);
                 console.log(`[PERF:AUDIO_LOAD_END] Concept ${idx + 2} pre-warmed in ${preDuration}ms`);
@@ -1944,11 +2031,10 @@ const CoursePlayer = ({
       </div>
 
       {/* Main 3-Column Grid Layout - Dynamically Proportioned for Scaled Screens */}
-      <main className={`w-full px-3 sm:px-4 pb-2.5 sm:pb-3 grid grid-cols-1 gap-2.5 sm:gap-3 flex-1 min-h-0 overflow-visible lg:overflow-hidden ${
-        chatCollapsed
+      <main className={`w-full px-3 sm:px-4 pb-2.5 sm:pb-3 grid grid-cols-1 gap-2.5 sm:gap-3 flex-1 min-h-0 overflow-visible lg:overflow-hidden ${chatCollapsed
           ? 'lg:grid-cols-[210px_1fr_52px] xl:grid-cols-[240px_1fr_52px]'
           : 'lg:grid-cols-[210px_1fr_240px] xl:grid-cols-[240px_1fr_260px]'
-      }`}>
+        }`}>
 
         {/* LEFT COLUMN: Course Card & Modules List */}
         <section className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 shadow-xs flex flex-col min-h-[220px] lg:h-full lg:min-h-0 overflow-hidden">
@@ -2365,11 +2451,17 @@ const CoursePlayer = ({
                   type="button"
                   onClick={toggleFullscreen}
                   className="text-slate-200 hover:text-white transition cursor-pointer border-0 bg-transparent p-0 flex items-center justify-center"
-                  title="Fullscreen"
+                  title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
                 >
-                  <svg className="h-4 w-4 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2.5">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-                  </svg>
+                  {isFullscreen ? (
+                    <svg className="h-4 w-4 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 4v5H4m11-5v5h5M9 20v-5H4m11 5v-5h5" />
+                    </svg>
+                  ) : (
+                    <svg className="h-4 w-4 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                    </svg>
+                  )}
                 </button>
               </div>
             </div>
@@ -2392,100 +2484,100 @@ const CoursePlayer = ({
             </button>
           </section>
         ) : (
-        <section className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 pb-2 sm:pb-2.5 shadow-xs flex flex-col justify-between min-h-[260px] lg:h-full lg:min-h-0 overflow-hidden">
-          {/* Header */}
-          <div className="shrink-0 flex items-center justify-between border-b border-slate-100 pb-2 sm:pb-2.5">
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              <svg className="h-4.5 w-4.5 sm:h-5 sm:w-5 stroke-[#ff8c21] fill-none shrink-0" viewBox="0 0 24 24" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-              <h3 className="text-xs sm:text-sm font-bold text-[#0f1b2d]">Ask ARIA</h3>
-            </div>
+          <section className="bg-white rounded-2xl border border-slate-200/80 p-3 sm:p-3.5 pb-2 sm:pb-2.5 shadow-xs flex flex-col justify-between min-h-[260px] lg:h-full lg:min-h-0 overflow-hidden">
+            {/* Header */}
+            <div className="shrink-0 flex items-center justify-between border-b border-slate-100 pb-2 sm:pb-2.5">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <svg className="h-4.5 w-4.5 sm:h-5 sm:w-5 stroke-[#ff8c21] fill-none shrink-0" viewBox="0 0 24 24" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                </svg>
+                <h3 className="text-xs sm:text-sm font-bold text-[#0f1b2d]">Ask ARIA</h3>
+              </div>
 
-            <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setHandsFreeVoice(v => !v)}
-              className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[9px] sm:text-[10px] font-extrabold border transition cursor-pointer ${handsFreeVoice
-                ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 shadow-2xs'
-                : 'bg-slate-100 text-slate-400 border-slate-200'
-                }`}
-              title="Toggle Always-Listening Voice Assistant"
-            >
-              <span className={`h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full ${handsFreeVoice ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`} />
-              {handsFreeVoice ? 'Always-On' : 'Mic Off'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setChatCollapsed(true)}
-              className="hidden lg:inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition cursor-pointer bg-transparent"
-              title="Minimize Ask ARIA"
-            >
-              <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M4 10.75A.75.75 0 0 1 4.75 10h10.5a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1-.75-.75Z" />
-              </svg>
-            </button>
-            </div>
-          </div>
-
-          {/* Chat Messages Feed */}
-          <div className="flex-1 min-h-0 overflow-y-auto space-y-2 sm:space-y-3 my-1.5 sm:my-2 pr-0.5 no-scrollbar">
-            {chatMessages.map((msg, idx) => (
-              <div
-                key={idx}
-                className={`flex items-start gap-2.5 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                {msg.sender === 'aria' && (
-                  <div className="h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs select-none">
-                    🤖
-                  </div>
-                )}
-
-                <div
-                  className={`rounded-[18px] px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed max-w-[85%] font-normal shadow-2xs border ${msg.sender === 'user'
-                    ? 'bg-[#f0f4f9] text-[#1e293b] border-slate-200/60'
-                    : 'bg-[#f0f4f9] text-[#1e293b] border-slate-200/60'
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setHandsFreeVoice(v => !v)}
+                  className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-full text-[9px] sm:text-[10px] font-extrabold border transition cursor-pointer ${handsFreeVoice
+                    ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30 shadow-2xs'
+                    : 'bg-slate-100 text-slate-400 border-slate-200'
                     }`}
+                  title="Toggle Always-Listening Voice Assistant"
                 >
-                  {msg.text}
-                </div>
+                  <span className={`h-1.5 w-1.5 sm:h-2 sm:w-2 rounded-full ${handsFreeVoice ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`} />
+                  {handsFreeVoice ? 'Always-On' : 'Mic Off'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setChatCollapsed(true)}
+                  className="hidden lg:inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition cursor-pointer bg-transparent"
+                  title="Minimize Ask ARIA"
+                >
+                  <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M4 10.75A.75.75 0 0 1 4.75 10h10.5a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1-.75-.75Z" />
+                  </svg>
+                </button>
+              </div>
+            </div>
 
-                {msg.sender === 'user' && (
-                  <div className="h-8 w-8 rounded-full bg-white border border-slate-300 text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs" title="You">
-                    👤
+            {/* Chat Messages Feed */}
+            <div className="flex-1 min-h-0 overflow-y-auto space-y-2 sm:space-y-3 my-1.5 sm:my-2 pr-0.5 no-scrollbar">
+              {chatMessages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={`flex items-start gap-2.5 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  {msg.sender === 'aria' && (
+                    <div className="h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs select-none">
+                      🤖
+                    </div>
+                  )}
+
+                  <div
+                    className={`rounded-[18px] px-3.5 py-2.5 text-xs sm:text-[13px] leading-relaxed max-w-[85%] font-normal shadow-2xs border ${msg.sender === 'user'
+                      ? 'bg-[#f0f4f9] text-[#1e293b] border-slate-200/60'
+                      : 'bg-[#f0f4f9] text-[#1e293b] border-slate-200/60'
+                      }`}
+                  >
+                    {msg.text}
                   </div>
-                )}
-              </div>
-            ))}
-            {chatLoading && (
-              <div className="flex gap-2 items-center text-slate-400 text-xs pl-1">
-                <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                ARIA is typing...
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
 
-          {/* Bottom Chat Input Form - Clean Full Width without manual mic */}
-          <form onSubmit={handleSendChat} className="shrink-0 flex items-center gap-1.5 sm:gap-2 border-t border-slate-100 pt-2 pb-0.5">
-            <input
-              type="text"
-              placeholder="Ask ARIA anything..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              className="flex-1 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5 sm:py-2 text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
-            />
+                  {msg.sender === 'user' && (
+                    <div className="h-8 w-8 rounded-full bg-white border border-slate-300 text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs" title="You">
+                      👤
+                    </div>
+                  )}
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="flex gap-2 items-center text-slate-400 text-xs pl-1">
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
+                  ARIA is typing...
+                </div>
+              )}
+              <div ref={chatEndRef} />
+            </div>
 
-            <button
-              type="submit"
-              disabled={!chatInput.trim() || chatLoading}
-              className="h-8 w-8 sm:h-8.5 sm:w-8.5 shrink-0 grid place-items-center rounded-xl bg-[#ff8c21] hover:bg-[#e87a15] text-white border-0 cursor-pointer disabled:opacity-40 shadow-xs transition font-bold text-xs"
-              title="Send Message"
-            >
-              ➔
-            </button>
-          </form>
-        </section>
+            {/* Bottom Chat Input Form - Clean Full Width without manual mic */}
+            <form onSubmit={handleSendChat} className="shrink-0 flex items-center gap-1.5 sm:gap-2 border-t border-slate-100 pt-2 pb-0.5">
+              <input
+                type="text"
+                placeholder="Ask ARIA anything..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                className="flex-1 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5 sm:py-2 text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
+              />
+
+              <button
+                type="submit"
+                disabled={!chatInput.trim() || chatLoading}
+                className="h-8 w-8 sm:h-8.5 sm:w-8.5 shrink-0 grid place-items-center rounded-xl bg-[#ff8c21] hover:bg-[#e87a15] text-white border-0 cursor-pointer disabled:opacity-40 shadow-xs transition font-bold text-xs"
+                title="Send Message"
+              >
+                ➔
+              </button>
+            </form>
+          </section>
         )}
       </main>
 
