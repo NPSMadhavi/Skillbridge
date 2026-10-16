@@ -257,9 +257,31 @@ const AdminCourses = () => {
 
       {/* Catalog Grid */}
       {loading ? (
-        <div className="py-20 text-center text-muted">
-          <div className="mx-auto h-8 w-8 animate-spin rounded-full border-2 border-orange/20 border-t-orange mb-3" />
-          Loading course catalog...
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <div
+              key={i}
+              className="flex flex-col overflow-hidden rounded-2xl border border-line bg-panel shadow-sm animate-pulse"
+            >
+              <div className="h-32 bg-ink/70 relative p-5 flex flex-col justify-end">
+                <div className="absolute top-4 right-4 h-5 w-20 rounded-full bg-ink/90" />
+                <div className="h-4 w-3/4 rounded bg-ink" />
+              </div>
+              <div className="p-5 flex flex-col flex-1 space-y-2.5">
+                <div className="h-3 w-full rounded bg-ink/70" />
+                <div className="h-3 w-5/6 rounded bg-ink/60" />
+                <div className="h-3 w-2/3 rounded bg-ink/50" />
+                <div className="mt-4 border-t border-line/60 pt-4 flex items-center justify-between">
+                  <div className="h-3 w-24 rounded bg-ink/60" />
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-6 w-20 rounded-lg bg-ink/70" />
+                    <div className="h-6 w-12 rounded-lg bg-ink/60" />
+                    <div className="h-6 w-12 rounded-lg bg-ink/60" />
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       ) : coursesList.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line bg-panel px-6 py-12 text-center shadow-sm">

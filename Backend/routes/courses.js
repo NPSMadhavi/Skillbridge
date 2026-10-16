@@ -87,6 +87,16 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
     }
 
+    try {
+      const summary = generateModulesSummary(generatedCourse);
+      await targetPrisma.$executeRaw`
+        UPDATE "Course"
+        SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+        WHERE id = ${newCourse.id};
+      `;
+    } catch (_) {}
+    invalidateCoursesCatalogCache();
+
     res.status(201).json({
       message: 'Course published successfully.',
       course: {
@@ -162,6 +172,16 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
       }
     });
 
+    try {
+      const summary = generateModulesSummary(curriculumObj);
+      await targetPrisma.$executeRaw`
+        UPDATE "Course"
+        SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+        WHERE id = ${newCourse.id};
+      `;
+    } catch (_) {}
+    invalidateCoursesCatalogCache();
+
     res.status(201).json({
       message: 'Course created successfully.',
       course: newCourse
@@ -224,6 +244,44 @@ const checkCourseAccess = async (req, courseId) => {
   return Boolean(assignment);
 };
 
+// Helper to generate fast lightweight modules summary
+export function generateModulesSummary(curriculum) {
+  if (!curriculum) return {};
+  let curr = curriculum;
+  if (typeof curr === 'string') {
+    try { curr = JSON.parse(curr); } catch (_) { curr = {}; }
+  }
+  const sanitizedLessons = (curr?.lessons || []).map((l) => ({
+    id: l.id,
+    title: l.title,
+    duration: l.duration,
+    moduleId: l.moduleId,
+    chapterId: l.chapterId,
+    moduleTitle: l.moduleTitle,
+    chapterTitle: l.chapterTitle,
+  }));
+
+  return {
+    title: curr?.title || '',
+    description: curr?.description || '',
+    curriculum: curr?.curriculum || [],
+    lessons: sanitizedLessons,
+    quiz: curr?.quiz || [],
+    modulesCount: (curr?.curriculum || []).length || sanitizedLessons.length,
+    lessonsCount: sanitizedLessons.length,
+  };
+}
+
+// In-memory catalog cache for sub-millisecond responses
+let catalogCache = null;
+let catalogCacheTime = 0;
+const CATALOG_CACHE_TTL = 30 * 1000; // 30 seconds TTL
+
+export function invalidateCoursesCatalogCache() {
+  catalogCache = null;
+  catalogCacheTime = 0;
+}
+
 // Helper to format lightweight course object for catalog/listing without massive base64 payloads
 function formatCourseForCatalog(course) {
   let curriculumSummary = course.curriculum;
@@ -268,32 +326,49 @@ function formatCourseForCatalog(course) {
     curriculum: curriculumSummary,
     createdAt: course.createdAt,
     updatedAt: course.updatedAt,
-    assignedUsersCount: course._count?.assignments || 0,
+    assignedUsersCount: course.assignedUsersCount ?? course._count?.assignments ?? 0,
   };
 }
 
 // 2. Get published RAG courses (Admin gets all with counts; Students get ONLY assigned courses)
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    // Ensure all shared courses from default catalog are synchronized to this tenant
+    const targetPrisma = req.prisma || prisma;
+
+    // Ensure shared courses from default catalog are synchronized in background without blocking
     if (req.tenantCode && req.tenantCode !== 'default') {
-      try {
-        await tenantService.syncDefaultCoursesToTenant(req.tenantCode);
-      } catch (syncErr) {
+      tenantService.syncDefaultCoursesToTenant(req.tenantCode).catch((syncErr) => {
         console.warn(`[Courses] Auto-sync to tenant notice:`, syncErr.message);
-      }
+      });
     }
 
     if (req.user?.role === 'ADMIN') {
-      const courses = await prisma.course.findMany({
-        orderBy: { createdAt: 'desc' },
-        include: {
-          _count: {
-            select: { assignments: true },
-          },
-        },
-      });
-      return res.json(courses.map(formatCourseForCatalog));
+      const now = Date.now();
+      if (catalogCache && (now - catalogCacheTime) < CATALOG_CACHE_TTL) {
+        return res.json(catalogCache);
+      }
+
+      const courses = await targetPrisma.$queryRaw`
+        SELECT
+          c.id,
+          c.title,
+          c.description,
+          c."fileName",
+          c."createdAt",
+          c."updatedAt",
+          (
+            SELECT COUNT(*)::int
+            FROM "UserCourseAssignment" uca
+            WHERE uca."courseId" = c.id
+          ) AS "assignedUsersCount",
+          COALESCE(c."modulesSummary", c.curriculum) AS curriculum
+        FROM "Course" c
+        ORDER BY c."createdAt" DESC;
+      `;
+      const formatted = courses.map(formatCourseForCatalog);
+      catalogCache = formatted;
+      catalogCacheTime = now;
+      return res.json(formatted);
     }
 
     // For STUDENT role: return ONLY assigned courses
@@ -302,7 +377,7 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.json([]);
     }
 
-    const assignments = await prisma.userCourseAssignment.findMany({
+    const assignments = await targetPrisma.userCourseAssignment.findMany({
       where: {
         userId: { in: userIds }
       },
@@ -310,15 +385,28 @@ router.get('/', authenticateToken, async (req, res) => {
     });
     const assignedIds = assignments.map((a) => a.courseId);
 
-    const courses = await prisma.course.findMany({
-      where: { id: { in: assignedIds } },
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: {
-          select: { assignments: true },
-        },
-      },
-    });
+    if (assignedIds.length === 0) {
+      return res.json([]);
+    }
+
+    const courses = await targetPrisma.$queryRaw`
+      SELECT
+        c.id,
+        c.title,
+        c.description,
+        c."fileName",
+        c."createdAt",
+        c."updatedAt",
+        (
+          SELECT COUNT(*)::int
+          FROM "UserCourseAssignment" uca
+          WHERE uca."courseId" = c.id
+        ) AS "assignedUsersCount",
+        COALESCE(c."modulesSummary", c.curriculum) AS curriculum
+      FROM "Course" c
+      WHERE c.id = ANY(${assignedIds}::text[])
+      ORDER BY c."createdAt" DESC;
+    `;
     return res.json(courses.map(formatCourseForCatalog));
   } catch (error) {
     console.error('Failed to retrieve RAG courses:', error);
@@ -1122,6 +1210,16 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
       data: updateData
     });
 
+    try {
+      const summary = generateModulesSummary(updateData.curriculum || existingCourse.curriculum);
+      await prisma.$executeRaw`
+        UPDATE "Course"
+        SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+        WHERE id = ${courseId};
+      `;
+    } catch (_) {}
+    invalidateCoursesCatalogCache();
+
     res.json({
       message: 'Course updated successfully.',
       course: updatedCourse
@@ -1141,6 +1239,7 @@ router.delete('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res
     await prisma.course.delete({
       where: { id: courseId }
     });
+    invalidateCoursesCatalogCache();
 
     res.json({ message: 'Course module deleted successfully.' });
   } catch (error) {

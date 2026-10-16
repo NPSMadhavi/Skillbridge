@@ -40,7 +40,7 @@ export default function SuperAdminSidebar({
         {/* Navigation Items */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           <div className="px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Tenant Management
+            Management
           </div>
 
           <button
@@ -56,29 +56,13 @@ export default function SuperAdminSidebar({
             <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
             </svg>
-            <span>Companies & DBs</span>
+            <span>Companies</span>
             <span
               className={`ml-auto px-1.5 py-0.5 rounded text-[10px] font-bold ${activeTab === 'companies' ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
                 }`}
             >
               {companiesCount}
             </span>
-          </button>
-
-          <button
-            onClick={() => {
-              setActiveTab('databases');
-              setSidebarOpen(false);
-            }}
-            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-[13px] font-semibold transition cursor-pointer ${activeTab === 'databases'
-                ? 'bg-[#0e2246] text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
-          >
-            <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 7v10c0 2 1.5 3 3.5 3h9c2 0 3.5-1 3.5-3V7c0-2-1.5-3-3.5-3h-9C5.5 4 4 5 4 7zm0 5h16" />
-            </svg>
-            <span>Database Health</span>
           </button>
 
           <button
@@ -104,20 +88,6 @@ export default function SuperAdminSidebar({
               </span>
             )}
           </button>
-
-          <div className="pt-4 px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            System & Security
-          </div>
-
-          <div className="px-3.5 py-3 rounded-xl bg-[#edf4fe] border border-blue-100 text-slate-600 text-xs space-y-1.5">
-            <div className="flex items-center space-x-1.5 font-bold text-[#0e2246]">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Multi-DB Active</span>
-            </div>
-            <p className="text-[11px] leading-relaxed text-slate-500">
-              Each company operates in a dedicated PostgreSQL database with 100% physical data isolation.
-            </p>
-          </div>
         </nav>
 
         {/* Sidebar Footer with Super Admin Profile */}

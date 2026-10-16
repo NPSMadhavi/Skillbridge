@@ -390,18 +390,6 @@ const CourseAssignments = () => {
         )}
       </div>
 
-      {/* Toast Notification */}
-      {toast && (
-        <div
-          className={`rounded-2xl p-4 text-center text-sm font-semibold transition ${
-            toast.type === 'ok'
-              ? 'border border-ok/30 bg-ok/10 text-ok'
-              : 'border border-danger/30 bg-danger/10 text-danger'
-          }`}
-        >
-          {toast.text}
-        </div>
-      )}
 
       {loading ? (
         <AssignmentSkeleton />

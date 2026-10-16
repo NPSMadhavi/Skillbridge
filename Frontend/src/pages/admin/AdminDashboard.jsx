@@ -79,16 +79,31 @@ const AdminDashboard = () => {
         </div>
       </div>
       <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Total users" value={loading ? '…' : stats.totalUsers} hint="All registered profiles" tone="text-navy" icon="👥" />
-        <StatCard label="Face ID enrolled" value={loading ? '…' : stats.faceEnrolled} hint="Biometric captures saved" tone="text-sky" icon="📸" />
-        <StatCard label="Regions covered" value={loading ? '…' : stats.regionsCovered} hint="Unique regions in use" tone="text-orange" icon="🌐" />
-        <StatCard
-          label="Pending Face ID"
-          value={loading ? '…' : stats.pendingFaceId}
-          hint="Profiles without capture"
-          tone="text-danger"
-          icon="⚠️"
-        />
+        {loading ? (
+          [1, 2, 3, 4].map((i) => (
+            <div key={i} className="rounded-2xl border border-line bg-panel p-5 shadow-sm animate-pulse space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="h-3 w-20 rounded bg-ink" />
+                <div className="h-9 w-9 rounded-xl bg-ink" />
+              </div>
+              <div className="h-8 w-16 rounded-lg bg-ink" />
+              <div className="h-2.5 w-32 rounded bg-ink/70" />
+            </div>
+          ))
+        ) : (
+          <>
+            <StatCard label="Total users" value={stats.totalUsers} hint="All registered profiles" tone="text-navy" icon="👥" />
+            <StatCard label="Face ID enrolled" value={stats.faceEnrolled} hint="Biometric captures saved" tone="text-sky" icon="📸" />
+            <StatCard label="Regions covered" value={stats.regionsCovered} hint="Unique regions in use" tone="text-orange" icon="🌐" />
+            <StatCard
+              label="Pending Face ID"
+              value={stats.pendingFaceId}
+              hint="Profiles without capture"
+              tone="text-danger"
+              icon="⚠️"
+            />
+          </>
+        )}
       </div>
 
       <section className="rounded-2xl border border-line bg-panel p-5 shadow-[0_10px_30px_rgba(15,27,45,0.04)] sm:p-6">
@@ -99,7 +114,22 @@ const AdminDashboard = () => {
           </Link>
         </div>
 
-        {recent.length === 0 ? (
+        {loading ? (
+          <div className="space-y-3 p-2 animate-pulse">
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} className="flex items-center gap-4 py-3 border-b border-line/50 last:border-0">
+                <div className="h-10 w-10 rounded-lg bg-ink shrink-0" />
+                <div className="flex-1 space-y-1.5 min-w-0">
+                  <div className="h-3.5 w-32 rounded bg-ink" />
+                  <div className="h-2.5 w-44 rounded bg-ink/70" />
+                </div>
+                <div className="h-3 w-20 rounded bg-ink/60 hidden sm:block" />
+                <div className="h-3 w-20 rounded bg-ink/60 hidden md:block" />
+                <div className="h-6 w-16 rounded-full bg-ink/60" />
+              </div>
+            ))}
+          </div>
+        ) : recent.length === 0 ? (
           <div className="rounded-xl border border-dashed border-line bg-ink/50 px-4 py-10 text-center">
             <p className="font-medium text-fg">No users registered yet</p>
             <p className="mt-1 text-sm text-muted">Start by registering a learner with Face ID.</p>

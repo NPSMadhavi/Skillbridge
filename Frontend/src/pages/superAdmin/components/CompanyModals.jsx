@@ -31,9 +31,9 @@ export function NewCompanyModal({
               </svg>
             </div>
             <div>
-              <h2 className="text-base font-bold text-[#0f172a]">Register Company New Company</h2>
+              <h2 className="text-base font-bold text-[#0f172a]">Register New Company</h2>
               <p className="text-xs text-slate-500">
-                Set up a new company with secure data storage and independent company management.
+                Set up a new organization with administrative management.
               </p>
             </div>
           </div>
@@ -54,10 +54,10 @@ export function NewCompanyModal({
                   <svg className="w-5 h-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
-                  <span>Company & Database Successfully Provisioned!</span>
+                  <span>Company Successfully Registered!</span>
                 </div>
                 <p className="mt-1 text-xs text-emerald-700">
-                  Dedicated database <strong>{createdResult.dbName}</strong> has been created with all schema tables, pgvector extensions, and company admin account.
+                  Organization account has been set up with primary administrator credentials.
                 </p>
               </div>
 
@@ -71,10 +71,6 @@ export function NewCompanyModal({
                   <span className="text-blue-700 font-bold bg-white px-2 py-0.5 rounded border border-blue-200">
                     {createdResult.code}
                   </span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-blue-200/60">
-                  <span className="text-slate-500">Dedicated Database:</span>
-                  <span className="text-emerald-700 font-bold">{createdResult.dbName}</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-blue-200/60">
                   <span className="text-slate-500">Admin Name:</span>
@@ -184,7 +180,7 @@ export function NewCompanyModal({
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Keppel Offshore & Marine"
+                    placeholder="Enter company / organization name"
                     value={newCompany.companyName}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -214,7 +210,7 @@ export function NewCompanyModal({
                   </div>
                   <input
                     type="text"
-                    placeholder="e.g. keppel_om (leave blank or click Auto Generate)"
+                    placeholder="company_code (leave blank or click Auto Generate)"
                     value={newCompany.slug}
                     onChange={(e) =>
                       setNewCompany((prev) => ({
@@ -224,9 +220,6 @@ export function NewCompanyModal({
                     }
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-semibold text-blue-700 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
                   />
-                  <p className="text-[11px] text-slate-500 mt-1 font-mono">
-                    Database: <span className="text-emerald-700 font-semibold">skillbridge_tenant_{newCompany.slug || 'auto_slug'}</span>
-                  </p>
                 </div>
 
                 <div>
@@ -235,7 +228,7 @@ export function NewCompanyModal({
                   </label>
                   <input
                     type="text"
-                    placeholder="e.g. Health, Safety & Environment (HSE)"
+                    placeholder="e.g. Operations / Safety"
                     value={newCompany.department}
                     onChange={(e) =>
                       setNewCompany((prev) => ({ ...prev, department: e.target.value }))
@@ -259,7 +252,7 @@ export function NewCompanyModal({
                     <input
                       type="text"
                       required
-                      placeholder="e.g. Tan Ah Meng"
+                      placeholder="Administrator full name"
                       value={newCompany.fullName}
                       onChange={(e) =>
                         setNewCompany((prev) => ({ ...prev, fullName: e.target.value }))
@@ -296,7 +289,7 @@ export function NewCompanyModal({
                     <input
                       type="email"
                       required
-                      placeholder="admin@keppel.com"
+                      placeholder="admin@company.com"
                       value={newCompany.email}
                       onChange={(e) =>
                         setNewCompany((prev) => ({ ...prev, email: e.target.value }))
@@ -312,7 +305,7 @@ export function NewCompanyModal({
                     <input
                       type="tel"
                       required
-                      placeholder="e.g. +65 9123 4567"
+                      placeholder="e.g. +65 8000 0000"
                       value={newCompany.phone}
                       onChange={(e) =>
                         setNewCompany((prev) => ({ ...prev, phone: e.target.value }))
@@ -599,16 +592,15 @@ export function DeleteCompanyModal({
 
             <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl text-xs space-y-1.5 font-mono">
               <div className="flex justify-between">
-                <span className="text-slate-500">Slug:</span>
+                <span className="text-slate-500">Company Code:</span>
                 <span className="text-blue-700 font-bold">{deletingCompany.code}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-500">Database:</span>
-                <span className="text-red-600 font-bold">{deletingCompany.dbName}</span>
+                <span className="text-slate-500">Company Name:</span>
+                <span className="text-slate-800 font-bold">{deletingCompany.name}</span>
               </div>
             </div>
 
-            {/* Physical DB drop checkbox */}
             <label className="flex items-start space-x-2.5 text-xs text-slate-700 cursor-pointer bg-red-50/70 border border-red-200 p-3 rounded-xl">
               <input
                 type="checkbox"
@@ -617,7 +609,7 @@ export function DeleteCompanyModal({
                 className="mt-0.5 rounded text-red-600 focus:ring-red-500 cursor-pointer"
               />
               <span>
-                Drop physical PostgreSQL database <strong className="font-mono text-red-700">"{deletingCompany.dbName}"</strong> and erase all internal course and user tables.
+                Permanently delete all courses, learner progress records, and administrative data for this company.
               </span>
             </label>
 
@@ -684,8 +676,8 @@ export function InspectDatabaseModal({
               </svg>
             </div>
             <div>
-              <h2 className="text-base font-bold text-[#0f172a]">Company & Database Inspection</h2>
-              <p className="text-xs text-slate-500 font-mono">ID: {viewingCompany.id}</p>
+              <h2 className="text-base font-bold text-[#0f172a]">Company Profile Details</h2>
+              <p className="text-xs text-slate-500 font-mono">Code: {viewingCompany.code}</p>
             </div>
           </div>
           <button
@@ -708,10 +700,6 @@ export function InspectDatabaseModal({
               <span className="text-blue-700 font-bold bg-white px-2 py-0.5 rounded border border-blue-200">
                 {viewingCompany.code}
               </span>
-            </div>
-            <div className="flex justify-between items-center py-1 border-b border-blue-200/60">
-              <span className="text-slate-500">Dedicated Database:</span>
-              <span className="text-emerald-700 font-bold">{viewingCompany.dbName}</span>
             </div>
             <div className="flex justify-between items-center py-1 border-b border-blue-200/60">
               <span className="text-slate-500">Status:</span>
@@ -740,38 +728,8 @@ export function InspectDatabaseModal({
               <span className="text-slate-800">{viewingCompany.department || '—'}</span>
             </div>
             <div className="flex justify-between items-center py-1">
-              <span className="text-slate-500">Provisioned At:</span>
+              <span className="text-slate-500">Registration Date:</span>
               <span className="text-slate-600">{new Date(viewingCompany.createdAt).toLocaleString()}</span>
-            </div>
-          </div>
-
-          {/* Database Health Test */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between">
-            <div>
-              <div className="text-slate-800 font-bold text-[11px]">Database Health Check</div>
-              <div className="text-[10px] text-slate-500">Pings the dedicated PostgreSQL instance</div>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              {dbHealthStatus && (
-                <span
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                    dbHealthStatus.startsWith('ONLINE')
-                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                      : 'bg-red-100 text-red-800 border border-red-300'
-                  }`}
-                >
-                  {dbHealthStatus}
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => onTestDbConnection(viewingCompany.id)}
-                disabled={testingDb}
-                className="px-2.5 py-1 text-[11px] font-semibold bg-[#0e2246] hover:bg-[#1a3668] text-white rounded-lg transition-colors cursor-pointer"
-              >
-                {testingDb ? 'Pinging...' : 'Test Ping'}
-              </button>
             </div>
           </div>
         </div>
@@ -863,7 +821,7 @@ export function CreateSuperAdminModal({
               <input
                 type="text"
                 required
-                placeholder="e.g. Alexander Wright"
+                placeholder="Super Admin Full Name"
                 value={formData.name || ''}
                 onChange={(e) => setFormData((prev) => ({ ...prev, name: e.target.value }))}
                 className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 transition-all"
@@ -877,7 +835,7 @@ export function CreateSuperAdminModal({
               <input
                 type="email"
                 required
-                placeholder="e.g. alex@skillbridge.com"
+                placeholder="admin@company.com"
                 value={formData.email || ''}
                 onChange={(e) => setFormData((prev) => ({ ...prev, email: e.target.value }))}
                 className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 transition-all"

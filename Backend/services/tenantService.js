@@ -17,6 +17,7 @@ const tenantSchemaSql = fs.readFileSync(path.join(__dirname, 'tenantSchema.sql')
 
 // In-memory cache for tenant PrismaClient instances
 const tenantClients = new Map();
+const tenantSyncTimestamps = new Map();
 
 /**
  * Extract base connection URL from DATABASE_URL or DB_BASE_URL
@@ -582,6 +583,13 @@ export const tenantService = {
    */
   async syncDefaultCoursesToTenant(tenantCode) {
     if (!tenantCode || tenantCode === 'default') return;
+
+    // Throttle: sync at most once every 15 minutes per tenant
+    const lastSync = tenantSyncTimestamps.get(tenantCode);
+    if (lastSync && Date.now() - lastSync < 15 * 60 * 1000) {
+      return;
+    }
+    tenantSyncTimestamps.set(tenantCode, Date.now());
 
     try {
       const tenantClient = await this.getTenantClient(tenantCode);
