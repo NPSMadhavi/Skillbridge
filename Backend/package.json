@@ -7,6 +7,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js",
+    "prisma:generate": "prisma generate --schema=prisma/schema.prisma && prisma generate --schema=prisma/master.prisma",
+    "postinstall": "prisma generate --schema=prisma/schema.prisma && prisma generate --schema=prisma/master.prisma",
     "seed:superadmin": "node prisma/seedSuperAdmin.js",
     "seed": "node prisma/seed.js"
   },
