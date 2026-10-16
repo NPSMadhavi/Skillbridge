@@ -51,14 +51,19 @@ export const login = async (req, res) => {
     }
 
     const admin = await targetClient.admin.findUnique({ where: { email: cleanEmail } });
+    console.log(`[AdminLogin] Attempt: email="${cleanEmail}", companyCode="${companyCode || ''}", resolvedTenant="${targetTenantCode}", adminFound=${!!admin}`);
+
     if (!admin) {
+      console.warn(`[AdminLogin] Admin not found for email "${cleanEmail}" in tenant "${targetTenantCode}"`);
       return res.status(401).json({ error: 'Invalid admin credentials or email not registered.' });
     }
 
     const isMatch = await bcrypt.compare(password, admin.passwordHash);
     if (!isMatch) {
+      console.warn(`[AdminLogin] Password mismatch for email "${cleanEmail}" in tenant "${targetTenantCode}"`);
       return res.status(401).json({ error: 'Invalid admin credentials.' });
     }
+
 
     // Check if the admin is still using a system-generated password
     if (admin.mustChangePassword) {

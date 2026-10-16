@@ -281,7 +281,7 @@ export const normalizeTranscript = (text) => {
    WAKE WORD DETECTION
 ============================================================ */
 
-export const containsWakeWord = (text) => {
+export const containsWakeWord = (text, customWakeWord = null, aiName = null) => {
 
   if (!text) {
     return false;
@@ -294,8 +294,7 @@ export const containsWakeWord = (text) => {
     return false;
   }
 
-
-  // Never wake from ARIA's own speech.
+  // Never wake from self-echo speech
   if (
     KNOWN_SELF_ECHO_PATTERNS.some(
       (pattern) =>
@@ -305,8 +304,33 @@ export const containsWakeWord = (text) => {
     return false;
   }
 
+  // Check custom AI Name and Wake Word if configured by Company Admin
+  const cleanAiName = (aiName || '').trim();
+  const cleanWakeWord = (customWakeWord || '').trim();
 
-  // Complete phrase matching.
+  if (cleanAiName && cleanAiName.toLowerCase() !== 'aria') {
+    const escapedName = cleanAiName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const customPatterns = [
+      new RegExp(`\\b(?:hey|hi|hello|ok|okay|ask|yo)?\\s*${escapedName}\\b`, 'i'),
+      new RegExp(`\\b${escapedName}\\b`, 'i'),
+    ];
+
+    if (cleanWakeWord) {
+      const escapedWake = cleanWakeWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      customPatterns.push(new RegExp(`\\b${escapedWake}\\b`, 'i'));
+    }
+
+    if (customPatterns.some((pattern) => pattern.test(normalized))) {
+      return true;
+    }
+
+    const tokens = normalized.split(/\s+/);
+    if (tokens.some((token) => token.toLowerCase() === cleanAiName.toLowerCase())) {
+      return true;
+    }
+  }
+
+  // Complete phrase matching for default ARIA wake words
   if (
     WAKE_WORD_PATTERNS.some(
       (pattern) =>
@@ -316,8 +340,7 @@ export const containsWakeWord = (text) => {
     return true;
   }
 
-
-  // Individual token matching.
+  // Individual token matching
   const tokens =
     normalized.split(/\s+/);
 
@@ -333,7 +356,9 @@ export const containsWakeWord = (text) => {
 ============================================================ */
 
 export const extractQuestionFromWakeWord = (
-  text
+  text,
+  customWakeWord = null,
+  aiName = null
 ) => {
 
   if (!text) {
@@ -343,13 +368,22 @@ export const extractQuestionFromWakeWord = (
   let clean =
     String(text).trim();
 
+  const cleanAiName = (aiName || '').trim();
 
-  // English / Malay
+  // If a custom company AI name is configured, strip it from the start of the question
+  if (cleanAiName && cleanAiName.toLowerCase() !== 'aria') {
+    const escapedName = cleanAiName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    clean = clean.replace(
+      new RegExp(`^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\\s+me|hai|helo|halo|tolong|boleh)?\\s*(?:${escapedName})\\s*[,.:!?-]*`, 'iu'),
+      ''
+    );
+  }
+
+  // English / Malay ARIA variants
   clean = clean.replace(
     /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria)\s*[,.:!?-]*/iu,
     ''
   );
-
 
   // Chinese
   clean = clean.replace(
@@ -357,13 +391,11 @@ export const extractQuestionFromWakeWord = (
     ''
   );
 
-
   // Tamil
   clean = clean.replace(
     /^(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)?\s*(?:ஆரியா|ஆர்யா|அரியா|ஏரியா)\s*[,.:!?-]*/iu,
     ''
   );
-
 
   // Bangla
   clean = clean.replace(
@@ -371,9 +403,9 @@ export const extractQuestionFromWakeWord = (
     ''
   );
 
-
   return clean.trim();
 };
+
 
 
 /* ============================================================
@@ -542,9 +574,12 @@ export class VoiceTutorManager {
       ...options
     };
 
+    this.aiName = (this.options.aiName || 'ARIA').trim();
+    this.wakeWord = (this.options.wakeWord || `Hey ${this.aiName}`).trim();
 
     this.state =
       TutorState.SLEEPING;
+
 
 
     this.stateListeners =
@@ -1681,11 +1716,12 @@ export class VoiceTutorManager {
 
             for (let alt = 0; alt < result.length; alt++) {
               const cand = result[alt]?.transcript?.trim();
-              if (cand && containsWakeWord(cand)) {
+              if (cand && containsWakeWord(cand, this.wakeWord, this.aiName)) {
                 transcript = cand;
                 break;
               }
             }
+
 
             if (!transcript) {
               continue;
@@ -2061,7 +2097,7 @@ export class VoiceTutorManager {
       this.isLecturePlaying &&
       this.state === TutorState.SLEEPING
     ) {
-      if (containsWakeWord(text)) {
+      if (containsWakeWord(text, this.wakeWord, this.aiName)) {
         this.log(
           LogCategory.WAKE_MATCH,
           `🔥 COURSE INTERRUPTION WAKE (${this.langCode}): "${text}"`
@@ -2084,7 +2120,7 @@ export class VoiceTutorManager {
     if (
       this.state === TutorState.SLEEPING
     ) {
-      if (containsWakeWord(text)) {
+      if (containsWakeWord(text, this.wakeWord, this.aiName)) {
         this.log(
           LogCategory.WAKE_MATCH,
           ` WAKE DETECTED (${this.langCode}): "${text}"`
@@ -2095,6 +2131,7 @@ export class VoiceTutorManager {
 
       return;
     }
+
 
     /*
      * ==========================================================

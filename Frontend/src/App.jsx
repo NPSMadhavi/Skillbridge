@@ -11,7 +11,9 @@ import UsersList from './pages/admin/UsersList'
 import AdminCourses from './pages/admin/AdminCourses'
 import CourseAssignments from './pages/admin/CourseAssignments'
 import AdminManagement from './pages/admin/AdminManagement'
+import AdminAiSettings from './pages/admin/AdminAiSettings'
 import Home from './pages/Home'
+
 import Language from './pages/Language'
 import Login from './pages/Login'
 import MyCertificates from './pages/MyCertificates'
@@ -364,7 +366,9 @@ function App() {
           <Route path="/admin/courses" element={<AdminCourses />} />
           <Route path="/admin/assignments" element={<CourseAssignments />} />
           <Route path="/admin/admins" element={<AdminManagement />} />
+          <Route path="/admin/ai-settings" element={<AdminAiSettings />} />
         </Route>
+
 
         {/* Super Admin Multi-Tenant Control Plane Routes */}
         <Route path="/super-admin/login" element={<SuperAdminLogin />} />

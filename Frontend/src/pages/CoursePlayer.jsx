@@ -470,6 +470,42 @@ const CoursePlayer = ({
   const [handsFreeVoice, setHandsFreeVoice] = useState(true)
   const [voiceStatusText, setVoiceStatusText] = useState('')
   const [isAriaSpeaking, setIsAriaSpeaking] = useState(false)
+  const [aiTutorName, setAiTutorName] = useState('ARIA')
+  const [aiWakeWord, setAiWakeWord] = useState('Hey ARIA')
+  const [aiVoiceConfig, setAiVoiceConfig] = useState({
+    gender: 'female',
+    voiceName: '',
+    rate: 0.95,
+    pitch: 1.0
+  })
+
+  // Fetch company AI Tutor and custom wake word configuration
+  useEffect(() => {
+    let isMounted = true
+    api.getCompanyAiSettings().then((settings) => {
+      if (isMounted && settings?.aiName) {
+        setAiTutorName(settings.aiName)
+        setAiWakeWord(settings.wakeWord || `Hey ${settings.aiName}`)
+        if (settings.aiVoiceGender || settings.aiVoiceName || settings.aiVoiceRate) {
+          setAiVoiceConfig({
+            gender: settings.aiVoiceGender || 'female',
+            voiceName: settings.aiVoiceName || '',
+            rate: settings.aiVoiceRate || 0.95,
+            pitch: settings.aiVoicePitch || 1.0
+          })
+        }
+        setChatMessages(prev => {
+          if (prev.length === 1 && prev[0].sender === 'aria') {
+            const template = GREETINGS[selectedLanguageCode] || GREETINGS.en
+            return [{ sender: 'aria', text: template.replace(/ARIA/g, settings.aiName) }]
+          }
+          return prev
+        })
+      }
+    }).catch(() => {})
+    return () => { isMounted = false }
+  }, [selectedLanguageCode])
+
 
   const requestPlayerFullscreen = () => {
     if (!playerRef.current) return
@@ -630,6 +666,12 @@ const CoursePlayer = ({
     if (!voices || voices.length === 0) return null
     const l = (langCode || 'en').toLowerCase()
 
+    // 0. If company admin set a specific preferred voice name
+    if (aiVoiceConfig?.voiceName) {
+      const explicit = voices.find(v => v.name.toLowerCase().includes(aiVoiceConfig.voiceName.toLowerCase()))
+      if (explicit) return explicit
+    }
+
     // Explicitly exclude robotic David and user-disliked Aria voices
     const isDisallowed = (name) => {
       const n = (name || '').toLowerCase()
@@ -638,6 +680,18 @@ const CoursePlayer = ({
 
     if (l === 'en') {
       const enVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en') && !isDisallowed(v.name))
+      const isMale = aiVoiceConfig?.gender === 'male'
+
+      if (isMale) {
+        const maleVoice = enVoices.find(v => {
+          const n = v.name.toLowerCase()
+          return n.includes('natural') && (n.includes('guy') || n.includes('christopher') || n.includes('brian') || n.includes('ryan') || n.includes('andrew') || n.includes('male'))
+        }) || enVoices.find(v => v.name.toLowerCase().includes('male'))
+        if (maleVoice) {
+          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen male voice: ${maleVoice.name} (${maleVoice.lang})`)
+          return maleVoice
+        }
+      }
 
       // 1. Google US English / Google UK English Female (The authentic Veda gTTS voice)
       const googleVoice = enVoices.find(v => {
@@ -802,8 +856,8 @@ const CoursePlayer = ({
       const voices = window.speechSynthesis.getVoices()
       const matchedVoice = selectVoiceForLanguage(voices, selectedLanguageCode)
       if (matchedVoice) utterance.voice = matchedVoice
-      utterance.rate = 0.95
-      utterance.pitch = 1.0
+      utterance.rate = aiVoiceConfig?.rate || 0.95
+      utterance.pitch = aiVoiceConfig?.pitch || 1.0
 
       // Global reference to prevent browser GC bug
       window._skillbridgeCurrentUtterance = utterance
@@ -904,8 +958,9 @@ const CoursePlayer = ({
       ACKNOWLEDGMENTS.en;
 
     setVoiceStatusText(
-      `👋 ARIA: "${ack}"`
+      `👋 ${aiTutorName}: "${ack}"`
     );
+
 
     speakAriaAnswer(
       ack,
@@ -1131,12 +1186,14 @@ const CoursePlayer = ({
       return
     }
 
-    console.log(`[VOICE] Initializing 8-State ARIA voice manager in ${preferredLanguage} (${speechRecognitionLang})...`)
-    setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
+    console.log(`[VOICE] Initializing 8-State ${aiTutorName} voice manager in ${preferredLanguage} (${speechRecognitionLang})...`)
+    setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "${aiWakeWord}" anytime!`)
 
     const manager = new VoiceTutorManager({
       debug: true,
       followUpTimeoutMs: 7000,
+      aiName: aiTutorName,
+      wakeWord: aiWakeWord,
       onWakeWordDetected: (wakePhrase) => {
         console.log(`[VOICE:WAKE_MATCH] Wake phrase received: "${wakePhrase}". Transitioning to greeting...`)
         interruptLectureAndWake()
@@ -1160,9 +1217,9 @@ const CoursePlayer = ({
           }
 
           if (playingRef.current || isAriaSpeakingRef.current || isLectureEcho(transcription)) {
-            if (containsWakeWord(transcription) && playingRef.current) {
+            if (containsWakeWord(transcription, aiWakeWord, aiTutorName) && playingRef.current) {
               interruptLectureAndWake()
-              const cleanQuestion = extractQuestionFromWakeWord(transcription)
+              const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
               if (cleanQuestion && cleanQuestion.length >= 2 && !isNoiseOrHallucination(cleanQuestion) && !isLectureEcho(cleanQuestion)) {
                 setTimeout(() => handleVoiceQuestion(cleanQuestion), 1600)
               }
@@ -1173,11 +1230,11 @@ const CoursePlayer = ({
           }
 
           if (isWakeDetection) {
-            if (containsWakeWord(transcription)) {
+            if (containsWakeWord(transcription, aiWakeWord, aiTutorName)) {
               console.log(`[VOICE:WAKE_MATCH] Whisper wake word detected: "${transcription}". Interrupting course lecture...`)
               interruptLectureAndWake()
 
-              const cleanQuestion = extractQuestionFromWakeWord(transcription)
+              const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
               if (cleanQuestion && cleanQuestion.length >= 3 && !isNoiseOrHallucination(cleanQuestion) && !isLectureEcho(cleanQuestion)) {
                 console.log(`[VOICE] Wake phrase included question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
                 setTimeout(() => {
@@ -1214,7 +1271,7 @@ const CoursePlayer = ({
             resumeLectureFromExactPosition()
           })
         } else {
-          setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
+          setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "${aiWakeWord}" anytime!`)
         }
       }
     })
@@ -1222,18 +1279,18 @@ const CoursePlayer = ({
     manager.onStateChange((newState) => {
       setTutorVoiceState(newState)
       if (newState === TutorState.SLEEPING) {
-        setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "Hey ARIA" anytime!`)
+        setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "${aiWakeWord}" anytime!`)
       } else if (newState === TutorState.WAKE_DETECTED) {
-        setVoiceStatusText('✨ "Hey ARIA" Detected! Waking up...')
+        setVoiceStatusText(`✨ "${aiWakeWord}" Detected! Waking up...`)
       } else if (newState === TutorState.ARIA_GREETING) {
         const ack = ACKNOWLEDGMENTS[selectedLanguageCode] || ACKNOWLEDGMENTS.en
-        setVoiceStatusText(`👋 ARIA: "${ack}"`)
+        setVoiceStatusText(`👋 ${aiTutorName}: "${ack}"`)
       } else if (newState === TutorState.ACTIVE_LISTENING) {
         setVoiceStatusText(`👂 Listening for your question (${currentLangObj.native})...`)
       } else if (newState === TutorState.PROCESSING) {
-        setVoiceStatusText('⚡ ARIA is searching course knowledge...')
+        setVoiceStatusText(`⚡ ${aiTutorName} is searching course knowledge...`)
       } else if (newState === TutorState.ARIA_SPEAKING) {
-        setVoiceStatusText('🗣️ ARIA is explaining...')
+        setVoiceStatusText(`🗣️ ${aiTutorName} is explaining...`)
       } else if (newState === TutorState.FOLLOW_UP_LISTENING) {
         setVoiceStatusText('💬 Ask a follow-up question, or wait to resume lecture...')
       } else if (newState === TutorState.RETURN_TO_SLEEP) {
@@ -1252,7 +1309,7 @@ const CoursePlayer = ({
         voiceManagerRef.current = null
       }
     }
-  }, [handsFreeVoice, speechRecognitionLang, selectedLanguageCode, currentLangObj])
+  }, [handsFreeVoice, speechRecognitionLang, selectedLanguageCode, currentLangObj, preferredLanguage, aiTutorName, aiWakeWord])
 
   // Manual Microphone Button Handler (Optional manual trigger)
   const toggleRecording = async () => {
@@ -2349,7 +2406,7 @@ const CoursePlayer = ({
                   {/* ARIA AI TUTOR Pill Badge */}
                   <div className="mt-4 sm:mt-5 px-5 py-1.5 rounded-full bg-[#131d2e] border border-[#2a3952] shadow-sm select-none">
                     <span className="text-xs sm:text-[13px] font-extrabold text-[#ff8c21] tracking-wider uppercase">
-                      ARIA AI TUTOR
+                      {aiTutorName} AI TUTOR
                     </span>
                   </div>
                 </div>
@@ -2360,8 +2417,8 @@ const CoursePlayer = ({
                 <div className="shrink-0 bg-[#040814]/90 backdrop-blur-md rounded-lg py-1.5 sm:py-2 px-3 sm:px-4 border border-white/10 mt-1.5 sm:mt-2 text-center">
                   <p className="text-xs sm:text-sm text-white font-medium leading-relaxed italic truncate">
                     {loadingExplanation
-                      ? 'ARIA: "Preparing lesson explanation..."'
-                      : (playing ? `ARIA: "${cleanForBoard(sentences[currentSentenceIdx])}"` : 'Lecture paused.')}
+                      ? `${aiTutorName}: "Preparing lesson explanation..."`
+                      : (playing ? `${aiTutorName}: "${cleanForBoard(sentences[currentSentenceIdx])}"` : 'Lecture paused.')}
                   </p>
                 </div>
               )}
@@ -2475,12 +2532,12 @@ const CoursePlayer = ({
               type="button"
               onClick={() => setChatCollapsed(false)}
               className="flex flex-col items-center gap-2 px-1 py-2 text-[#0f1b2d] hover:text-[#ff8c21] transition cursor-pointer border-0 bg-transparent"
-              title="Open Ask ARIA"
+              title={`Open Ask ${aiTutorName}`}
             >
               <svg className="h-5 w-5 stroke-current fill-none" viewBox="0 0 24 24" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
-              <span className="text-[9px] font-extrabold tracking-wide [writing-mode:vertical-rl] rotate-180">Ask ARIA</span>
+              <span className="text-[9px] font-extrabold tracking-wide [writing-mode:vertical-rl] rotate-180">Ask {aiTutorName}</span>
             </button>
           </section>
         ) : (
@@ -2491,7 +2548,7 @@ const CoursePlayer = ({
                 <svg className="h-4.5 w-4.5 sm:h-5 sm:w-5 stroke-[#ff8c21] fill-none shrink-0" viewBox="0 0 24 24" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                 </svg>
-                <h3 className="text-xs sm:text-sm font-bold text-[#0f1b2d]">Ask ARIA</h3>
+                <h3 className="text-xs sm:text-sm font-bold text-[#0f1b2d]">Ask {aiTutorName}</h3>
               </div>
 
               <div className="flex items-center gap-1.5">
@@ -2511,7 +2568,7 @@ const CoursePlayer = ({
                   type="button"
                   onClick={() => setChatCollapsed(true)}
                   className="hidden lg:inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition cursor-pointer bg-transparent"
-                  title="Minimize Ask ARIA"
+                  title={`Minimize Ask ${aiTutorName}`}
                 >
                   <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
                     <path d="M4 10.75A.75.75 0 0 1 4.75 10h10.5a.75.75 0 0 1 0 1.5H4.75a.75.75 0 0 1-.75-.75Z" />
@@ -2552,7 +2609,7 @@ const CoursePlayer = ({
               {chatLoading && (
                 <div className="flex gap-2 items-center text-slate-400 text-xs pl-1">
                   <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                  ARIA is typing...
+                  {aiTutorName} is typing...
                 </div>
               )}
               <div ref={chatEndRef} />
@@ -2562,7 +2619,7 @@ const CoursePlayer = ({
             <form onSubmit={handleSendChat} className="shrink-0 flex items-center gap-1.5 sm:gap-2 border-t border-slate-100 pt-2 pb-0.5">
               <input
                 type="text"
-                placeholder="Ask ARIA anything..."
+                placeholder={`Ask ${aiTutorName} anything...`}
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 className="flex-1 bg-slate-50 border border-slate-200/80 rounded-xl px-3 py-1.5 sm:py-2 text-xs text-slate-900 placeholder-slate-400 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
