@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import logo from '../assets/SkillBridge_AI.png'
 import { api } from '../services/api'
+import { persistLanguageSelection, readStoredLanguageCode } from '../utils/language'
+
+function restoreLanguageAfterLogin(user) {
+  const stored = readStoredLanguageCode()
+  if (stored) {
+    persistLanguageSelection(stored)
+    return
+  }
+  const fromProfile = user?.preferredLanguage || user?.preferLanguage
+  if (fromProfile) {
+    persistLanguageSelection(fromProfile)
+  }
+}
 
 const MailIcon = () => (
   <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -60,6 +73,9 @@ const Login = ({ onSuccess }) => {
   const [mode, setMode] = useState('password')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [companyCode, setCompanyCode] = useState(
+    () => localStorage.getItem('skillbridge_tenant') || 'default'
+  )
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
@@ -133,14 +149,17 @@ const Login = ({ onSuccess }) => {
     event.preventDefault()
     setMessage(null)
 
+    const cleanCode = (companyCode || localStorage.getItem('skillbridge_tenant') || 'default').trim().toLowerCase()
     setLoading(true)
     try {
-      const res = await api.studentLogin(email.trim(), password)
+      const res = await api.studentLogin(email.trim(), password, cleanCode)
       sessionStorage.setItem(
         'skillbridge_user',
         JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       )
-      sessionStorage.setItem('skillbridge_language', 'en')
+      sessionStorage.setItem('skillbridge_tenant', cleanCode)
+      localStorage.setItem('skillbridge_tenant', cleanCode)
+      restoreLanguageAfterLogin(res.user)
       onSuccess?.()
     } catch (err) {
       setMessage({ type: 'error', text: err.message || 'Incorrect email or password.' })
@@ -201,13 +220,16 @@ const Login = ({ onSuccess }) => {
       ctx.drawImage(video, sx, sy, size, size, 0, 0, 300, 300)
       const base64Data = canvas.toDataURL('image/jpeg', 0.85)
 
-      const res = await api.studentFaceLogin(base64Data)
+      const cleanCode = (companyCode || 'default').trim().toLowerCase()
+      const res = await api.studentFaceLogin(base64Data, cleanCode)
 
       sessionStorage.setItem(
         'skillbridge_user',
         JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       )
-      sessionStorage.setItem('skillbridge_language', 'en')
+      sessionStorage.setItem('skillbridge_tenant', cleanCode)
+      localStorage.setItem('skillbridge_tenant', cleanCode)
+      restoreLanguageAfterLogin(res.user)
 
       setFaceState('success')
       setFaceCopy('Identity verified')

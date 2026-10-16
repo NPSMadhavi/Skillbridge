@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet, Navigate, useNavigate } from 'react-router-dom'
-import { ToastContainer } from 'react-toastify'
+import { ToastContainer, toast } from 'react-toastify'
 import 'react-toastify/dist/ReactToastify.css'
 import logo from '../../assets/SkillBridge_AI.png'
+import { api } from '../../services/api'
 
 const getAdminSession = () => {
   try {
@@ -61,15 +62,55 @@ const navItems = [
       </svg>
     ),
   },
+  {
+    to: '/admin/admins',
+    label: 'Company Admins',
+    icon: (
+      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+        <path d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    ),
+  },
 ]
 
 const AdminLayout = () => {
   const navigate = useNavigate()
   const admin = getAdminSession()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [profile, setProfile] = useState(null)
+
+  useEffect(() => {
+    let isMounted = true
+    api.getAdminMe().then((data) => {
+      if (isMounted && data) {
+        setProfile(data)
+        if (data.tenant?.code || data.tenant?.slug) {
+          const current = getAdminSession() || {}
+          sessionStorage.setItem('skillbridge_admin', JSON.stringify({
+            ...current,
+            tenant: data.tenant.code || data.tenant.slug,
+            slug: data.tenant.slug || data.tenant.code,
+            companyName: data.tenant.name
+          }))
+        }
+      }
+    }).catch(() => { })
+    return () => { isMounted = false }
+  }, [])
 
   if (!admin) {
     return <Navigate to="/admin" replace />
+  }
+
+  const slug = profile?.tenant?.slug || profile?.tenant?.code || admin.slug || admin.tenant || 'default'
+  const companyName = profile?.tenant?.name || admin.companyName || 'SkillBridge Organization'
+
+  const handleCopySlug = () => {
+    navigator.clipboard.writeText(slug)
+    setCopied(true)
+    toast.info(`Company slug "${slug}" copied to clipboard!`)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   const handleLogout = () => {
@@ -98,15 +139,22 @@ const AdminLayout = () => {
         className={`fixed inset-y-0 left-0 z-50 flex w-[272px] flex-col border-r border-line bg-panel transition-transform duration-300 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
       >
-        <div className="flex items-center gap-3 border-b border-line px-5 py-5">
+        <div className="flex items-center gap-3 border-b border-line px-5 py-4">
           <img src={logo} alt="SkillBridge" className="h-10 w-auto rounded-lg" />
-          <div>
-            <p className="font-display text-sm font-semibold text-fg">Admin</p>
-            <p className="text-[0.7rem] tracking-[0.12em] text-sky uppercase">Console</p>
+          <div className="min-w-0">
+            <p className="font-display text-sm font-semibold text-fg truncate">
+              {companyName}
+            </p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className="text-[10px] tracking-wide text-sky uppercase font-bold">Slug:</span>
+              <span className="font-mono text-[11px] text-fg font-semibold bg-ink px-1.5 py-0.5 rounded border border-line truncate max-w-[125px]">
+                {slug}
+              </span>
+            </div>
           </div>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1.5 p-4" aria-label="Admin">
+        <nav className="flex flex-1 flex-col gap-1.5 p-4 overflow-y-auto" aria-label="Admin">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
@@ -120,15 +168,20 @@ const AdminLayout = () => {
           ))}
         </nav>
 
-        <div className="border-t border-line p-4">
-          <div className="mb-3 rounded-xl bg-ink px-3.5 py-3">
-            <p className="text-xs text-muted">Signed in as</p>
-            <p className="truncate text-sm font-semibold text-fg">{admin.email}</p>
+        <div className="border-t border-line p-4 space-y-2.5">
+          <div className="rounded-xl bg-ink p-3 space-y-1.5 text-xs">
+
           </div>
+
+          <div className="rounded-xl bg-ink px-3 py-2">
+            <p className="text-[10px] uppercase font-bold text-muted">Signed in as</p>
+            <p className="truncate text-xs font-semibold text-fg">{admin.email}</p>
+          </div>
+
           <button
             type="button"
             onClick={handleLogout}
-            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-line bg-panel px-3.5 py-3 text-sm font-semibold text-muted transition hover:border-danger/40 hover:text-danger"
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-line bg-panel px-3.5 py-2.5 text-xs font-semibold text-muted transition hover:border-danger/40 hover:text-danger"
           >
             Sign out
           </button>
@@ -137,10 +190,10 @@ const AdminLayout = () => {
 
       <div className="lg:pl-[272px]">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-line bg-panel/90 px-4 backdrop-blur-xl sm:px-6">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
-              className="grid h-10 w-10 cursor-pointer place-items-center rounded-xl border border-line bg-ink text-fg lg:hidden"
+              className="grid h-10 w-10 cursor-pointer place-items-center rounded-xl border border-line bg-ink text-fg lg:hidden shrink-0"
               aria-label="Open sidebar"
               onClick={() => setSidebarOpen(true)}
             >
@@ -148,13 +201,40 @@ const AdminLayout = () => {
                 <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
               </svg>
             </button>
-            <div>
-              <p className="font-display text-sm font-semibold text-fg sm:text-base">SkillBridge Admin</p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="font-display text-sm font-semibold text-fg sm:text-base truncate">
+                  {companyName}
+                </p>
+                <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-navy/10 text-navy border border-navy/20">
+                  <span className="text-[10px] text-muted uppercase font-sans font-bold">Slug:</span>
+                  <span>{slug}</span>
+                  <button
+                    type="button"
+                    title="Copy Company Slug"
+                    onClick={handleCopySlug}
+                    className="ml-1 text-navy hover:text-orange transition-colors cursor-pointer"
+                  >
+                    {copied ? '✓' : '📋'}
+                  </button>
+                </span>
+              </div>
               <p className="hidden text-xs text-muted sm:block">Manage users and Face ID enrollment</p>
             </div>
           </div>
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-navy font-display text-xs font-bold text-white">
-            AD
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleCopySlug}
+              className="flex sm:hidden items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-navy/10 text-navy border border-navy/20 cursor-pointer"
+            >
+              <span className="max-w-[80px] truncate">{slug}</span>
+              <span>{copied ? '✓' : '📋'}</span>
+            </button>
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-navy font-display text-xs font-bold text-white">
+              {(admin.fullName || 'AD').substring(0, 2).toUpperCase()}
+            </div>
           </div>
         </header>
 

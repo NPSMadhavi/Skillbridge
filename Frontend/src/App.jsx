@@ -10,12 +10,16 @@ import RegisterUser from './pages/admin/RegisterUser'
 import UsersList from './pages/admin/UsersList'
 import AdminCourses from './pages/admin/AdminCourses'
 import CourseAssignments from './pages/admin/CourseAssignments'
+import AdminManagement from './pages/admin/AdminManagement'
 import Home from './pages/Home'
 import Language from './pages/Language'
 import Login from './pages/Login'
 import MyCertificates from './pages/MyCertificates'
+import SuperAdminLogin from './pages/superAdmin/SuperAdminLogin'
+import SuperAdminDashboard from './pages/superAdmin/SuperAdminDashboard'
 import { courses as defaultCourses } from './data/courses'
 import { api } from './services/api'
+import { clearStoredLanguage, hasStoredLanguage } from './utils/language'
 
 // Helper to map DB AI course
 const mapRagCourse = (dbCourse) => {
@@ -64,7 +68,7 @@ const getAdminSession = () => {
 const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
   const navigate = useNavigate()
   const isAuthenticated = Boolean(sessionStorage.getItem('skillbridge_user'))
-  const languageReady = Boolean(sessionStorage.getItem('skillbridge_language'))
+  const languageReady = hasStoredLanguage()
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
@@ -80,7 +84,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
         onLogoClick={() => navigate('/')}
         onLogout={() => {
           sessionStorage.removeItem('skillbridge_user')
-          sessionStorage.removeItem('skillbridge_language')
+          clearStoredLanguage()
           navigate('/login')
         }}
         searchQuery={searchQuery}
@@ -260,7 +264,7 @@ const StudentLoginRoute = () => {
   return (
     <Login
       onSuccess={() => {
-        if (!sessionStorage.getItem('skillbridge_language')) {
+        if (!hasStoredLanguage()) {
           navigate('/language')
         } else {
           navigate('/')
@@ -352,7 +356,13 @@ function App() {
           <Route path="/admin/users" element={<UsersList />} />
           <Route path="/admin/courses" element={<AdminCourses />} />
           <Route path="/admin/assignments" element={<CourseAssignments />} />
+          <Route path="/admin/admins" element={<AdminManagement />} />
         </Route>
+
+        {/* Super Admin Multi-Tenant Control Plane Routes */}
+        <Route path="/super-admin/login" element={<SuperAdminLogin />} />
+        <Route path="/super-admin" element={<SuperAdminDashboard />} />
+        <Route path="/super-admin/dashboard" element={<SuperAdminDashboard />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

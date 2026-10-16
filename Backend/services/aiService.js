@@ -5,81 +5,216 @@ dotenv.config();
 
 class AIService {
   /**
-   * Helper to make ChatCompletion calls with multi-turn conversation support
+   * Reads SKILLBRIDGE_LLM_GATEWAY_URL and strips a trailing slash.
+   * Chat and health checks must use this same base URL (port 8081).
    */
-  async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
-    dotenv.config();
+  getGatewayBaseUrl() {
+    const raw = (process.env.SKILLBRIDGE_LLM_GATEWAY_URL || '').trim();
+    if (!raw) {
+      const err = new Error('SKILLBRIDGE_LLM_GATEWAY_URL is not configured.');
+      err.status = 503;
+      throw err;
+    }
+    return raw.replace(/\/+$/, '');
+  }
 
-    const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
-    const baseUrl = process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || 'https://api.openai.com/v1';
-    const model = process.env.OPENAI_MODEL || process.env.AI_MODEL || 'gpt-4o-mini';
+  getGatewayApiKey() {
+    return (
+      process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
+      process.env.LLM_GATEWAY_API_KEY ||
+      process.env.VEDA_API_KEY ||
+      ''
+    ).trim();
+  }
 
-    if (!apiKey) {
-      console.error('[AIService] OPENAI_API_KEY is not configured in .env file!');
-      throw new Error('OPENAI_API_KEY is missing.');
+  getGatewayHeaders(extra = {}) {
+    const headers = {
+      Accept: 'application/json',
+      ...extra
+    };
+    const apiKey = this.getGatewayApiKey();
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+      headers['X-API-Key'] = apiKey;
+    }
+    return headers;
+  }
+
+  /**
+   * GET ${SKILLBRIDGE_LLM_GATEWAY_URL}/health
+   */
+  async checkGatewayHealth() {
+    const gatewayUrl = this.getGatewayBaseUrl();
+    const response = await axios.get(`${gatewayUrl}/health`, {
+      timeout: 10000,
+      headers: this.getGatewayHeaders()
+    });
+    if (response.status < 200 || response.status >= 300) {
+      const err = new Error('Local LLM gateway health check failed.');
+      err.status = 503;
+      throw err;
+    }
+    return response.data;
+  }
+
+  /**
+   * Flattens system prompt, recent conversation, and user/RAG context into the
+   * single `message` string required by the Veda gateway (not an OpenAI messages array).
+   */
+  _buildGatewayMessage(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+    const MAX_TOTAL_CHARS = 24000;
+    const MAX_HISTORY_ITEM_CHARS = 600;
+    const sections = [];
+
+    const system = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+    if (system) sections.push(system);
+
+    if (jsonMode) {
+      sections.push('Output requirements: Return valid JSON only. Do not wrap the JSON in markdown fences or add commentary.');
     }
 
+    if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
+      const recentHistory = conversationHistory.slice(-8);
+      const historyLines = [];
+      for (const item of recentHistory) {
+        const isUser = item.role === 'user' || item.sender === 'user';
+        const content = item.content || item.text || '';
+        if (typeof content !== 'string' || !content.trim()) continue;
+        const clipped = content.trim().length > MAX_HISTORY_ITEM_CHARS
+          ? `${content.trim().slice(0, MAX_HISTORY_ITEM_CHARS)}…`
+          : content.trim();
+        historyLines.push(`${isUser ? 'Student' : 'ARIA'}: ${clipped}`);
+      }
+      if (historyLines.length > 0) {
+        sections.push(`Previous conversation:\n${historyLines.join('\n')}`);
+      }
+    }
+
+    let user = typeof userPrompt === 'string' ? userPrompt.trim() : '';
+    if (user) sections.push(user);
+
+    let message = sections.filter(Boolean).join('\n\n');
+    if (message.length > MAX_TOTAL_CHARS) {
+      const withoutUser = sections.filter(s => s !== user).join('\n\n');
+      const overhead = withoutUser.length + (withoutUser ? 2 : 0);
+      const userBudget = Math.max(2000, MAX_TOTAL_CHARS - overhead - 80);
+      const truncatedUser = `${user.slice(0, userBudget)}\n\n[Course context truncated to fit the model window.]`;
+      message = [withoutUser, truncatedUser].filter(Boolean).join('\n\n');
+    }
+    return message;
+  }
+
+  _gatewayUnavailableError(status = 503) {
+    const err = new Error('The AI tutor is temporarily unavailable. Please try again in a moment.');
+    err.status = status;
+    return err;
+  }
+
+  /**
+   * Sends a single constructed tutor/curriculum prompt to the self-hosted Veda gateway.
+   * POST ${SKILLBRIDGE_LLM_GATEWAY_URL}/chat  { "message": "..." }
+   * Reads the answer from the `response` field. Does not fall back to OpenAI.
+   */
+  async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+    const gatewayUrl = this.getGatewayBaseUrl();
+    const message = this._buildGatewayMessage(systemPrompt, userPrompt, jsonMode, conversationHistory);
+
     try {
-      const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      };
-
-      const messages = [
-        { role: 'system', content: systemPrompt }
-      ];
-
-      // Append multi-turn conversation history if provided
-      if (Array.isArray(conversationHistory) && conversationHistory.length > 0) {
-        const recentHistory = conversationHistory.slice(-8);
-        for (const item of recentHistory) {
-          const role = (item.role === 'user' || item.sender === 'user') ? 'user' : 'assistant';
-          const content = item.content || item.text || '';
-          if (content && typeof content === 'string' && content.trim()) {
-            messages.push({ role, content: content.trim() });
-          }
-        }
-      }
-
-      if (userPrompt && typeof userPrompt === 'string' && userPrompt.trim()) {
-        messages.push({ role: 'user', content: userPrompt.trim() });
-      }
-
-      const payload = {
-        model,
-        messages,
-        temperature: 0.4
-      };
-
-      if (jsonMode) {
-        payload.response_format = { type: 'json_object' };
-      }
-
-      const response = await axios.post(`${baseUrl}/chat/completions`, payload, {
-        headers,
-        timeout: 60000 // 60 seconds timeout for OpenAI API
+      const response = await axios.post(`${gatewayUrl}/chat`, { message }, {
+        headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+        timeout: jsonMode ? 180000 : 120000
       });
 
-      return response.data?.choices?.[0]?.message?.content || '';
+      const text = response.data?.response;
+      if (typeof text !== 'string' || !text.trim()) {
+        console.warn('[AIService] Local LLM gateway returned an invalid response payload.');
+        throw this._gatewayUnavailableError(502);
+      }
+      return text.trim();
     } catch (error) {
-      const status = error.response?.status;
-      const errorDetails = error.response?.data?.error?.message || error.message;
-      console.warn(`[AIService] OpenAI API call failed (HTTP ${status}): ${errorDetails}`);
-      throw error; // Let caller catch and invoke fallback
+      if (error.status && error.message && error.message.startsWith('The AI tutor')) {
+        throw error;
+      }
+      if (error.code === 'ECONNABORTED') {
+        console.warn('[AIService] Local LLM gateway timed out.');
+        throw this._gatewayUnavailableError(504);
+      }
+      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'EHOSTUNREACH' || error.code === 'ETIMEDOUT') {
+        console.warn(`[AIService] Local LLM gateway unreachable (${error.code}).`);
+        throw this._gatewayUnavailableError(503);
+      }
+      if (error.response) {
+        console.warn(`[AIService] Local LLM gateway HTTP ${error.response.status}.`);
+        throw this._gatewayUnavailableError(503);
+      }
+      console.warn('[AIService] Local LLM gateway request failed.');
+      throw this._gatewayUnavailableError(503);
     }
   }
 
   /**
-   * Generates a single vector embedding using OpenAI text-embedding-3-small
+   * 768-d hashed n-gram embedding used when OpenAI embeddings are unavailable.
+   * Same vector width as CourseChunk.embedding so pgvector search keeps working.
+   */
+  _localHashEmbedding(text, dimensions = 768) {
+    const dim = dimensions || 768;
+    const vec = new Array(dim).fill(0);
+    const tokens = String(text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 2);
+    const grams = [...tokens];
+    for (let i = 0; i < tokens.length - 1; i++) {
+      grams.push(`${tokens[i]}_${tokens[i + 1]}`);
+    }
+    for (const gram of grams) {
+      let h = 2166136261;
+      for (let i = 0; i < gram.length; i++) {
+        h ^= gram.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      const idx = Math.abs(h) % dim;
+      vec[idx] += (h & 1) ? 1 : -1;
+    }
+    const norm = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0)) || 1;
+    return vec.map(v => v / norm);
+  }
+
+  _parseJsonObject(raw) {
+    if (!raw || typeof raw !== 'string') {
+      throw new Error('Empty LLM JSON response.');
+    }
+    let s = raw.replace(/```json/gi, '```').replace(/```/g, '').trim();
+    try {
+      return JSON.parse(s);
+    } catch {
+      const start = s.indexOf('{');
+      const end = s.lastIndexOf('}');
+      if (start >= 0 && end > start) {
+        return JSON.parse(s.slice(start, end + 1));
+      }
+      throw new Error('LLM response was not valid JSON.');
+    }
+  }
+
+  /**
+   * Generates a single vector embedding using OpenAI text-embedding-3-small,
+   * falling back to a local 768-d hash embedding if OpenAI has no credits.
    */
   async getEmbedding(text, dimensions = 768) {
     if (!text || !text.trim()) return null;
+    if (this._openaiEmbedUnavailable) {
+      return this._localHashEmbedding(text, dimensions);
+    }
+
     const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
     const baseUrl = process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || 'https://api.openai.com/v1';
 
     if (!apiKey) {
-      console.warn('[AIService] OPENAI_API_KEY is not configured for embeddings.');
-      return null;
+      this._openaiEmbedUnavailable = true;
+      console.warn('[AIService] OPENAI_API_KEY is not configured for embeddings. Using local 768-d embeddings.');
+      return this._localHashEmbedding(text, dimensions);
     }
 
     try {
@@ -94,28 +229,35 @@ class AIService {
         },
         timeout: 30000
       });
-      return response.data?.data?.[0]?.embedding || null;
+      return response.data?.data?.[0]?.embedding || this._localHashEmbedding(text, dimensions);
     } catch (err) {
-      console.warn('[AIService] Failed to generate embedding:', err.response?.data?.error?.message || err.message);
-      return null;
+      this._openaiEmbedUnavailable = true;
+      console.warn('[AIService] OpenAI embeddings unavailable. Using local 768-d embeddings:', err.response?.data?.error?.message || err.message);
+      return this._localHashEmbedding(text, dimensions);
     }
   }
 
   /**
-   * Generates batch vector embeddings using OpenAI text-embedding-3-small
+   * Generates batch vector embeddings using OpenAI text-embedding-3-small,
+   * falling back to local 768-d hash embeddings if OpenAI has no credits.
    */
   async getEmbeddings(textArray, dimensions = 768) {
     if (!textArray || !Array.isArray(textArray) || textArray.length === 0) return [];
+    const cleanInputs = textArray.map(t => (typeof t === 'string' ? t.slice(0, 8000) : ''));
+    if (this._openaiEmbedUnavailable) {
+      return cleanInputs.map(t => this._localHashEmbedding(t, dimensions));
+    }
+
     const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
     const baseUrl = process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || 'https://api.openai.com/v1';
 
     if (!apiKey) {
-      console.warn('[AIService] OPENAI_API_KEY is not configured for batch embeddings.');
-      return [];
+      this._openaiEmbedUnavailable = true;
+      console.warn('[AIService] OPENAI_API_KEY is not configured for batch embeddings. Using local 768-d embeddings.');
+      return cleanInputs.map(t => this._localHashEmbedding(t, dimensions));
     }
 
     try {
-      const cleanInputs = textArray.map(t => (typeof t === 'string' ? t.slice(0, 8000) : ''));
       const response = await axios.post(`${baseUrl}/embeddings`, {
         model: 'text-embedding-3-small',
         input: cleanInputs,
@@ -127,11 +269,13 @@ class AIService {
         },
         timeout: 60000
       });
-      return response.data?.data?.map(d => d.embedding) || [];
+      const vectors = response.data?.data?.map(d => d.embedding) || [];
+      if (vectors.length === cleanInputs.length) return vectors;
     } catch (err) {
-      console.warn('[AIService] Batch embeddings failed:', err.response?.data?.error?.message || err.message);
-      return [];
+      this._openaiEmbedUnavailable = true;
+      console.warn('[AIService] OpenAI batch embeddings unavailable. Using local 768-d embeddings:', err.response?.data?.error?.message || err.message);
     }
+    return cleanInputs.map(t => this._localHashEmbedding(t, dimensions));
   }
 
   /**
@@ -151,6 +295,18 @@ class AIService {
 
     console.log(`[AI Comprehension] Studying document "${fileName}" (${fileType.toUpperCase()}, ${textLength} chars, ${slides.length} slides, ${pages.length} pages)...`);
 
+    const imageHeavy = isPpt && slides.length > 0 && slides.filter(s =>
+      (s.images || []).some(img => img.visionText || img.ocrText) ||
+      /Text (understood|read) from Slide/i.test(s.fullText || '')
+    ).length >= Math.max(1, Math.ceil(slides.length * 0.4));
+
+    // Image-based decks: keep one unique vision analysis per slide. Do not let the text LLM
+    // merge every poster into the same chunk.
+    if (imageHeavy) {
+      console.log(`[AI Comprehension] Image-based PPT detected (${slides.length} slides). Building one unique chunk per slide from Qwen vision.`);
+      return this._getStructuralSemanticChunks(fileName, fullText, docMetadata);
+    }
+
     // For very large documents (> 35k chars or > 24 slides), use hierarchical multi-pass comprehension
     if (textLength > 35000 || slides.length > 24) {
       console.log(`[AI Comprehension] Large document detected. Initiating hierarchical multi-pass understanding...`);
@@ -167,7 +323,11 @@ class AIService {
         if (s.bulletPoints?.length) sDesc += s.bulletPoints.join('\n') + '\n';
         if (s.tables?.length) sDesc += s.tables.join('\n') + '\n';
         if (s.images?.length) {
-          sDesc += `Visuals on Slide: ` + s.images.map(img => `[Visual ID: ${img.id}] "${img.name}"${img.descr ? ` - ${img.descr}` : ''}`).join('; ') + '\n';
+          sDesc += `Visuals on Slide: ` + s.images.map(img => `[Visual ID: ${img.id}] "${img.name}"`).join('; ') + '\n';
+          const visualText = s.images.map(img => img.ocrText).filter(Boolean).join('\n');
+          if (visualText) {
+            sDesc += `Visible training text read from slide images (explain this to learners):\n${visualText}\n`;
+          }
         }
         if (s.speakerNotes) sDesc += `Speaker Notes: ${s.speakerNotes}\n`;
         return sDesc.trim();
@@ -212,6 +372,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
 6. VISUAL INTEGRATION & TIMING:
    - When a slide has supporting images, photos, charts, or diagrams, link them to the relevant concept.
    - Specify "purpose" and "triggerKeywords" so ARIA knows exactly when to display the visual during lecture playback.
+   - If a slide is image-based, use "Visible training text read from slide images" as the source of truth and write chunkText as a trainer explanation of that visual.
 
 7. EASY-TO-EXPLAIN KNOWLEDGE FOR ARIA:
    - Each chunk must contain rich pedagogical context so ARIA can explain it in clear, natural teaching language.
@@ -259,7 +420,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
 
     try {
       const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
-      const parsed = JSON.parse(aiResponse.replace(/```json/g, '').replace(/```/g, '').trim());
+      const parsed = this._parseJsonObject(aiResponse);
 
       if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
         console.log(`[AI Comprehension] AI synthesized ${parsed.chunks.length} high-fidelity semantic knowledge chunks.`);
@@ -356,7 +517,7 @@ RULES:
 
       try {
         const res = await this._callLLM(batchPrompt, batch.text, true);
-        const parsed = JSON.parse(res.replace(/```json/g, '').replace(/```/g, '').trim());
+        const parsed = this._parseJsonObject(res);
         if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
           allSynthesizedChunks.push(...parsed.chunks);
         }
@@ -482,8 +643,40 @@ RULES:
     const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
     const generatedChunks = [];
 
-    // 1. PPT/PPTX Structural Chunking (combines consecutive related slides)
+    // 1. PPT/PPTX Structural Chunking
     if (isPpt && slides.length > 0) {
+      const slideHasUniqueVisual = (slide) =>
+        (slide.images || []).some(img => img.visionText || img.ocrText) ||
+        /Text (understood|read) from Slide/i.test(slide.fullText || '');
+
+      const visualSlideCount = slides.filter(slideHasUniqueVisual).length;
+      if (visualSlideCount >= Math.max(1, Math.ceil(slides.length * 0.4))) {
+        for (const slide of slides) {
+          const visual = (slide.images || [])
+            .map(img => img.visionText || img.ocrText)
+            .filter(Boolean)
+            .join('\n\n');
+          const body = visual || slide.fullText || slide.title || `Slide ${slide.slideNumber}`;
+          generatedChunks.push({
+            chunkIndex: generatedChunks.length,
+            concept: slide.title || `Slide ${slide.slideNumber}`,
+            topic: cleanFileName,
+            subtopic: null,
+            chunkType: 'concept',
+            sourcePage: slide.slideNumber,
+            sourceSlides: [slide.slideNumber],
+            sourceSection: `Slide ${slide.slideNumber}`,
+            prerequisites: null,
+            keyPoints: (slide.bulletPoints || []).slice(0, 5).map(b => String(b).replace(/^[\s\-\*]+/, '')),
+            relatedConcepts: [],
+            visuals: slide.images || [],
+            semanticSummary: body.slice(0, 220).replace(/\n/g, ' '),
+            chunkText: `### 📌 Concept: ${slide.title || `Slide ${slide.slideNumber}`}\n**Topic:** ${cleanFileName}\n\n${body}\n\n*(Source: Slide ${slide.slideNumber})*`
+          });
+        }
+        return generatedChunks;
+      }
+
       let currentCluster = [];
       let currentMainConcept = '';
       let clusterSlides = [];
@@ -561,7 +754,63 @@ RULES:
       return generatedChunks;
     }
 
-    // 2. Document/PDF Structural Semantic Chunking
+    // 2. PDF/DOCX page-aware structural chunking
+    if (Array.isArray(pages) && pages.length > 0) {
+      let cluster = [];
+      let clusterPages = [];
+      let clusterLen = 0;
+      let clusterTitle = pages[0]?.title || cleanFileName;
+
+      const flushCluster = () => {
+        if (cluster.length === 0) return;
+        const chunkContent = cluster.join('\n\n');
+        const sourcePage = clusterPages[0] || 1;
+        const concept = clusterTitle || cleanFileName;
+        generatedChunks.push({
+          chunkIndex: generatedChunks.length,
+          concept,
+          topic: cleanFileName,
+          subtopic: null,
+          chunkType: /define|definition|refers to/i.test(chunkContent) ? 'definition' : 'concept',
+          sourcePage,
+          sourceSlides: null,
+          sourceSection: `Pages ${clusterPages.join(', ')}`,
+          prerequisites: null,
+          keyPoints: [],
+          relatedConcepts: [],
+          semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+          chunkText: `### 📌 Concept: ${concept}\n**Topic:** ${cleanFileName}\n\n${chunkContent}\n\n*(Source: Page ${sourcePage}${clusterPages.length > 1 ? `-${clusterPages[clusterPages.length - 1]}` : ''} - ${concept})*`
+        });
+        cluster = [];
+        clusterPages = [];
+        clusterLen = 0;
+      };
+
+      for (const page of pages) {
+        const pageText = (page.text || '').trim();
+        if (!pageText) continue;
+        const title = (page.title || pageText.split('\n')[0] || cleanFileName).slice(0, 80);
+        if (clusterLen + pageText.length > 1800 && cluster.length > 0) {
+          flushCluster();
+          clusterTitle = title;
+        }
+        if (cluster.length === 0) {
+          clusterTitle = title;
+        }
+        cluster.push(pageText);
+        clusterPages.push(page.page_number || generatedChunks.length + 1);
+        clusterLen += pageText.length;
+        if (clusterLen > 1800) {
+          flushCluster();
+        }
+      }
+      flushCluster();
+      if (generatedChunks.length > 0) {
+        return generatedChunks;
+      }
+    }
+
+    // 3. Document/PDF Structural Semantic Chunking from raw text
     const paragraphs = (fullText || '').split(/\n\s*\n/);
     let currentTopic = cleanFileName;
     let currentConcept = cleanFileName;
@@ -676,6 +925,14 @@ RULES:
         if (s.paragraphs?.length) sDesc += s.paragraphs.join('\n') + '\n';
         if (s.bulletPoints?.length) sDesc += s.bulletPoints.join('\n') + '\n';
         if (s.tables?.length) sDesc += s.tables.join('\n') + '\n';
+        if (s.images?.length) {
+          const visualText = s.images.map(img => img.ocrText).filter(Boolean).join('\n');
+          if (visualText) {
+            sDesc += `Visible training text read from slide images (explain this to learners as a trainer would):\n${visualText}\n`;
+          } else {
+            sDesc += `Visuals on Slide: ` + s.images.map(img => img.name || img.fileName).join('; ') + '\n';
+          }
+        }
         if (s.speakerNotes) sDesc += `Speaker Notes: ${s.speakerNotes}\n`;
         return sDesc.trim();
       }).join('\n\n');
@@ -697,6 +954,7 @@ CRITICAL CONTENT-FIRST DIRECTIVES:
    - Study ALL slides or pages before generating the curriculum.
    - Understand the overall purpose, domain, and specific subject matter of the presentation.
    - Discover the real topics from the content itself (e.g. for Driver Training: PPE requirements, driver wellness, pre-operation checklists, safe walkways, parking, speed limits, trailer operations, reversing, blind spots, load height, coupling/decoupling, coil securing, lifting safety, damaged equipment, unstable loads, consequence management).
+   - IMAGE-BASED SLIDES: If a slide has little typed text but includes "Visible training text read from slide images", that OCR text IS the lesson. Explain it the way a shop-floor trainer would teach operators: what the picture shows, why it matters, and what the learner must do.
 
 2. ABSOLUTELY NO FORCED TEMPLATES OR TARGET NUMBERS:
    - NEVER force 5 modules, 4 modules, or any fixed number of modules/chapters.
@@ -785,7 +1043,7 @@ CRITICAL CONTENT-FIRST DIRECTIVES:
 
     try {
       const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
-      const parsed = JSON.parse(aiResponse.replace(/```json/g, '').replace(/```/g, '').trim());
+      const parsed = this._parseJsonObject(aiResponse);
       if (parsed.title && Array.isArray(parsed.lessons) && parsed.lessons.length > 0 && parsed.quiz) {
         const slideImageMap = new Map();
         if (Array.isArray(slides)) {
@@ -857,7 +1115,7 @@ Generate an interactive multiple-choice assessment quiz for the specific lesson:
 Target Language: ${language}.
 
 CRITICAL QUIZ GENERATION RULES:
-1. Target Language: All questions, answer options, and explanations MUST be written fluently in ${language} (e.g. if Tamil (தமிழ்), Chinese (中文), Malay (Bahasa Melayu), Bangla (বাংলা), or English).
+1. Target Language: All questions, answer options, and explanations MUST be written fluently in ${language} only (e.g. if Tamil (தமிழ்), Chinese (中文), Malay (Bahasa Melayu), Bangla (বাংলা), or English). Do not mix languages.
 2. Generate EXACTLY 5 multiple-choice questions derived STRICTLY from the provided document context for this specific lesson/chapter.
 3. Questions MUST test understanding of concepts in this chapter only.
 4. Randomly vary the position of the correct answer across questions so answerIndex is distributed among 0, 1, 2, and 3 (Options A, B, C, D) instead of always choosing Option 0.
@@ -877,7 +1135,7 @@ CRITICAL QUIZ GENERATION RULES:
 
     try {
       const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
-      const parsed = JSON.parse(aiResponse.replace(/```json/g, '').replace(/```/g, '').trim());
+      const parsed = this._parseJsonObject(aiResponse);
       if (parsed.quiz && Array.isArray(parsed.quiz) && parsed.quiz.length > 0) {
         return parsed.quiz;
       }
@@ -955,11 +1213,12 @@ Current Lesson Topic: "${lessonTitle}".
 Active Teaching Language: ${language}.
 
 PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
-1. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
-2. Comprehensive Teaching Duration: Provide an extensive, thorough, and high-value lecture (10-15 clear instructional paragraphs/points). Speak as a world-class instructor explaining each concept step-by-step with depth rather than providing short superficial summaries.
-3. Grounding: Draw core principles, terminology, and workflows directly from the retrieved document context.
-4. Technical Terminology: Keep recognized technical terms (e.g. PPE, Reversing, Blind Spot, Coupling, Lashing, Stanchions, Checklist) in their standard form alongside the explanation in ${language}.
-5. Blackboard Presentation Structure:
+1. LANGUAGE LOCK: The student selected ${language}. Write EVERY sentence, heading, bullet, and question in ${language} only. Do not mix languages. If the retrieved context is Bangla, Tamil, Chinese, Malay, or any other language, fully translate the teaching into ${language}. Never leave source-language sentences on screen when the target is English.
+2. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
+3. Comprehensive Teaching Duration: Provide an extensive, thorough, and high-value lecture (10-15 clear instructional paragraphs/points). Speak as a world-class instructor explaining each concept step-by-step with depth rather than providing short superficial summaries.
+4. Grounding: Draw core principles, terminology, and workflows directly from the retrieved document context.
+5. Technical Terminology: Keep recognized technical terms (e.g. PPE, Reversing, Blind Spot, Coupling, Lashing, Stanchions, Checklist) in their standard form alongside the explanation in ${language}.
+6. Blackboard Presentation Structure:
    Structure your teaching response into these clear, rich pedagogical sections:
    - ### 💡 Overview & Core Motivation (Detailed intuitive breakdown of what this topic is, why it is critical, and where it fits in the broader training)
    - #### 🎯 Mandatory Requirements & Protocols (4-6 comprehensive bullet points detailing essential rules, safety gear, procedures, or limits)
@@ -969,7 +1228,7 @@ PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
    - #### 📌 Key Safety Takeaways (3 high-value bullet points summarizing the core learnings)
    - #### ⚡ Knowledge Check & Reflection (An insightful question for the learner to test their understanding)`;
 
-    const userPrompt = `Retrieved Course Context:\n${contextText}\n\nLesson to teach: "${lessonTitle}"\nSelected Teaching Language: ${language}`;
+    const userPrompt = `Retrieved Course Context:\n${contextText}\n\nLesson to teach: "${lessonTitle}"\nSelected Teaching Language: ${language}\nLANGUAGE LOCK: Output the full lecture in ${language} only. Translate any source text that is not already in ${language}.`;
 
     try {
       return await this._callLLM(systemPrompt, userPrompt, false);

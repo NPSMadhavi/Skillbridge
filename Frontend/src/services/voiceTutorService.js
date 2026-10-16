@@ -701,15 +701,26 @@ export class VoiceTutorManager {
      */
 
 
-    if (
-      isPlaying &&
-      this.isRecording
-    ) {
+    if (isPlaying) {
+      if (this.isRecording) {
+        this.stopMediaRecording();
+        this.clearBuffers();
+      }
+      // Lecture audio must not be treated as a follow-up question.
+      if (
+        this.state === TutorState.FOLLOW_UP_LISTENING ||
+        this.state === TutorState.ACTIVE_LISTENING
+      ) {
+        this.setState(TutorState.SLEEPING);
+      }
+    }
+  }
 
-      this.stopMediaRecording();
-
-      this.clearBuffers();
-
+  noteSpokenText(spokenText = '') {
+    if (!spokenText) return;
+    this.recentAriaUtterances.push(spokenText);
+    if (this.recentAriaUtterances.length > 12) {
+      this.recentAriaUtterances.shift();
     }
   }
 
@@ -1174,11 +1185,20 @@ export class VoiceTutorManager {
            * - In ACTIVE_LISTENING / FOLLOW_UP_LISTENING: records user question.
            * - In SLEEPING: records speech candidates for Whisper wake-word / interruption detection.
            */
+          if (this.isTutorSpeaking || Date.now() < this.ttsMutedUntil) {
+            this.speechFramesCount = 0;
+            return;
+          }
+
           if (
             this.state === TutorState.ACTIVE_LISTENING ||
             this.state === TutorState.FOLLOW_UP_LISTENING ||
             this.state === TutorState.SLEEPING
           ) {
+            if (this.isLecturePlaying && this.state !== TutorState.SLEEPING) {
+              this.speechFramesCount = 0;
+              return;
+            }
             if (rms >= this.options.speechRmsThreshold) {
               this.speechFramesCount += 1;
 

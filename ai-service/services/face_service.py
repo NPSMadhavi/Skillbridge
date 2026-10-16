@@ -20,8 +20,8 @@ class FaceService:
             keep_all=False, 
             image_size=160, 
             margin=14, 
-            min_face_size=40,
-            thresholds=[0.6, 0.7, 0.7],
+            min_face_size=30,
+            thresholds=[0.5, 0.6, 0.6],
             device='cpu'
         )
         # Pretrained FaceNet model on VGGFace2 to extract 512-dim embedding.
@@ -35,7 +35,11 @@ class FaceService:
         try:
             if ',' in base64_str:
                 base64_str = base64_str.split(',')[1]
-            
+            base64_str = base64_str.strip()
+            padding_needed = len(base64_str) % 4
+            if padding_needed:
+                base64_str += '=' * (4 - padding_needed)
+
             image_data = base64.b64decode(base64_str)
             image = Image.open(io.BytesIO(image_data)).convert('RGB')
             return image
@@ -48,13 +52,25 @@ class FaceService:
         """
         # Run face detection and cropping. MTCNN returns aligned tensor (3, 160, 160).
         with torch.no_grad():
-            cropped_face = self.detector(image)
+            cropped_face = None
+            try:
+                w, h = image.size
+                if w >= 20 and h >= 20:
+                    cropped_face = self.detector(image)
+                    if cropped_face is None and (w > 640 or h > 480):
+                        resized = image.resize((w // 2, h // 2))
+                        cropped_face = self.detector(resized)
+            except Exception as ex:
+                print(f"Face detector caught error on input frame: {str(ex)}")
+                cropped_face = None
+
             if cropped_face is None:
                 raise ValueError("No face detected in the image. Ensure proper lighting and look directly at the camera.")
             
             # Generate embedding by adding batch dim (1, 3, 160, 160)
             embedding_tensor = self.model(cropped_face.unsqueeze(0))
             embedding = embedding_tensor.squeeze(0).tolist()
+
             
             # Normalize to unit length
             vec = np.array(embedding)

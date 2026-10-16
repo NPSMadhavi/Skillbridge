@@ -2,6 +2,7 @@ import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
 import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import mammoth from 'mammoth';
+import { enrichDocumentVisuals, extractEmbeddedRasterImages } from './visualTextService.js';
 
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
@@ -282,7 +283,8 @@ function extractPptx(buffer) {
         }
       }
 
-      // Extract images/diagrams on this slide from <p:pic>, <a:blipFill>, <p:graphicFrame>, and slide rels
+      // Extract images actually drawn on THIS slide (pics, grouped pics, fills, background).
+      // Do not attach every media relationship — that copies the same images onto every chunk.
       const slideImages = [];
       if (relsEntry) {
         try {
@@ -296,13 +298,31 @@ function extractPptx(buffer) {
             const type = rel['@_Type'] || '';
             const target = rel['@_Target'] || '';
             if (rel['@_Id'] && target && (type.includes('image') || target.includes('media/'))) {
-              let cleanTarget = target;
-              if (!cleanTarget.startsWith('ppt/')) {
+              let cleanTarget = target.replace(/\\/g, '/');
+              if (!cleanTarget.toLowerCase().startsWith('ppt/')) {
                 cleanTarget = 'ppt/' + cleanTarget.replace(/^\.\.\//, '').replace(/^\//, '');
               }
               rIdToMedia.set(rel['@_Id'], cleanTarget.toLowerCase());
             }
           }
+
+          const collectBlipRIds = (node, out = []) => {
+            if (!node || typeof node !== 'object') return out;
+            if (Array.isArray(node)) {
+              for (const item of node) collectBlipRIds(item, out);
+              return out;
+            }
+            const blip = node['a:blip'];
+            if (blip) {
+              const rId = blip['@_r:embed'] || blip['@_r:link'];
+              if (rId && !out.includes(rId)) out.push(rId);
+            }
+            for (const key of Object.keys(node)) {
+              if (key === 'a:blip') continue;
+              collectBlipRIds(node[key], out);
+            }
+            return out;
+          };
 
           if (rIdToMedia.size > 0) {
             const addImageFromRel = (rId, name = '', descr = '') => {
@@ -312,10 +332,10 @@ function extractPptx(buffer) {
               if (!mediaEntry) return;
 
               const imgBuffer = mediaEntry.getData();
-              if (!imgBuffer || imgBuffer.length < 120) return; // Skip zero/tiny artifacts
+              if (!imgBuffer || imgBuffer.length < 120) return;
 
               const ext = mediaPath.split('.').pop().toLowerCase();
-              if (ext === 'wmf' || ext === 'emf') return; // Skip unsupported binary vector icons
+              if (ext === 'wmf' || ext === 'emf') return;
 
               const mimeMap = {
                 png: 'image/png',
@@ -336,6 +356,7 @@ function extractPptx(buffer) {
                   fileName: mediaPath.split('/').pop(),
                   mediaPath,
                   mimetype,
+                  buffer: imgBuffer,
                   dataUrl,
                   name: name || `Slide ${slideIndex} Visual`,
                   descr: descr || '',
@@ -346,33 +367,26 @@ function extractPptx(buffer) {
               }
             };
 
-            // Inspect <p:pic> shapes
-            const picShapes = Array.isArray(spTree['p:pic']) ? spTree['p:pic'] : [spTree['p:pic']].filter(Boolean);
-            for (const pic of picShapes) {
-              const blip = pic?.['p:blipFill']?.['a:blip'];
-              const rId = blip?.['@_r:embed'] || blip?.['@_r:link'];
-              const cNvPr = pic?.['p:nvPicPr']?.['p:cNvPr'];
-              const name = cNvPr?.['@_name'] || '';
-              const descr = cNvPr?.['@_descr'] || cNvPr?.['@_title'] || '';
-              addImageFromRel(rId, name, descr);
-            }
+            const usedRIds = collectBlipRIds(spTree);
+            const bgTree = slideXml?.['p:sld']?.['p:cSld']?.['p:bg'];
+            collectBlipRIds(bgTree, usedRIds);
 
-            // Inspect <p:sp> with blipFill (shapes with image fills)
-            for (const sp of shapes) {
-              const blip = sp?.['p:spPr']?.['a:blipFill']?.['a:blip'] || sp?.['a:blipFill']?.['a:blip'];
-              if (blip) {
-                const rId = blip['@_r:embed'] || blip['@_r:link'];
-                const cNvPr = sp?.['p:nvSpPr']?.['p:cNvPr'];
-                const name = cNvPr?.['@_name'] || '';
-                const descr = cNvPr?.['@_descr'] || '';
-                addImageFromRel(rId, name, descr);
+            if (usedRIds.length > 0) {
+              for (const rId of usedRIds) {
+                addImageFromRel(rId, `Slide ${slideIndex} Visual`, '');
               }
-            }
-
-            // Fallback: If pics weren't explicitly captured in shape tree but rels exist, map them
-            if (slideImages.length === 0) {
-              for (const [rId] of rIdToMedia.entries()) {
-                addImageFromRel(rId, `Slide ${slideIndex} Visual Reference`, '');
+            } else {
+              // Last resort: only the largest unique photo on this slide, never every shared logo.
+              const ranked = [...rIdToMedia.entries()]
+                .map(([rId, path]) => {
+                  const entry = entryMap.get(path);
+                  const size = entry ? entry.getData().length : 0;
+                  return { rId, path, size };
+                })
+                .filter(item => item.size >= 25000)
+                .sort((a, b) => b.size - a.size);
+              if (ranked[0]) {
+                addImageFromRel(ranked[0].rId, `Slide ${slideIndex} Visual`, '');
               }
             }
           }
@@ -504,8 +518,87 @@ function extractPptBinary(buffer) {
     });
   }
 
+  const embeddedImages = extractEmbeddedRasterImages(buffer);
+  if (embeddedImages.length > 0 && slides.length === 0) {
+    for (let i = 0; i < embeddedImages.length; i++) {
+      const img = embeddedImages[i];
+      img.slideNumber = i + 1;
+      img.slideTitle = `Slide ${i + 1}`;
+      slides.push({
+        slideNumber: i + 1,
+        title: `Slide ${i + 1}`,
+        headings: [],
+        bulletPoints: [],
+        paragraphs: [],
+        tables: [],
+        images: [img],
+        speakerNotes: '',
+        fullText: `--- Slide ${i + 1}: Visual training slide ---\n[Visual Content on Slide ${i + 1}]: ${img.name}`
+      });
+    }
+  } else if (embeddedImages.length > 0) {
+    for (let i = 0; i < Math.min(embeddedImages.length, slides.length); i++) {
+      const target = slides[i];
+      target.images = target.images || [];
+      embeddedImages[i].slideNumber = target.slideNumber;
+      target.images.push(embeddedImages[i]);
+    }
+  }
+
   const fullText = slides.map(s => s.fullText).join('\n\n');
-  return { slides, fullText };
+  return { slides, fullText, images: slides.flatMap(s => s.images || []) };
+}
+
+/**
+ * Renders a single PDF page to plain text with line breaks preserved.
+ */
+async function renderPdfPageText(pageData) {
+  const textContent = await pageData.getTextContent({
+    normalizeWhitespace: false,
+    disableCombineTextItems: false
+  });
+  let lastY;
+  let text = '';
+  for (const item of textContent.items || []) {
+    if (lastY == item.transform[5] || !lastY) {
+      text += item.str;
+    } else {
+      text += '\n' + item.str;
+    }
+    lastY = item.transform[5];
+  }
+  return text;
+}
+
+function splitTextIntoPages(text, startPage = 1) {
+  const pages = [];
+  const paragraphs = String(text || '').split(/\n\s*\n/);
+  let currentPageText = '';
+  let pageNumber = startPage;
+
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (!trimmed) continue;
+    if (currentPageText.length + trimmed.length > 1400 && currentPageText.length > 0) {
+      pages.push({
+        page_number: pageNumber,
+        text: currentPageText.trim(),
+        title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
+      });
+      pageNumber += 1;
+      currentPageText = trimmed + '\n\n';
+    } else {
+      currentPageText += trimmed + '\n\n';
+    }
+  }
+  if (currentPageText.trim().length > 0) {
+    pages.push({
+      page_number: pageNumber,
+      text: currentPageText.trim(),
+      title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
+    });
+  }
+  return pages;
 }
 
 /**
@@ -541,6 +634,7 @@ export async function extractDocument(file) {
       const binRes = extractPptBinary(buffer);
       slides = binRes.slides;
       text = binRes.fullText;
+      images = binRes.images || [];
     }
   }
   // 2. Legacy PPT Extraction
@@ -549,27 +643,57 @@ export async function extractDocument(file) {
     const pptRes = extractPptBinary(buffer);
     slides = pptRes.slides;
     text = pptRes.fullText;
-    console.log(`[Doc Extractor] PPT extracted: ${slides.length} slides, ${text.length} characters.`);
+    images = pptRes.images || [];
+    console.log(`[Doc Extractor] PPT extracted: ${slides.length} slides, ${images.length} visuals/images, ${text.length} characters.`);
   }
-  // 3. PDF Extraction
+  // 3. PDF Extraction — collect real per-page text. Try newer pdf.js first;
+  // v1.10.100 rejects many modern Word/Chrome PDFs with "bad XRef entry".
   else if (ext === 'pdf' || mimetype === 'application/pdf') {
     fileType = 'pdf';
-    const pdfData = await pdfParse(buffer);
-    text = (pdfData.text || '').replace(/\r\n/g, '\n');
-
-    const rawPages = text.split(/\f|\u000c/);
-    let pageNumber = 1;
-    for (const rawText of rawPages) {
-      const cleanText = rawText.trim();
-      if (cleanText.length > 10) {
-        pages.push({
-          page_number: pageNumber++,
-          text: cleanText,
-          title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${pageNumber}`
+    const pdfVersions = ['v2.0.550', 'v1.10.100', 'v1.10.88', 'v1.9.426'];
+    let lastPdfErr = null;
+    let parsed = false;
+    for (const version of pdfVersions) {
+      try {
+        const collectedPages = [];
+        const pdfData = await pdfParse(new Uint8Array(buffer), {
+          version,
+          pagerender: async (pageData) => {
+            const pageText = await renderPdfPageText(pageData);
+            const cleanText = (pageText || '').trim();
+            if (cleanText.length > 0) {
+              collectedPages.push({
+                page_number: collectedPages.length + 1,
+                text: cleanText,
+                title: cleanText.split('\n').find(l => l.trim())?.slice(0, 80) || `Page ${collectedPages.length + 1}`
+              });
+            }
+            return pageText || '';
+          }
         });
+        pages = collectedPages;
+        text = (pdfData.text || pages.map(p => p.text).join('\n\n')).replace(/\r\n/g, '\n');
+        if (pages.length === 0 && text.trim().length > 10) {
+          const formFeedPages = text.split(/\f|\u000c/).map(p => p.trim()).filter(p => p.length > 10);
+          pages = formFeedPages.length > 1
+            ? formFeedPages.map((cleanText, idx) => ({
+                page_number: idx + 1,
+                text: cleanText,
+                title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${idx + 1}`
+              }))
+            : splitTextIntoPages(text);
+        }
+        parsed = true;
+        console.log(`[Doc Extractor] PDF extracted with ${version}: ${pages.length} pages, ${text.length} characters.`);
+        break;
+      } catch (pdfErr) {
+        lastPdfErr = pdfErr;
+        console.warn(`[Doc Extractor] PDF parse with ${version} failed:`, pdfErr.message);
       }
     }
-    console.log(`[Doc Extractor] PDF extracted: ${pages.length} pages, ${text.length} characters.`);
+    if (!parsed) {
+      throw new Error('Failed to extract text from PDF. The file may be scanned, encrypted, or corrupted.');
+    }
   }
   // 4. DOCX / DOC Extraction
   else if (
@@ -631,34 +755,10 @@ export async function extractDocument(file) {
 
   // If pages/slides are not already structured, build structured page segments (~1200-1500 chars)
   if (pages.length === 0 && slides.length === 0 && text.length > 0) {
-    const paragraphs = text.split(/\n\s*\n/);
-    let currentPageText = '';
-    let pageNumber = 1;
-
-    for (const para of paragraphs) {
-      const trimmed = para.trim();
-      if (!trimmed) continue;
-      if (currentPageText.length + trimmed.length > 1400 && currentPageText.length > 0) {
-        pages.push({
-          page_number: pageNumber++,
-          text: currentPageText.trim(),
-          title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
-        });
-        currentPageText = trimmed + '\n\n';
-      } else {
-        currentPageText += trimmed + '\n\n';
-      }
-    }
-    if (currentPageText.trim().length > 0) {
-      pages.push({
-        page_number: pageNumber++,
-        text: currentPageText.trim(),
-        title: currentPageText.split('\n')[0]?.slice(0, 80) || `Section ${pageNumber}`
-      });
-    }
+    pages = splitTextIntoPages(text);
   }
 
-  return {
+  const doc = {
     fileType,
     fileName: originalname,
     text,
@@ -666,6 +766,14 @@ export async function extractDocument(file) {
     slides,
     images
   };
+
+  // Image-only PPT/PDF slides: read visible text from pictures so ARIA can teach from them
+  const hasVisuals = (slides || []).some(s => (s.images || []).length > 0) || (images || []).length > 0;
+  if (hasVisuals) {
+    await enrichDocumentVisuals(doc);
+  }
+
+  return doc;
 }
 
 export default {

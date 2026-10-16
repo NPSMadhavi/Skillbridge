@@ -3,6 +3,7 @@ import authRoutes from './authRoutes.js';
 import userRoutes from './userRoutes.js';
 import courseRoutes from './courseRoutes.js';
 import statsRoutes from './statsRoutes.js';
+import adminManagementRoutes from './adminManagementRoutes.js';
 
 const router = express.Router();
 
@@ -11,5 +12,6 @@ router.use('/', authRoutes);
 router.use('/', userRoutes);
 router.use('/', courseRoutes);
 router.use('/', statsRoutes);
+router.use('/', adminManagementRoutes);
 
 export default router;

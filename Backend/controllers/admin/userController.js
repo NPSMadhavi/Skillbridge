@@ -42,23 +42,21 @@ export const checkUserExists = async (req, res) => {
         select: { id: true, fullName: true, finNumber: true, email: true, faceImage: true, faceEmbedding: true },
       });
 
-      if (candidates.length > 0) {
-        const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
-        if (verifyResult && verifyResult.matched && verifyResult.id) {
-          const matchedUser = candidates.find((c) => c.id === verifyResult.id);
-          return res.json({
-            exists: true,
-            field: 'faceIdData',
-            message: `User already exists with this face (${matchedUser?.fullName || 'Registered User'} - FIN: ${matchedUser?.finNumber || 'N/A'}).`,
-            user: {
-              id: matchedUser?.id,
-              fullName: matchedUser?.fullName,
-              finNumber: matchedUser?.finNumber,
-              email: matchedUser?.email,
-              faceImage: matchedUser?.faceImage,
-            },
-          });
-        }
+      const verifyResult = await pythonService.verifyFace(faceIdData, candidates);
+      if (verifyResult && verifyResult.matched && verifyResult.id) {
+        const matchedUser = candidates.find((c) => c.id === verifyResult.id);
+        return res.json({
+          exists: true,
+          field: 'faceIdData',
+          message: `User already exists with this face (${matchedUser?.fullName || 'Registered User'} - FIN: ${matchedUser?.finNumber || 'N/A'}).`,
+          user: {
+            id: matchedUser?.id,
+            fullName: matchedUser?.fullName,
+            finNumber: matchedUser?.finNumber,
+            email: matchedUser?.email,
+            faceImage: matchedUser?.faceImage,
+          },
+        });
       }
     }
 
@@ -284,6 +282,7 @@ export const updateUser = async (req, res) => {
         faceEmbedding = await pythonService.registerFace(faceIdData);
         faceImage = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
       } catch (err) {
+        console.error('[BACKEND] Face update error in updateUser:', err.message, err.stack);
         if (err.message && (err.message.includes('already exists') || err.message.includes('already registered'))) {
           return res.status(400).json({ error: err.message });
         }

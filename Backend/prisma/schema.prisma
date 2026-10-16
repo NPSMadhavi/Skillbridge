@@ -29,6 +29,10 @@ model Admin {
   id           String   @id @default(uuid())
   email        String   @unique
   passwordHash String
+  fullName     String?
+  nricFin      String?  @unique
+  phone        String?
+  department   String?
   createdAt    DateTime @default(now())
 }
 

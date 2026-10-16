@@ -273,7 +273,7 @@ const RegisterUser = () => {
         console.warn('Face duplicate check warning:', checkErr)
         const errMsg = checkErr.message || ''
         if (
-          errMsg.toLowerCase().includes('face') ||
+          checkErr.matchedUser ||
           errMsg.toLowerCase().includes('already exists') ||
           errMsg.toLowerCase().includes('already registered')
         ) {
@@ -294,8 +294,8 @@ const RegisterUser = () => {
           return
         }
         setCapturing(false)
-        setCameraError(errMsg || 'Failed to verify face uniqueness. Please try again.')
-        toast.error(errMsg || 'Failed to verify face uniqueness.')
+        setCameraError(errMsg || 'Failed to detect face or verify face uniqueness. Please try again.')
+        toast.error(errMsg || 'Failed to detect face or verify uniqueness.')
         return
       }
 
@@ -389,8 +389,11 @@ const RegisterUser = () => {
       setStatusBanner({ type: 'ok', text: `${res.user.fullName} registered successfully. You can assign courses in Course Assignments.` })
     } catch (err) {
       const errorMsg = err.message || 'Registration failed.'
-      if (errorMsg.toLowerCase().includes('face') || err.matchedUser) {
+      if (err.matchedUser || errorMsg.toLowerCase().includes('already exists') || errorMsg.toLowerCase().includes('already registered')) {
         setExistingFaceUser(err.matchedUser || { fullName: 'Registered User' })
+        setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
+      } else if (errorMsg.toLowerCase().includes('face') || errorMsg.toLowerCase().includes('biometric')) {
+        setExistingFaceUser(null)
         setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
       } else if (errorMsg.toLowerCase().includes('fin number')) {
         setErrors((prev) => ({ ...prev, finNumber: errorMsg }))
