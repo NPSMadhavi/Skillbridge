@@ -27,7 +27,7 @@ def transcribe_audio_bytes(file_bytes: bytes, filename: str = "voice.webm", lang
     whisper_lang = None
     if language:
         l = str(language).lower().strip()
-        if l in ['en', 'zh', 'ms', 'ta', 'bn']:
+        if l in ['en', 'zh', 'ms', 'ta', 'bn', 'te']:
             whisper_lang = l
         elif 'chinese' in l or '中文' in l:
             whisper_lang = 'zh'
@@ -37,6 +37,8 @@ def transcribe_audio_bytes(file_bytes: bytes, filename: str = "voice.webm", lang
             whisper_lang = 'ta'
         elif 'bangla' in l or 'bengali' in l or 'বাংলা' in l:
             whisper_lang = 'bn'
+        elif 'telugu' in l or 'తెలుగు' in l:
+            whisper_lang = 'te'
         elif 'english' in l:
             whisper_lang = 'en'
     

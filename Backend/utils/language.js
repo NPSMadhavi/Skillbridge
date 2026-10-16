@@ -4,6 +4,7 @@ export const LANGUAGE_INFO = {
   ms: { code: 'ms', name: 'Malay (Bahasa Melayu)', speechCode: 'ms-MY' },
   ta: { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' },
   bn: { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' },
+  te: { code: 'te', name: 'Telugu (తెలుగు)', speechCode: 'te-IN' },
 };
 
 export function resolveLanguageInfo(lang) {
@@ -22,6 +23,9 @@ export function resolveLanguageInfo(lang) {
   if (l === 'bn' || l === 'bn-bd' || l === 'bd' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) {
     return LANGUAGE_INFO.bn;
   }
+  if (l === 'te' || l === 'te-in' || l.includes('telugu') || l.includes('తెలుగు')) {
+    return LANGUAGE_INFO.te;
+  }
 
   return LANGUAGE_INFO.en;
 }
@@ -31,11 +35,13 @@ export function detectDominantScript(text) {
   const sample = String(text);
   const bn = (sample.match(/[\u0980-\u09FF]/g) || []).length;
   const ta = (sample.match(/[\u0B80-\u0BFF]/g) || []).length;
+  const te = (sample.match(/[\u0C00-\u0C7F]/g) || []).length;
   const zh = (sample.match(/[\u4E00-\u9FFF]/g) || []).length;
   const latin = (sample.match(/[A-Za-z]/g) || []).length;
   const scored = [
     ['bn', bn],
     ['ta', ta],
+    ['te', te],
     ['zh', zh],
     ['en', latin],
   ].sort((a, b) => b[1] - a[1]);
@@ -54,7 +60,8 @@ export function textMatchesLanguage(text, languageCode) {
 
   if (requested === 'bn') return detected === 'bn';
   if (requested === 'ta') return detected === 'ta';
+  if (requested === 'te') return detected === 'te';
   if (requested === 'zh') return detected === 'zh';
-  // English / Malay are Latin; reject if Bangla, Tamil, or Chinese dominate the script
+  // English / Malay are Latin; reject if Bangla, Tamil, Telugu, or Chinese dominate the script
   return detected === 'en' || detected === 'ms';
 }

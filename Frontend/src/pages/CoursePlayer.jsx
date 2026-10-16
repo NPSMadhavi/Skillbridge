@@ -17,6 +17,7 @@ const LANGUAGES = [
   { value: 'ms', label: 'Malay (Bahasa Melayu)', code: 'MS', native: 'Bahasa Melayu' },
   { value: 'ta', label: 'Tamil (தமிழ்)', code: 'TA', native: 'தமிழ்' },
   { value: 'bn', label: 'Bangla (বাংলা)', code: 'BN', native: 'বাংলা' },
+  { value: 'te', label: 'Telugu (తెలుగు)', code: 'TE', native: 'తెలుగు' },
 ];
 
 const SPEECH_LANGUAGES = {
@@ -25,6 +26,7 @@ const SPEECH_LANGUAGES = {
   ms: 'ms-MY',
   ta: 'ta-IN',
   bn: 'bn-BD',
+  te: 'te-IN',
 };
 
 const GREETINGS = {
@@ -33,6 +35,7 @@ const GREETINGS = {
   ms: "Hai! Saya ARIA, tutor AI peribadi anda. Tanya saya sebarang soalan tentang pelajaran ini dan saya akan menerangkannya untuk anda!",
   ta: "வணக்கம்! நான் ARIA, உங்கள் தனிப்பட்ட AI ஆசிரியர். இந்த பாடம் குறித்த எந்த கேள்வியையும் என்னிடம் கேளுங்கள், நான் உங்களுக்கு விளக்குகிறேன்!",
   bn: "হ্যালো! আমি ARIA, আপনার ব্যক্তিগত AI টিউটর। এই পাঠ সম্পর্কে যে কোনো প্রশ্ন আমাকে জিজ্ঞাসা করুন, আমি আপনাকে বুঝিয়ে দেব!",
+  te: "నమస్కారం! నేను ARIA, మీ వ్యక్తిగత AI ట్యూటర్. ఈ పాఠం గురించి ఏ ప్రశ్నైనా నన్ను అడగండి, నేను మీకు వివరిస్తాను!",
 };
 
 const normalizeLanguageCode = (pref) => {
@@ -42,6 +45,7 @@ const normalizeLanguageCode = (pref) => {
   if (l === 'ms' || l.includes('malay') || l.includes('melayu') || l === 'my') return 'ms';
   if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்') || l === 'in') return 'ta';
   if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা') || l === 'bd') return 'bn';
+  if (l === 'te' || l.includes('telugu') || l.includes('తెలుగు')) return 'te';
   if (l === 'en' || l.includes('english')) return 'en';
   return null;
 };
@@ -776,6 +780,11 @@ const CoursePlayer = ({
       const bestBn = bnVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('tanishaa'))
       if (bestBn) return bestBn
       if (bnVoices.length > 0) return bnVoices[0]
+    } else if (l === 'te') {
+      const teVoices = voices.filter(v => v.lang.toLowerCase().startsWith('te') || v.lang.toLowerCase().includes('telugu'))
+      const bestTe = teVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('shruti') || v.name.toLowerCase().includes('mohan'))
+      if (bestTe) return bestTe
+      if (teVoices.length > 0) return teVoices[0]
     }
 
     const match = voices.find(v => v.lang.toLowerCase().startsWith(l) && !isDisallowed(v.name))

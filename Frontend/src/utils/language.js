@@ -6,6 +6,7 @@ export const LANGUAGE_OPTIONS = [
   { value: 'ms', code: 'MS', name: 'Malay (Bahasa Melayu)', native: 'Bahasa Melayu' },
   { value: 'ta', code: 'TA', name: 'Tamil (தமிழ்)', native: 'தமிழ்' },
   { value: 'bn', code: 'BN', name: 'Bangla (বাংলা)', native: 'বাংলা' },
+  { value: 'te', code: 'TE', name: 'Telugu (తెలుగు)', native: 'తెలుగు' },
 ]
 
 export function normalizeLanguageCode(pref) {
@@ -15,6 +16,7 @@ export function normalizeLanguageCode(pref) {
   if (l === 'ms' || l.includes('malay') || l.includes('melayu') || l === 'my') return 'ms'
   if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'ta'
   if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা') || l === 'bd') return 'bn'
+  if (l === 'te' || l.includes('telugu') || l.includes('తెలుగు')) return 'te'
   if (l === 'en' || l.includes('english')) return 'en'
   return null
 }
@@ -86,11 +88,13 @@ export function detectDominantScript(text) {
   const sample = String(text)
   const bn = (sample.match(/[\u0980-\u09FF]/g) || []).length
   const ta = (sample.match(/[\u0B80-\u0BFF]/g) || []).length
+  const te = (sample.match(/[\u0C00-\u0C7F]/g) || []).length
   const zh = (sample.match(/[\u4E00-\u9FFF]/g) || []).length
   const latin = (sample.match(/[A-Za-z]/g) || []).length
   const scored = [
     ['bn', bn],
     ['ta', ta],
+    ['te', te],
     ['zh', zh],
     ['en', latin],
   ].sort((a, b) => b[1] - a[1])
@@ -108,6 +112,7 @@ export function textMatchesLanguage(text, languageCode) {
   const detected = detectDominantScript(text)
   if (requested === 'bn') return detected === 'bn'
   if (requested === 'ta') return detected === 'ta'
+  if (requested === 'te') return detected === 'te'
   if (requested === 'zh') return detected === 'zh'
   return detected === 'en' || detected === 'ms'
 }

@@ -1100,7 +1100,7 @@ CRITICAL CONCISE & UNDERSTANDABLE TUTORING RULES:
 1. SHORT & DIRECT (MAX 2-3 SENTENCES): Keep your answer SHORT, CONCISE, and TO THE POINT. Deliver at most 2 to 3 clear, conversational sentences (around 35-60 words). Never output long essays, large lists of bullet points, or multiple paragraphs.
 2. SIMPLE & INTUITIVE: Explain the concept in plain, simple, easily digestible words that any beginner can understand immediately.
 3. VOICE & AUDIO FRIENDLY: Your answer will be spoken aloud to the student in real-time via text-to-speech. Short and clear answers allow the student to quickly understand without lengthy interruptions to their lesson.
-4. TARGET TEACHING LANGUAGE: Generate your ENTIRE answer in ${targetLanguage} only (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)). Do not mix Bangla with English or any other language.
+4. TARGET TEACHING LANGUAGE: Generate your ENTIRE answer in ${targetLanguage} only (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা), Telugu (తెలుగు)). Do not mix languages.
 5. CROSS-LINGUAL UNDERSTANDING: If the student asks in English or another language, understand the intent and respond fluently in ${targetLanguage}. If course excerpts are in another language, translate the answer into ${targetLanguage}.
 6. TECHNICAL TERMS: Keep essential technical keywords (e.g. React, API, Database, State, Function, Loop, Component) in their standard form alongside the explanation in ${targetLanguage}.
 7. GROUNDING: When retrieved course material is provided, base your explanation on that context and the current lesson. Do not replace document-grounded answers with unrelated generic answers.
@@ -1263,6 +1263,7 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
       if (l === 'ms' || l.includes('malay') || l.includes('melayu')) return 'ms';
       if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'ta';
       if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'bn';
+      if (l === 'te' || l.includes('telugu') || l.includes('తెలుగు')) return 'te';
       if (l === 'en' || l.includes('english')) return 'en';
       return null;
     };

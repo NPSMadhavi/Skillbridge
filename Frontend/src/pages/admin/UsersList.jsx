@@ -11,6 +11,7 @@ const LANGUAGES = [
   { value: 'ms', label: 'Malay (Bahasa Melayu)' },
   { value: 'ta', label: 'Tamil (தமிழ்)' },
   { value: 'bn', label: 'Bangla (বাংলা)' },
+  { value: 'te', label: 'Telugu (తెలుగు)' },
 ]
 
 const UsersList = () => {

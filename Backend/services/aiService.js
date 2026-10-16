@@ -1271,7 +1271,7 @@ Generate an interactive multiple-choice assessment quiz for the specific lesson:
 Target Language: ${language}.
 
 CRITICAL QUIZ GENERATION RULES:
-1. Target Language: All questions, answer options, and explanations MUST be written fluently in ${language} only (e.g. if Tamil (தமிழ்), Chinese (中文), Malay (Bahasa Melayu), Bangla (বাংলা), or English). Do not mix languages.
+1. Target Language: All questions, answer options, and explanations MUST be written fluently in ${language} only (e.g. if Tamil (தமிழ்), Chinese (中文), Malay (Bahasa Melayu), Bangla (বাংলা), Telugu (తెలుగు), or English). Do not mix languages.
 2. Generate EXACTLY 5 multiple-choice questions derived STRICTLY from the provided document context for this specific lesson/chapter.
 3. Questions MUST test understanding of concepts in this chapter only.
 4. Randomly vary the position of the correct answer across questions so answerIndex is distributed among 0, 1, 2, and 3 (Options A, B, C, D) instead of always choosing Option 0.
@@ -1369,8 +1369,8 @@ Current Lesson Topic: "${lessonTitle}".
 Active Teaching Language: ${language}.
 
 PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
-1. LANGUAGE LOCK: The student selected ${language}. Write EVERY sentence, heading, bullet, and question in ${language} only. Do not mix languages. If the retrieved context is Bangla, Tamil, Chinese, Malay, or any other language, fully translate the teaching into ${language}. Never leave source-language sentences on screen when the target is English.
-2. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা)).
+1. LANGUAGE LOCK: The student selected ${language}. Write EVERY sentence, heading, bullet, and question in ${language} only. Do not mix languages. If the retrieved context is Bangla, Tamil, Telugu, Chinese, Malay, or any other language, fully translate the teaching into ${language}. Never leave source-language sentences on screen when the target is English.
+2. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা), Telugu (తెలుగు)).
 3. Comprehensive Teaching Duration: Provide an extensive, thorough, and high-value lecture (10-15 clear instructional paragraphs/points). Speak as a world-class instructor explaining each concept step-by-step with depth rather than providing short superficial summaries.
 4. Grounding: Draw core principles, terminology, and workflows directly from the retrieved document context.
 5. Technical Terminology: Keep recognized technical terms (e.g. PPE, Reversing, Blind Spot, Coupling, Lashing, Stanchions, Checklist) in their standard form alongside the explanation in ${language}.
@@ -1650,6 +1650,26 @@ ${lessonTitle} இன் முக்கிய பயனை உங்கள் �
 
 #### ⚡ অনুশীলনের প্রশ্ন
 আপনি কি ${lessonTitle} এর প্রধান কাজটি সহজ কথায় ব্যাখ্যা করতে পারেন?`;
+    }
+
+    if (l === 'te' || l.includes('telugu') || l.includes('తెలుగు')) {
+      return `### 💡 సంక్షిప్త వివరణ మరియు ముఖ్య భావన
+ఈ పాఠం **${lessonTitle}** యొక్క ప్రాథమిక సూత్రాలు మరియు ఆచరణాత్మక అనువర్తనాల గురించి వివరంగా చర్చిస్తుంది.
+
+#### 🎯 ముఖ్య సూత్రాలు
+- ${lessonTitle} యొక్క అంతర్లీన కార్యాచరణ మరియు లాజిక్ అర్థం చేసుకోవడం.
+- సిస్టమ్ డిజైన్‌లో సరైన ప్రమాణాలు మరియు ఉత్తమ పద్ధతులను పాటించడం.
+- విభిన్న భాగాల మధ్య సమన్వయం మరియు నియంత్రణను నిర్వహించడం.
+
+#### 🌐 వాస్తవ ప్రపంచ ఉదాహరణ
+ఒక పటిష్టమైన భవనానికి బలమైన పునాది ఎంత అవసరమో, అలాగే ఈ భావనలు మన అప్లికేషన్‌కు దృఢమైన ఆధారాన్ని అందిస్తాయి.
+
+#### 📌 ముఖ్యమైన అంశాలు
+- బట్టీ పట్టడం కంటే ప్రాథమిక భావనలను గ్రహించడం ఎంతో ఉత్తమం.
+- నిరంతర సాధన ద్వారా నైపుణ్యాన్ని మెరుగుపరుచుకోండి.
+
+#### ⚡ ఆలోచించవలసిన ప్రశ్న
+${lessonTitle} యొక్క ప్రధాన లక్ష్యాన్ని మీ స్వంత మాటల్లో వివరించగలరా?`;
     }
 
     return `### 💡 Overview & Core Idea

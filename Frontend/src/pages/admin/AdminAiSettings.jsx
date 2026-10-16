@@ -339,6 +339,7 @@ export default function AdminAiSettings() {
                   <li>🇲🇾 <strong>Malay:</strong> "Hai {effectiveName}", "Helo {effectiveName}"</li>
                   <li>🇮🇳 <strong>Tamil:</strong> "வணக்கம் {effectiveName}", "ஹாய் {effectiveName}"</li>
                   <li>🇧🇩 <strong>Bangla:</strong> "হ্যালো {effectiveName}", "নমস্কার {effectiveName}"</li>
+                  <li>🇮🇳 <strong>Telugu:</strong> "హలో {effectiveName}", "నమస్కారం {effectiveName}", "హే {effectiveName}"</li>
                 </ul>
               </div>
             </div>
