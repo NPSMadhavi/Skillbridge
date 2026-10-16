@@ -266,6 +266,48 @@ export const api = {
     return res.json();
   },
 
+  // Company AI Tutor & Wake Word Settings
+  getAiSettings: async () => {
+    const res = await fetch(`${API_BASE_URL}/admin/ai-settings`, {
+      method: 'GET',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch AI tutor settings.');
+    }
+    return res.json();
+  },
+
+  updateAiSettings: async (settings) => {
+    const res = await fetch(`${API_BASE_URL}/admin/ai-settings`, {
+      method: 'PUT',
+      headers: getHeaders(true),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to save AI tutor settings.');
+    }
+    return res.json();
+  },
+
+  getCompanyAiSettings: async (companyCode = null) => {
+    const code = companyCode || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
+    const res = await fetch(`${API_BASE_URL}/admin/company-ai-settings?code=${encodeURIComponent(code)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-tenant-id': code
+      }
+    });
+    if (!res.ok) {
+      return { aiName: 'ARIA', wakeWord: 'Hey ARIA' };
+    }
+    return res.json();
+  },
+
+
   // Company Admin Management
   getCompanyAdmins: async () => {
     const res = await fetch(`${API_BASE_URL}/admin/admins`, {

@@ -288,9 +288,12 @@ export const tenantService = {
         nricFin: finalNricFin,
         phone: finalPhone,
         department: finalDepartment || null,
+        aiName: 'ARIA',
+        wakeWord: 'Hey ARIA',
         status: 'ACTIVE'
       }
     });
+
 
     console.log(`[Multi-Tenant] Company registered in Master DB with ID: ${company.id}`);
 
