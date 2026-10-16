@@ -104,6 +104,33 @@ export function NewCompanyModal({
                     <span className="text-amber-900 font-bold">{createdResult.generatedPassword}</span>
                   </div>
                 )}
+
+                {createdResult.emailStatus && (
+                  <div className={`p-3 rounded-xl border text-xs flex items-center justify-between ${
+                    createdResult.emailStatus.sent
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-amber-50 border-amber-200 text-amber-800'
+                  }`}>
+                    <div className="flex items-center space-x-2">
+                      <span className="text-base">{createdResult.emailStatus.sent ? '✉️' : '⚠️'}</span>
+                      <span>
+                        {createdResult.emailStatus.sent
+                          ? <>Login credentials automatically sent to <strong>{createdResult.adminEmail}</strong>.</>
+                          : <>Email delivery status: {createdResult.emailStatus.error || 'Check SMTP configuration'}. Credentials are shown above.</>}
+                      </span>
+                    </div>
+                    {createdResult.emailStatus.previewUrl && (
+                      <a
+                        href={createdResult.emailStatus.previewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ml-2 px-2.5 py-1 bg-white border border-emerald-300 rounded-lg text-emerald-700 font-bold hover:bg-emerald-50 text-[11px]"
+                      >
+                        Preview Email &rarr;
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-200 flex items-center justify-between">
@@ -163,20 +190,7 @@ export function NewCompanyModal({
                       const val = e.target.value;
                       setNewCompany((prev) => ({
                         ...prev,
-                        companyName: val,
-                        slug:
-                          prev.slug && prev.slug !== prev._autoSlug
-                            ? prev.slug
-                            : val
-                              .toLowerCase()
-                              .replace(/[^a-z0-9]/g, '_')
-                              .replace(/_+/g, '_')
-                              .replace(/^_+|_+$/g, ''),
-                        _autoSlug: val
-                          .toLowerCase()
-                          .replace(/[^a-z0-9]/g, '_')
-                          .replace(/_+/g, '_')
-                          .replace(/^_+|_+$/g, '')
+                        companyName: val
                       }));
                     }}
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
@@ -187,7 +201,7 @@ export function NewCompanyModal({
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-xs font-semibold text-slate-700">
-                      Slug (Database Uniqueness) <span className="text-red-500">*</span>
+                      Slug / Company Code <span className="text-slate-400 font-normal">(Auto-generated if blank)</span>
                     </label>
                     <button
                       type="button"
@@ -200,8 +214,7 @@ export function NewCompanyModal({
                   </div>
                   <input
                     type="text"
-                    required
-                    placeholder="e.g. keppel_om"
+                    placeholder="e.g. keppel_om (leave blank or click Auto Generate)"
                     value={newCompany.slug}
                     onChange={(e) =>
                       setNewCompany((prev) => ({
@@ -212,7 +225,7 @@ export function NewCompanyModal({
                     className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-semibold text-blue-700 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
                   />
                   <p className="text-[11px] text-slate-500 mt-1 font-mono">
-                    Database: <span className="text-emerald-700 font-semibold">skillbridge_tenant_{newCompany.slug || 'slug'}</span>
+                    Database: <span className="text-emerald-700 font-semibold">skillbridge_tenant_{newCompany.slug || 'auto_slug'}</span>
                   </p>
                 </div>
 
@@ -310,18 +323,24 @@ export function NewCompanyModal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Initial Admin Password <span className="text-slate-400 font-normal">(Optional, auto-generated if blank)</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Initial Admin Password <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <span className="text-[11px] text-emerald-600 font-medium">✉️ Will be sent to admin email</span>
+                  </div>
                   <input
-                    type="password"
-                    placeholder="Leave blank for secure auto-generated password"
+                    type="text"
+                    placeholder="Leave blank to auto-generate secure password & email to admin"
                     value={newCompany.adminPassword}
                     onChange={(e) =>
                       setNewCompany((prev) => ({ ...prev, adminPassword: e.target.value }))
                     }
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 font-mono"
                   />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    If left blank, a secure password will be generated and automatically emailed to the admin.
+                  </p>
                 </div>
               </div>
             </div>

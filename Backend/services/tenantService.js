@@ -6,6 +6,7 @@ import bcrypt from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import masterPrisma from '../config/masterPrisma.js';
 import { defaultPrisma } from '../config/prisma.js';
+import { sendCompanyAdminCredentials } from './emailService.js';
 
 const { Client } = pg;
 const __filename = fileURLToPath(import.meta.url);
@@ -155,7 +156,7 @@ export const tenantService = {
     adminPassword
   }) {
     const finalCompanyName = (companyName || name || '').trim();
-    const finalSlug = (slug || code || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    let finalSlug = (slug || code || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
     const finalEmail = (email || adminEmail || '').trim().toLowerCase();
     const finalFullName = (fullName || '').trim();
     const finalNricFin = (nricFin || '').trim().toUpperCase();
@@ -177,14 +178,28 @@ export const tenantService = {
     if (!finalCompanyName) {
       throw new Error('Company Name is required.');
     }
+
+    // Auto-generate clean slug if left blank
     if (!finalSlug || finalSlug.length < 2) {
-      throw new Error('A valid Slug with at least 2 alphanumeric characters is required for database uniqueness.');
+      const baseWord = finalCompanyName
+        .toLowerCase()
+        .trim()
+        .split(/\s+/)[0]
+        .replace(/[^a-z0-9]/g, '') || 'company';
+      const randomSuffix = Math.random().toString(36).substring(2, 6);
+      finalSlug = `${baseWord}_${randomSuffix}`;
     }
 
-    // Default password if not provided
-    const finalPassword = adminPassword && adminPassword.length >= 6
-      ? adminPassword
-      : `Admin#${finalSlug.charAt(0).toUpperCase() + finalSlug.slice(1)}2026!`;
+    // Distinct auto-generated password if left blank (NOT equal to slug)
+    const isGeneratedPassword = !(adminPassword && adminPassword.trim().length >= 6);
+    const cleanPrefix = finalCompanyName.replace(/[^a-zA-Z]/g, '').slice(0, 8);
+    const capitalizedPrefix = cleanPrefix
+      ? cleanPrefix.charAt(0).toUpperCase() + cleanPrefix.slice(1).toLowerCase()
+      : 'Admin';
+    const randomDigits = Math.floor(1000 + Math.random() * 9000);
+    const finalPassword = !isGeneratedPassword
+      ? adminPassword.trim()
+      : `SB#${capitalizedPrefix}${randomDigits}!`;
 
     // Check if slug / company code already exists in Master DB
     const existingCompany = await masterPrisma.company.findUnique({
@@ -234,15 +249,17 @@ export const tenantService = {
 
       // Step 3: Insert initial Company Admin with profile details in the tenant database
       const passwordHash = await bcrypt.hash(finalPassword, 10);
+      const mustChangePassword = isGeneratedPassword;
       const insertAdminQuery = `
-        INSERT INTO "Admin" ("id", "email", "passwordHash", "fullName", "nricFin", "phone", "department", "createdAt")
-        VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, NOW())
+        INSERT INTO "Admin" ("id", "email", "passwordHash", "fullName", "nricFin", "phone", "department", "mustChangePassword", "createdAt")
+        VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, NOW())
         ON CONFLICT ("email") DO UPDATE SET
           "passwordHash" = EXCLUDED."passwordHash",
           "fullName" = EXCLUDED."fullName",
           "nricFin" = EXCLUDED."nricFin",
           "phone" = EXCLUDED."phone",
-          "department" = EXCLUDED."department";
+          "department" = EXCLUDED."department",
+          "mustChangePassword" = EXCLUDED."mustChangePassword";
       `;
       await tenantPgClient.query(insertAdminQuery, [
         finalEmail,
@@ -250,12 +267,14 @@ export const tenantService = {
         finalFullName,
         finalNricFin,
         finalPhone,
-        finalDepartment || null
+        finalDepartment || null,
+        mustChangePassword
       ]);
-      console.log(`[Multi-Tenant] Initial admin (${finalEmail}) seeded in "${dbName}".`);
+      console.log(`[Multi-Tenant] Initial admin (${finalEmail}) seeded in "${dbName}" (mustChangePassword: ${mustChangePassword}).`);
     } finally {
       await tenantPgClient.end().catch(() => {});
     }
+
 
     // Step 4: Register Company in Master Database
     const company = await masterPrisma.company.create({
@@ -288,9 +307,34 @@ export const tenantService = {
       console.warn(`[Multi-Tenant] Prisma warmup warning:`, warmErr.message);
     }
 
+    // Step 6: Dispatch login credentials email to the new Company Administrator
+    let emailStatus = { sent: false };
+    try {
+      const emailResult = await sendCompanyAdminCredentials({
+        adminEmail: finalEmail,
+        fullName: finalFullName,
+        companyName: finalCompanyName,
+        slug: finalSlug,
+        password: finalPassword,
+        loginUrl: process.env.APP_FRONTEND_URL
+          ? `${process.env.APP_FRONTEND_URL}/admin/login`
+          : 'http://localhost:5173/admin/login'
+      });
+      emailStatus = {
+        sent: emailResult.success,
+        previewUrl: emailResult.previewUrl || null,
+        error: emailResult.error || null
+      };
+      console.log(`[Multi-Tenant] Credentials email dispatch status for ${finalEmail}:`, emailStatus);
+    } catch (mailErr) {
+      console.warn(`[Multi-Tenant] Warning: Could not deliver credentials email:`, mailErr.message);
+      emailStatus = { sent: false, error: mailErr.message };
+    }
+
     return {
       ...company,
-      generatedPassword: finalPassword
+      generatedPassword: finalPassword,
+      emailStatus
     };
   },
 

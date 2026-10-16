@@ -167,17 +167,15 @@ export default function SuperAdminDashboard() {
 
   // ---------------- CREATE ----------------
   const handleAutoGenerateSlug = () => {
-    let base = newCompany.companyName
+    const firstWord = newCompany.companyName
       ? newCompany.companyName
         .toLowerCase()
         .trim()
-        .replace(/[^a-z0-9]/g, '_')
-        .replace(/_+/g, '_')
-        .replace(/^_+|_+$/g, '')
-      : 'tenant';
+        .split(/\s+/)[0]
+        .replace(/[^a-z0-9]/g, '')
+      : 'company';
 
-    if (base.length < 2) base = 'company';
-
+    const base = firstWord && firstWord.length >= 2 ? firstWord : 'company';
     const randomSuffix = Math.random().toString(36).substring(2, 6);
     const generated = `${base}_${randomSuffix}`;
     setNewCompany((prev) => ({ ...prev, slug: generated }));
