@@ -415,8 +415,20 @@ const UsersList = () => {
 
       <section className="overflow-hidden rounded-2xl border border-line bg-panel shadow-[0_10px_30px_rgba(15,27,45,0.04)]">
         {loading ? (
-          <div className="px-4 py-14 text-center">
-            <p className="font-medium text-fg">Loading users…</p>
+          <div className="p-4 space-y-3 animate-pulse">
+            {[1, 2, 3, 4, 5, 6].map((i) => (
+              <div key={i} className="flex items-center gap-4 py-3 px-2 border-b border-line/50 last:border-0">
+                <div className="h-11 w-11 rounded-xl bg-ink shrink-0" />
+                <div className="flex-1 space-y-2 min-w-0">
+                  <div className="h-3.5 w-36 rounded bg-ink" />
+                  <div className="h-2.5 w-48 rounded bg-ink/70" />
+                </div>
+                <div className="h-4 w-24 rounded bg-ink/60 hidden sm:block" />
+                <div className="h-4 w-16 rounded bg-ink/60 hidden md:block" />
+                <div className="h-6 w-24 rounded-full bg-ink/50" />
+                <div className="h-8 w-24 rounded-xl bg-ink/70" />
+              </div>
+            ))}
           </div>
         ) : error ? (
           <div className="px-4 py-14 text-center">

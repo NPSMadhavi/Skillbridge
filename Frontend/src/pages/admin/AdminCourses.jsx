@@ -801,7 +801,21 @@ const AdminCourses = () => {
 
             <div className="flex-1 min-h-0 overflow-y-auto my-3 space-y-2 pr-1">
               {loadingAssignments ? (
-                <div className="py-10 text-center text-xs text-muted">Loading learners...</div>
+                <div className="space-y-2 animate-pulse pr-1">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <div key={i} className="flex items-center gap-3 p-3 rounded-2xl border border-line/70 bg-ink/30">
+                      <div className="h-4 w-4 rounded bg-ink shrink-0" />
+                      <div className="h-9 w-9 rounded-xl bg-ink shrink-0" />
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="h-3 w-28 rounded bg-ink" />
+                          <div className="h-2.5 w-16 rounded bg-ink/70" />
+                        </div>
+                        <div className="h-2.5 w-36 rounded bg-ink/60" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               ) : allUsers.length === 0 ? (
                 <div className="py-10 text-center text-xs text-muted">
                   No registered users found. Register users from the Register User page.

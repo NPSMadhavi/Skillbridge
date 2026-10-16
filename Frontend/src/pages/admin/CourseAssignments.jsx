@@ -2,6 +2,88 @@ import { useEffect, useState, useMemo } from 'react'
 import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 
+const AssignmentSkeleton = () => (
+  <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
+    {/* Left Panel Skeleton */}
+    <div className="lg:col-span-5 rounded-2xl border border-line bg-panel p-4 shadow-sm flex flex-col h-[640px]">
+      <div className="mb-3 animate-pulse">
+        <div className="h-4.5 w-36 rounded-md bg-ink mb-1.5" />
+        <div className="h-3 w-52 rounded bg-ink/70 mb-3" />
+        <div className="h-9 w-full rounded-xl bg-ink/60" />
+      </div>
+
+      <div className="flex-1 overflow-hidden space-y-2 pr-1 pt-1">
+        {[1, 2, 3, 4, 5, 6].map((i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 p-3 rounded-2xl border border-line/60 bg-ink/30 animate-pulse"
+          >
+            <div className="h-10 w-10 rounded-xl bg-ink shrink-0" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="h-3.5 w-28 rounded bg-ink" />
+                <div className="h-4 w-16 rounded-full bg-ink/80" />
+              </div>
+              <div className="h-2.5 w-40 rounded bg-ink/60" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Right Panel Skeleton */}
+    <div className="lg:col-span-7 rounded-2xl border border-line bg-panel p-5 shadow-sm flex flex-col h-[640px]">
+      {/* Active Header Skeleton */}
+      <div className="flex items-center justify-between border-b border-line pb-4 mb-3 shrink-0 animate-pulse">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="h-12 w-12 rounded-2xl bg-ink shrink-0" />
+          <div className="space-y-2">
+            <div className="h-4 w-36 rounded bg-ink" />
+            <div className="h-3 w-52 rounded bg-ink/70" />
+          </div>
+        </div>
+        <div className="h-9 w-32 rounded-xl bg-ink shrink-0" />
+      </div>
+
+      {/* Subheader & Search Skeleton */}
+      <div className="flex items-center justify-between mb-3 shrink-0 animate-pulse">
+        <div className="h-3 w-40 rounded bg-ink/70" />
+        <div className="h-3 w-28 rounded bg-ink/60" />
+      </div>
+      <div className="h-9 w-full rounded-xl bg-ink/60 mb-3 shrink-0 animate-pulse" />
+
+      {/* Checklist Cards Skeleton */}
+      <div className="flex-1 overflow-hidden space-y-2.5 pr-1">
+        {[1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className="flex items-start gap-3 p-3.5 rounded-2xl border border-line bg-ink/30 animate-pulse"
+          >
+            <div className="h-4 w-4 rounded bg-ink mt-1 shrink-0" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="h-3.5 w-48 rounded bg-ink" />
+                <div className="h-4 w-14 rounded-full bg-ink/80" />
+              </div>
+              <div className="h-3 w-5/6 rounded bg-ink/60" />
+              <div className="flex items-center gap-3 pt-1">
+                <div className="h-2.5 w-20 rounded bg-ink/60" />
+                <div className="h-2.5 w-28 rounded bg-ink/50" />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Footer Skeleton */}
+      <div className="pt-3 border-t border-line flex items-center justify-between shrink-0 animate-pulse">
+        <div className="h-3 w-40 rounded bg-ink/60" />
+        <div className="h-9 w-32 rounded-xl bg-ink" />
+      </div>
+    </div>
+  </div>
+)
+
 const CourseAssignments = () => {
   const [loading, setLoading] = useState(true)
   const [users, setUsers] = useState([])
@@ -277,24 +359,35 @@ const CourseAssignments = () => {
 
       {/* Overview Stat Badges */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
-        <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Total Learners</p>
-          <p className="mt-1 font-display text-2xl font-bold text-fg">{users.length}</p>
-        </div>
-        <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Published Courses</p>
-          <p className="mt-1 font-display text-2xl font-bold text-sky">{courses.length}</p>
-        </div>
-        <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Active Enrollments</p>
-          <p className="mt-1 font-display text-2xl font-bold text-emerald-500">{totalAssignments}</p>
-        </div>
-        <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Unassigned Learners</p>
-          <p className={`mt-1 font-display text-2xl font-bold ${unassignedLearnersCount > 0 ? 'text-orange' : 'text-muted'}`}>
-            {unassignedLearnersCount}
-          </p>
-        </div>
+        {loading ? (
+          [1, 2, 3, 4].map((i) => (
+            <div key={i} className="rounded-2xl border border-line bg-panel p-4 shadow-sm animate-pulse space-y-2">
+              <div className="h-2.5 w-24 rounded bg-ink/80" />
+              <div className="h-7 w-14 rounded bg-ink" />
+            </div>
+          ))
+        ) : (
+          <>
+            <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Total Learners</p>
+              <p className="mt-1 font-display text-2xl font-bold text-fg">{users.length}</p>
+            </div>
+            <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Published Courses</p>
+              <p className="mt-1 font-display text-2xl font-bold text-sky">{courses.length}</p>
+            </div>
+            <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Active Enrollments</p>
+              <p className="mt-1 font-display text-2xl font-bold text-emerald-500">{totalAssignments}</p>
+            </div>
+            <div className="rounded-2xl border border-line bg-panel p-4 shadow-sm">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Unassigned Learners</p>
+              <p className={`mt-1 font-display text-2xl font-bold ${unassignedLearnersCount > 0 ? 'text-orange' : 'text-muted'}`}>
+                {unassignedLearnersCount}
+              </p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Toast Notification */}
@@ -311,10 +404,7 @@ const CourseAssignments = () => {
       )}
 
       {loading ? (
-        <div className="py-20 text-center">
-          <div className="inline-block h-8 w-8 animate-spin rounded-full border-3 border-sky border-t-transparent mb-3" />
-          <p className="text-sm font-semibold text-fg">Loading assignments data...</p>
-        </div>
+        <AssignmentSkeleton />
       ) : mode === 'by-user' ? (
         /* ================= MODE 1: ASSIGN BY LEARNER ================= */
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
@@ -677,9 +767,20 @@ const CourseAssignments = () => {
                 {/* Learners Checklist */}
                 <div className="flex-1 overflow-y-auto space-y-2 pr-1">
                   {loadingCourseUsers ? (
-                    <div className="py-16 text-center text-xs text-muted">
-                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-sky border-t-transparent mx-auto mb-2" />
-                      Loading enrolled learners...
+                    <div className="space-y-2 animate-pulse pr-1">
+                      {[1, 2, 3, 4, 5, 6].map((i) => (
+                        <div key={i} className="flex items-center gap-3 p-3 rounded-2xl border border-line/70 bg-ink/30">
+                          <div className="h-4 w-4 rounded bg-ink shrink-0" />
+                          <div className="h-9 w-9 rounded-xl bg-ink shrink-0" />
+                          <div className="min-w-0 flex-1 space-y-1.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="h-3 w-28 rounded bg-ink" />
+                              <div className="h-2.5 w-16 rounded bg-ink/70" />
+                            </div>
+                            <div className="h-2.5 w-36 rounded bg-ink/60" />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   ) : users.length === 0 ? (
                     <div className="py-16 text-center border border-dashed border-line rounded-2xl p-6 text-xs text-muted">
