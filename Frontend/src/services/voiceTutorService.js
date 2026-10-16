@@ -141,9 +141,9 @@ const WAKE_WORD_PATTERNS = [
   // ENGLISH
   // ----------------------------------------------------------
 
-  /\b(?:hey|hi|hello|ok|okay|ask|yo)?\s*(?:aria|arya|aarya|ariya|auria|area)\b/i,
+  /\b(?:hey|hi|hello|ok|okay|ask|yo)?\s*(?:aria|arya|aarya|ariya|auria|area|heria|hearia|haria|oria|arria)\b/i,
 
-  /\b(?:aria|arya|aarya|ariya|area)\b/i,
+  /\b(?:aria|arya|aarya|ariya|area|heria|hearia|haria|oria|arria)\b/i,
 
 
   // ----------------------------------------------------------
@@ -235,6 +235,11 @@ const ARIA_VARIANTS_SET = new Set([
   'ariya',
   'auria',
   'area',
+  'heria',
+  'hearia',
+  'haria',
+  'oria',
+  'arria',
 
   // Chinese
   '阿莉娅',
@@ -346,7 +351,7 @@ export const extractQuestionFromWakeWord = (
 
   // English / Malay
   clean = clean.replace(
-    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria)\s*[,.:!?-]*/iu,
+    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria|heria|hearia|haria)\s*[,.:!?-]*/iu,
     ''
   );
 
@@ -695,6 +700,19 @@ export class VoiceTutorManager {
     this.state =
       newState;
 
+    // Watchdog timer: If stuck in PROCESSING for more than 6 seconds, auto-recover to SLEEPING
+    if (this._processingWatchdog) {
+      clearTimeout(this._processingWatchdog);
+      this._processingWatchdog = null;
+    }
+    if (newState === TutorState.PROCESSING) {
+      this._processingWatchdog = setTimeout(() => {
+        if (this.state === TutorState.PROCESSING) {
+          console.warn('[VOICE] Processing state watchdog timeout (6s). Auto-recovering to SLEEPING.');
+          this.returnToSleep();
+        }
+      }, 6000);
+    }
 
     this.log(
       LogCategory.VOICE_STATE,
@@ -2109,6 +2127,21 @@ export class VoiceTutorManager {
       this.state === TutorState.ARIA_SPEAKING ||
       this.state === TutorState.PROCESSING
     ) {
+      // If we are in PROCESSING, but tutor is not actively speaking, and a wake word is heard, recover immediately!
+      if (
+        this.state === TutorState.PROCESSING &&
+        !this.isTutorSpeaking &&
+        Date.now() >= this.ttsMutedUntil &&
+        containsWakeWord(text)
+      ) {
+        this.log(
+          LogCategory.WAKE_MATCH,
+          `Wake word heard during PROCESSING state recovery: "${text}". Re-waking ARIA!`
+        );
+        this.triggerWakeSequence(text);
+        return;
+      }
+
       this.log(
         LogCategory.ECHO_REJECTED,
         `Ignoring while ARIA is speaking/processing: "${text}"`

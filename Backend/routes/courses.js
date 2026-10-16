@@ -2,10 +2,11 @@ import express from 'express';
 import multer from 'multer';
 import axios from 'axios';
 import FormData from 'form-data';
-import prisma from '../config/prisma.js';
+import prisma, { defaultPrisma } from '../config/prisma.js';
 import aiService from '../services/aiService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
 import documentExtractor from '../services/documentExtractor.js';
+import tenantService from '../services/tenantService.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
 
@@ -74,6 +75,13 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension into PostgreSQL pgvector...`);
       await vectorChunkService.indexCourse(prisma, newCourse.id, docResult, generatedCourse);
       console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
+
+      // If created in a company tenant, also mirror into defaultPrisma so all companies have it
+      if (req.tenantCode && req.tenantCode !== 'default') {
+        try {
+          await tenantService.syncDefaultCoursesToTenant(req.tenantCode);
+        } catch (_) {}
+      }
     } catch (vectorErr) {
       console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
     }
@@ -182,6 +190,15 @@ const checkCourseAccess = async (req, courseId) => {
 // 2. Get published RAG courses (Admin gets all with counts; Students get ONLY assigned courses)
 router.get('/', authenticateToken, async (req, res) => {
   try {
+    // Ensure all shared courses from default catalog are synchronized to this tenant
+    if (req.tenantCode && req.tenantCode !== 'default') {
+      try {
+        await tenantService.syncDefaultCoursesToTenant(req.tenantCode);
+      } catch (syncErr) {
+        console.warn(`[Courses] Auto-sync to tenant notice:`, syncErr.message);
+      }
+    }
+
     if (req.user?.role === 'ADMIN') {
       const courses = await prisma.course.findMany({
         orderBy: { createdAt: 'desc' },
@@ -220,6 +237,12 @@ router.get('/', authenticateToken, async (req, res) => {
 // 3. Get specific course details (verifying assignment for students)
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
+    if (req.tenantCode && req.tenantCode !== 'default') {
+      try {
+        await tenantService.syncDefaultCoursesToTenant(req.tenantCode);
+      } catch (_) {}
+    }
+
     const course = await prisma.course.findUnique({
       where: { id: req.params.id },
       include: {

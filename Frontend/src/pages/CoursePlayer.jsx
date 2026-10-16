@@ -1068,6 +1068,8 @@ const CoursePlayer = ({
             if (!isWakeDetection && manager.state !== TutorState.SLEEPING) {
               manager.setState(TutorState.FOLLOW_UP_LISTENING)
               manager.resetFollowUpTimeout()
+            } else if (manager.state === TutorState.PROCESSING) {
+              manager.returnToSleep()
             }
             return
           }
@@ -1081,6 +1083,9 @@ const CoursePlayer = ({
               }
             } else {
               console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/TTS capture: "${transcription.slice(0, 80)}"`)
+              if (manager.state === TutorState.PROCESSING) {
+                manager.returnToSleep()
+              }
             }
             return
           }
@@ -1099,6 +1104,9 @@ const CoursePlayer = ({
               }
             } else {
               console.log(`[VOICE:WAKE_IGNORE] No wake word in audio: "${transcription}". Staying in SLEEPING.`)
+              if (manager.state === TutorState.PROCESSING) {
+                manager.returnToSleep()
+              }
             }
             return
           }

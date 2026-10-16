@@ -281,6 +281,9 @@ export const tenantService = {
       await client.$connect();
       tenantClients.set(finalSlug, client);
       console.log(`[Multi-Tenant] Tenant Prisma client connected and cached.`);
+
+      // Step 6: Automatically sync existing course catalog to newly created tenant
+      await this.syncDefaultCoursesToTenant(finalSlug);
     } catch (warmErr) {
       console.warn(`[Multi-Tenant] Prisma warmup warning:`, warmErr.message);
     }
@@ -523,6 +526,117 @@ export const tenantService = {
       }
     } catch (err) {
       console.warn('[Multi-Tenant] Could not ensure default company:', err.message);
+    }
+  },
+
+  /**
+   * Synchronize all courses, chunks, and curriculum from the primary (default) database
+   * to an isolated company tenant database so all companies have immediate access to all courses.
+   */
+  async syncDefaultCoursesToTenant(tenantCode) {
+    if (!tenantCode || tenantCode === 'default') return;
+
+    try {
+      const tenantClient = await this.getTenantClient(tenantCode);
+      if (!tenantClient) return;
+
+      const defaultCourses = await defaultPrisma.course.findMany();
+      if (!defaultCourses || defaultCourses.length === 0) return;
+
+      for (const course of defaultCourses) {
+        // 1. Upsert course record in tenant DB
+        await tenantClient.course.upsert({
+          where: { id: course.id },
+          create: {
+            id: course.id,
+            title: course.title,
+            description: course.description,
+            fileName: course.fileName,
+            fileText: course.fileText,
+            curriculum: course.curriculum,
+            createdAt: course.createdAt,
+            updatedAt: course.updatedAt,
+          },
+          update: {
+            title: course.title,
+            description: course.description,
+            fileName: course.fileName,
+            fileText: course.fileText,
+            curriculum: course.curriculum,
+            updatedAt: course.updatedAt,
+          }
+        });
+
+        // 2. Check chunks count
+        const tenantChunksCount = await tenantClient.courseChunk.count({
+          where: { courseId: course.id }
+        });
+
+        const defaultChunksCount = await defaultPrisma.courseChunk.count({
+          where: { courseId: course.id }
+        });
+
+        if (tenantChunksCount < defaultChunksCount) {
+          const chunks = await defaultPrisma.$queryRawUnsafe(`
+            SELECT "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
+                   "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+                   "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
+                   "embedding"::text as "embeddingStr", "createdAt"
+            FROM "CourseChunk"
+            WHERE "courseId" = $1
+          `, course.id);
+
+          for (const c of chunks) {
+            try {
+              if (c.embeddingStr) {
+                await tenantClient.$executeRawUnsafe(`
+                  INSERT INTO "CourseChunk" (
+                    "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
+                    "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+                    "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
+                    "embedding", "createdAt"
+                  ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                    $17::vector, $18
+                  )
+                  ON CONFLICT ("id") DO NOTHING
+                `,
+                  c.id, c.courseId, c.chunkIndex, c.chunkText, c.topic, c.subtopic, c.concept,
+                  c.chunkType, c.sourcePage, c.sourceSlides ? JSON.stringify(c.sourceSlides) : null,
+                  c.sourceSection, c.prerequisites, c.keyPoints ? JSON.stringify(c.keyPoints) : null,
+                  c.relatedConcepts ? JSON.stringify(c.relatedConcepts) : null,
+                  c.metadata ? JSON.stringify(c.metadata) : null,
+                  c.semanticSummary, c.embeddingStr, c.createdAt
+                );
+              } else {
+                await tenantClient.$executeRawUnsafe(`
+                  INSERT INTO "CourseChunk" (
+                    "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
+                    "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+                    "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
+                    "createdAt"
+                  ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+                  )
+                  ON CONFLICT ("id") DO NOTHING
+                `,
+                  c.id, c.courseId, c.chunkIndex, c.chunkText, c.topic, c.subtopic, c.concept,
+                  c.chunkType, c.sourcePage, c.sourceSlides ? JSON.stringify(c.sourceSlides) : null,
+                  c.sourceSection, c.prerequisites, c.keyPoints ? JSON.stringify(c.keyPoints) : null,
+                  c.relatedConcepts ? JSON.stringify(c.relatedConcepts) : null,
+                  c.metadata ? JSON.stringify(c.metadata) : null,
+                  c.semanticSummary, c.createdAt
+                );
+              }
+            } catch (chunkErr) {
+              console.warn(`[TenantService] Notice copying chunk ${c.id}:`, chunkErr.message);
+            }
+          }
+        }
+      }
+      console.log(`[TenantService] Synchronized ${defaultCourses.length} default courses to tenant: ${tenantCode}`);
+    } catch (err) {
+      console.warn(`[TenantService] Course sync notice for tenant ${tenantCode}:`, err.message);
     }
   }
 };
