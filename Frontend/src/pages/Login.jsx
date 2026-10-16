@@ -73,6 +73,9 @@ const Login = ({ onSuccess }) => {
   const [mode, setMode] = useState('password')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [companyCode, setCompanyCode] = useState(
+    () => localStorage.getItem('skillbridge_tenant') || 'default'
+  )
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState(null)
@@ -146,13 +149,16 @@ const Login = ({ onSuccess }) => {
     event.preventDefault()
     setMessage(null)
 
+    const cleanCode = (companyCode || localStorage.getItem('skillbridge_tenant') || 'default').trim().toLowerCase()
     setLoading(true)
     try {
-      const res = await api.studentLogin(email.trim(), password)
+      const res = await api.studentLogin(email.trim(), password, cleanCode)
       sessionStorage.setItem(
         'skillbridge_user',
         JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       )
+      sessionStorage.setItem('skillbridge_tenant', cleanCode)
+      localStorage.setItem('skillbridge_tenant', cleanCode)
       restoreLanguageAfterLogin(res.user)
       onSuccess?.()
     } catch (err) {
@@ -214,12 +220,15 @@ const Login = ({ onSuccess }) => {
       ctx.drawImage(video, sx, sy, size, size, 0, 0, 300, 300)
       const base64Data = canvas.toDataURL('image/jpeg', 0.85)
 
-      const res = await api.studentFaceLogin(base64Data)
+      const cleanCode = (companyCode || 'default').trim().toLowerCase()
+      const res = await api.studentFaceLogin(base64Data, cleanCode)
 
       sessionStorage.setItem(
         'skillbridge_user',
         JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       )
+      sessionStorage.setItem('skillbridge_tenant', cleanCode)
+      localStorage.setItem('skillbridge_tenant', cleanCode)
       restoreLanguageAfterLogin(res.user)
 
       setFaceState('success')

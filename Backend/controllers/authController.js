@@ -35,13 +35,14 @@ export const passwordLogin = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: 'STUDENT' },
+      { id: user.id, email: user.email, role: 'STUDENT', tenantCode: req.tenantCode || 'default' },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     res.json({
       token,
+      tenant: { code: req.tenantCode || 'default' },
       user: {
         id: user.id,
         fullName: user.fullName,
@@ -102,13 +103,14 @@ export const faceLogin = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: 'STUDENT' },
+      { id: user.id, email: user.email, role: 'STUDENT', tenantCode: req.tenantCode || 'default' },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     res.json({
       token,
+      tenant: { code: req.tenantCode || 'default' },
       user: {
         id: user.id,
         fullName: user.fullName,

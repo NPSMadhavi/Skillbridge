@@ -20,18 +20,32 @@ const AdminLogin = () => {
     setError('')
 
     if (!email.trim() || !password) {
-      toast.error('Please provide both admin email and password.')
+      toast.error('Please provide your admin email and password.')
       return
     }
 
     setLoading(true)
     try {
       const data = await api.adminLogin(email.trim(), password)
+      const resolvedTenant = data.tenant?.code || data.tenant?.slug || 'default'
+      const companyName = data.tenant?.name || null
+
       sessionStorage.setItem(
         'skillbridge_admin',
-        JSON.stringify({ email: data.admin.email, token: data.token, loggedInAt: Date.now() }),
+        JSON.stringify({
+          email: data.admin?.email || email.trim(),
+          fullName: data.admin?.fullName || 'Admin',
+          token: data.token,
+          tenant: resolvedTenant,
+          slug: resolvedTenant,
+          companyName: companyName,
+          loggedInAt: Date.now(),
+        }),
       )
-      toast.success('Welcome back, Admin!')
+      sessionStorage.setItem('skillbridge_tenant', resolvedTenant)
+      localStorage.setItem('skillbridge_tenant', resolvedTenant)
+
+      toast.success(`Welcome back, ${data.admin?.fullName || 'Admin'}!`)
       setTimeout(() => {
         navigate('/admin/dashboard', { replace: true })
       }, 400)
@@ -61,7 +75,7 @@ const AdminLogin = () => {
             Admin portal
           </p>
           <p className="mt-3 font-display text-[0.98rem] text-muted">
-            Sign in to register users and manage Face ID enrollment.
+            Sign in with your admin credentials to access your company console.
           </p>
         </header>
 
@@ -75,10 +89,11 @@ const AdminLogin = () => {
                 id="admin-email"
                 type="email"
                 autoComplete="username"
-                placeholder="admin@skillbridge.com"
+                placeholder="admin@yourcompany.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className={fieldClass}
+                required
               />
             </div>
 
@@ -94,6 +109,7 @@ const AdminLogin = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className={fieldClass}
+                required
               />
             </div>
 
@@ -108,10 +124,20 @@ const AdminLogin = () => {
               disabled={loading}
               className="mt-1 w-full cursor-pointer rounded-xl border-0 bg-navy px-4 py-3.5 font-display text-base font-semibold text-white shadow-[0_10px_28px_rgba(14,47,92,0.22)] transition hover:bg-[#143a6b] disabled:cursor-wait disabled:opacity-70"
             >
-              {loading ? 'Signing in…' : 'Admin sign in'}
+              {loading ? 'Verifying & signing in…' : 'Admin sign in'}
             </button>
           </form>
         </section>
+
+        <div className="text-center">
+          <button
+            type="button"
+            onClick={() => navigate('/super-admin/login')}
+            className="text-xs text-muted hover:text-navy hover:underline transition-colors cursor-pointer"
+          >
+            System Super Admin? Enter Control Plane →
+          </button>
+        </div>
       </div>
 
       <ToastContainer

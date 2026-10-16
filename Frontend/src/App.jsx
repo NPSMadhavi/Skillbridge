@@ -10,10 +10,13 @@ import RegisterUser from './pages/admin/RegisterUser'
 import UsersList from './pages/admin/UsersList'
 import AdminCourses from './pages/admin/AdminCourses'
 import CourseAssignments from './pages/admin/CourseAssignments'
+import AdminManagement from './pages/admin/AdminManagement'
 import Home from './pages/Home'
 import Language from './pages/Language'
 import Login from './pages/Login'
 import MyCertificates from './pages/MyCertificates'
+import SuperAdminLogin from './pages/superAdmin/SuperAdminLogin'
+import SuperAdminDashboard from './pages/superAdmin/SuperAdminDashboard'
 import { courses as defaultCourses } from './data/courses'
 import { api } from './services/api'
 import { clearStoredLanguage, hasStoredLanguage } from './utils/language'
@@ -365,7 +368,13 @@ function App() {
           <Route path="/admin/users" element={<UsersList />} />
           <Route path="/admin/courses" element={<AdminCourses />} />
           <Route path="/admin/assignments" element={<CourseAssignments />} />
+          <Route path="/admin/admins" element={<AdminManagement />} />
         </Route>
+
+        {/* Super Admin Multi-Tenant Control Plane Routes */}
+        <Route path="/super-admin/login" element={<SuperAdminLogin />} />
+        <Route path="/super-admin" element={<SuperAdminDashboard />} />
+        <Route path="/super-admin/dashboard" element={<SuperAdminDashboard />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

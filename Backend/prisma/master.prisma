@@ -1,0 +1,33 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("MASTER_DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/@prisma/master-client"
+}
+
+model SuperAdmin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  createdAt    DateTime @default(now())
+}
+
+model Company {
+  id           String   @id @default(uuid())
+  name         String
+  code         String   @unique
+  dbName       String   @unique
+  dbUrl        String
+  status       String   @default("ACTIVE")
+  adminEmail   String
+  fullName     String?
+  nricFin      String?
+  phone        String?
+  department   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}

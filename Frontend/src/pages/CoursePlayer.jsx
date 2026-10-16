@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react'
 import { api } from '../services/api'
 import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWakeWord, isNoiseOrHallucination } from '../services/voiceTutorService'
 import logo from '../assets/SkillBridge_AI.png'
+import { persistLanguageSelection, readStoredLanguageCode, textMatchesLanguage } from '../utils/language'
 
 const CourseBookIcon = ({ className = "h-5 w-5" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -163,40 +164,21 @@ const CoursePlayer = ({
     };
   }, [course?.id, user]);
 
-  // Selected teaching language state & persistence - user's preferred language is default
+  // Selected teaching language: explicit choice (survives refresh), then profile default
   const [selectedLanguageCode, setSelectedLanguageCode] = useState(() => {
     try {
-      // 1. FIRST PRIORITY: Student's registered preferred language
+      const stored = readStoredLanguageCode()
+      if (stored) return stored
+
       const userRaw = sessionStorage.getItem('skillbridge_user')
       if (userRaw) {
         const u = JSON.parse(userRaw)?.user
         const code = normalizeLanguageCode(u?.preferredLanguage || u?.preferLanguage)
         if (code) return code
       }
-
-      // 2. SECOND PRIORITY: Saved language from Language Selection page or storage
-      const raw = sessionStorage.getItem('skillbridge_language') || localStorage.getItem('skillbridge_language')
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw)
-          const code = normalizeLanguageCode(parsed?.value || parsed?.code || parsed?.name)
-          if (code) return code
-        } catch {
-          const code = normalizeLanguageCode(raw)
-          if (code) return code
-        }
-      }
     } catch (e) { }
     return 'en'
   })
-
-  // Synchronize teaching language if user profile preferredLanguage is set or changes
-  useEffect(() => {
-    const code = normalizeLanguageCode(user?.preferredLanguage || user?.preferLanguage)
-    if (code && code !== selectedLanguageCode) {
-      setSelectedLanguageCode(code)
-    }
-  }, [user?.preferredLanguage, user?.preferLanguage])
 
   const currentLangObj = useMemo(() => {
     return LANGUAGES.find(l => l.value === selectedLanguageCode) || LANGUAGES[0]
@@ -205,24 +187,21 @@ const CoursePlayer = ({
   const preferredLanguage = currentLangObj.label
   const preferredVoiceLangCode = currentLangObj.value
   const speechRecognitionLang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US'
+  const selectedLanguageCodeRef = useRef(selectedLanguageCode)
+  selectedLanguageCodeRef.current = selectedLanguageCode
 
   const handleLanguageChange = (newLangCode) => {
     const langObj = LANGUAGES.find(l => l.value === newLangCode) || LANGUAGES[0]
     setSelectedLanguageCode(langObj.value)
     ttsUtterancePool.clear()
-    try {
-      sessionStorage.setItem('skillbridge_language', JSON.stringify({
-        code: langObj.code,
-        name: langObj.label,
-        value: langObj.value,
-        native: langObj.native
-      }))
-      localStorage.setItem('skillbridge_language', langObj.value)
-    } catch (e) { }
+    persistLanguageSelection(langObj.value)
 
     window.speechSynthesis.cancel()
     setCurrentSentenceIdx(0)
     setElapsedSeconds(0)
+    setExplanation('')
+    setLoadingExplanation(true)
+    setPipelineState('PREPARING')
 
     setChatMessages((prev) => {
       if (prev.length <= 1) {
@@ -480,7 +459,6 @@ const CoursePlayer = ({
   // Video / Slide player controls states
   const playerRef = useRef(null)
   const [muted, setMuted] = useState(false)
-  const [playbackRate, setPlaybackRate] = useState(1)
   const [showCC, setShowCC] = useState(true)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(false)
@@ -675,6 +653,7 @@ const CoursePlayer = ({
     vadStateRef.current = 'IDLE'
     voiceManagerRef.current?.setConversationMode(false)
     voiceManagerRef.current?.setAwake(false)
+    voiceManagerRef.current?.returnToSleep?.()
 
     if (wasLecturePlayingRef.current) {
       console.log(`[LiveTutor] Auto-resuming lecture at Concept ${savedLecturePositionRef.current + 1}...`)
@@ -850,6 +829,36 @@ const CoursePlayer = ({
       }
     );
   };
+  const isLectureEcho = (text) => {
+    if (!text) return false
+    if (voiceManagerRef.current?.isTranscriptSelfEcho?.(text)) return true
+    const captured = String(text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
+    const capturedWords = captured.split(/\s+/).filter(w => w.length > 3)
+    if (capturedWords.length < 4) return false
+
+    const candidates = []
+    const sentences = sentencesRef.current || []
+    const idx = currentSentenceIdxRef.current || 0
+    for (let i = Math.max(0, idx - 1); i <= Math.min(sentences.length - 1, idx + 1); i++) {
+      if (sentences[i]) candidates.push(sentences[i])
+    }
+    for (const msg of (chatMessagesRef.current || []).slice(-4)) {
+      if (msg?.sender === 'aria' && msg.text) candidates.push(msg.text)
+    }
+
+    for (const candidate of candidates) {
+      const n = String(candidate).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
+      if (!n || n.length < 12) continue
+      if (n.includes(captured) || captured.includes(n.slice(0, 80))) return true
+      const sourceWords = n.split(/\s+/).filter(w => w.length > 3)
+      if (sourceWords.length < 4) continue
+      const sourceSet = new Set(sourceWords)
+      const overlap = capturedWords.filter(w => sourceSet.has(w)).length / capturedWords.length
+      if (overlap >= 0.45) return true
+    }
+    return false
+  }
+
   const handleVoiceQuestion = async (userSpeech) => {
     if (!userSpeech || isAnsweringRef.current || isAriaSpeakingRef.current) return
     const rawSpeech = userSpeech.trim()
@@ -860,6 +869,10 @@ const CoursePlayer = ({
     // Guard against microphone hearing speaker audio right after TTS finishes (reverberation)
     if (Date.now() - (lastAriaSpokenTimeRef.current || 0) < 1800) {
       console.log(`[VOICE:ECHO_REJECTED] Ignored speech captured during/right after TTS playback: "${rawSpeech}"`)
+      return
+    }
+    if (isLectureEcho(rawSpeech)) {
+      console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/ARIA echo: "${rawSpeech.slice(0, 80)}..."`)
       return
     }
 
@@ -974,7 +987,7 @@ const CoursePlayer = ({
         message: cleanQuestion,
         lessonTitle: activeLessonRef.current?.title,
         currentConcept: currentConceptText,
-        language: preferredLanguage,
+        language: selectedLanguageCode,
         conversationHistory: historyToSend
       })
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
@@ -1001,7 +1014,7 @@ const CoursePlayer = ({
       })
     } catch (err) {
       console.error('[VOICE] ARIA AI Tutor chat error:', err)
-      setChatMessages((prev) => [...prev, { sender: 'aria', text: '⚠️ Failed to answer question via AI Tutor. Resuming lecture...' }])
+      setChatMessages((prev) => [...prev, { sender: 'aria', text: `⚠️ ${err.message || 'The AI tutor is temporarily unavailable. Please try again in a moment.'}` }])
       isAnsweringRef.current = false
       setTimeout(() => {
         if (wasLecturePlayingRef.current) {
@@ -1059,13 +1072,26 @@ const CoursePlayer = ({
             return
           }
 
+          if (playingRef.current || isAriaSpeakingRef.current || isLectureEcho(transcription)) {
+            if (containsWakeWord(transcription) && playingRef.current) {
+              interruptLectureAndWake()
+              const cleanQuestion = extractQuestionFromWakeWord(transcription)
+              if (cleanQuestion && cleanQuestion.length >= 2 && !isNoiseOrHallucination(cleanQuestion) && !isLectureEcho(cleanQuestion)) {
+                setTimeout(() => handleVoiceQuestion(cleanQuestion), 1600)
+              }
+            } else {
+              console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/TTS capture: "${transcription.slice(0, 80)}"`)
+            }
+            return
+          }
+
           if (isWakeDetection) {
             if (containsWakeWord(transcription)) {
               console.log(`[VOICE:WAKE_MATCH] Whisper wake word detected: "${transcription}". Interrupting course lecture...`)
               interruptLectureAndWake()
 
               const cleanQuestion = extractQuestionFromWakeWord(transcription)
-              if (cleanQuestion && cleanQuestion.length >= 3 && !isNoiseOrHallucination(cleanQuestion)) {
+              if (cleanQuestion && cleanQuestion.length >= 3 && !isNoiseOrHallucination(cleanQuestion) && !isLectureEcho(cleanQuestion)) {
                 console.log(`[VOICE] Wake phrase included question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
                 setTimeout(() => {
                   handleVoiceQuestion(cleanQuestion)
@@ -1221,7 +1247,13 @@ const CoursePlayer = ({
       const propCached = activeLesson.explanations?.[langCode] ||
         (langCode === 'en' ? activeLesson.explanation : null);
 
-      const immediateScript = memoryCached || (typeof propCached === 'string' && propCached.length > 30 ? propCached : null);
+      const candidateScript = memoryCached || (typeof propCached === 'string' && propCached.length > 30 ? propCached : null);
+      const immediateScript = (candidateScript && textMatchesLanguage(candidateScript, langCode))
+        ? candidateScript
+        : null;
+      if (memoryCached && !immediateScript) {
+        lessonExplanationClientCache.delete(cacheKey);
+      }
 
       if (immediateScript) {
         console.log(`[PERF:LESSON_FETCH_START] [CLIENT_CACHE_HIT] Course: ${course.id}, Lesson: ${activeLesson.id} ("${activeLesson.title}"), Lang: ${langCode}`);
@@ -1242,12 +1274,18 @@ const CoursePlayer = ({
       setLessonVisuals(activeLesson.visuals || []);
 
       const fetchReqStartTime = performance.now();
-      api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, preferredLanguage)
+      const requestLang = langCode;
+      api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, requestLang)
         .then(res => {
+          if (selectedLanguageCodeRef.current !== requestLang) return;
           const fetchReqDuration = Math.round(performance.now() - fetchReqStartTime);
           console.log(`[PERF:LESSON_FETCH_END] Received lesson script from backend in ${fetchReqDuration}ms (Backend DB Cached: ${res.cached ? 'YES' : 'NO'})`);
-          lessonExplanationClientCache.set(cacheKey, res.explanation);
-          setExplanation(res.explanation);
+          const script = res.explanation || '';
+          if (script && !textMatchesLanguage(script, requestLang)) {
+            console.warn(`[Language Lock] Ignoring mixed-language lesson script for ${requestLang}`);
+          }
+          lessonExplanationClientCache.set(cacheKey, script);
+          setExplanation(script);
           setLessonVisuals(res.visuals || activeLesson.visuals || []);
           setLoadingExplanation(false);
           setPipelineState('READY');
@@ -1439,10 +1477,10 @@ const CoursePlayer = ({
         elapsedSecondsRef.current = next;
         return next;
       });
-    }, 1000 / (playbackRate || 1.0));
+    }, 1000);
 
     return () => clearInterval(interval);
-  }, [playing, loadingExplanation, loadingQuiz, isAriaSpeaking, totalSeconds, playbackRate]);
+  }, [playing, loadingExplanation, loadingQuiz, isAriaSpeaking, totalSeconds]);
 
   const formatTime = (s) => {
     const total = Math.max(0, Math.round(s || 0));
@@ -1577,13 +1615,14 @@ const CoursePlayer = ({
             } else {
               utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
             }
-            utterance.rate = 0.95 * (playbackRate || 1.0);
+            utterance.rate = 0.95;
             utterance.pitch = 1.05;
           }
           utteranceRef.current = utterance; // Prevent GC cancellation bug
 
           utterance.onstart = () => {
             if (isCancelled) return;
+            voiceManagerRef.current?.noteSpokenText?.(spokenText);
             const ttsDuration = Math.round(performance.now() - ttsStartTime);
             console.log(`[PERF:TTS_END] TTS audio synthesis started in ${ttsDuration}ms`);
             const startupLatency = lessonOpenTimestampRef.current ? Math.round(performance.now() - lessonOpenTimestampRef.current) : 0;
@@ -1608,7 +1647,7 @@ const CoursePlayer = ({
                 } else {
                   nextUtterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
                 }
-                nextUtterance.rate = 0.95 * (playbackRate || 1.0);
+                nextUtterance.rate = 0.95;
                 nextUtterance.pitch = 1.05;
                 ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx + 1}`, nextUtterance);
                 const preDuration = Math.round(performance.now() - preStartTime);
@@ -1666,7 +1705,7 @@ const CoursePlayer = ({
     } else {
       try { window.speechSynthesis.cancel(); } catch (e) { }
     }
-  }, [playing, muted, playbackRate, sentences, currentSentenceIdx, loadingExplanation]);
+  }, [playing, muted, sentences, currentSentenceIdx, loadingExplanation, selectedLanguageCode]);
 
   useEffect(() => {
     activeLessonRef.current = activeLesson
@@ -1718,7 +1757,7 @@ const CoursePlayer = ({
     const nextLessonId = nextLesson ? nextLesson.id : null
 
     try {
-      const quizRes = await api.getLessonQuiz(course.id, activeLesson.id, activeLesson.title, preferredLanguage)
+      const quizRes = await api.getLessonQuiz(course.id, activeLesson.id, activeLesson.title, selectedLanguageCode)
       setLoadingQuiz(false)
       onAssessment?.(course, activeLesson, quizRes?.quiz || null, nextLessonId)
     } catch (err) {
@@ -1764,7 +1803,7 @@ const CoursePlayer = ({
       message: userMsg,
       lessonTitle: activeLessonRef.current?.title,
       currentConcept: currentConceptText,
-      language: preferredLanguage,
+      language: selectedLanguageCode,
       conversationHistory: chatMessages.slice(-8)
     })
       .then(res => {
@@ -1775,8 +1814,10 @@ const CoursePlayer = ({
           if (handsFreeVoiceRef.current) {
             isAwakeRef.current = true
             inConversationModeRef.current = true
+            voiceManagerRef.current?.setState?.(TutorState.FOLLOW_UP_LISTENING)
             setVoiceStatusText('💬 ARIA is listening for follow-up (or say "Resume")...')
             followUpTimerRef.current = setTimeout(() => {
+              voiceManagerRef.current?.returnToSleep?.()
               resumeLectureFromExactPosition()
             }, 6000)
           } else {
@@ -1787,7 +1828,7 @@ const CoursePlayer = ({
       })
       .catch(err => {
         console.error('Chat tutor error:', err)
-        setChatMessages(prev => [...prev, { sender: 'aria', text: '⚠️ Failed to answer question via AI Tutor. Resuming lecture...' }])
+        setChatMessages(prev => [...prev, { sender: 'aria', text: `⚠️ ${err.message || 'The AI tutor is temporarily unavailable. Please try again in a moment.'}` }])
         setChatLoading(false)
         setTimeout(() => {
           resumeLectureFromExactPosition()
@@ -2308,21 +2349,8 @@ const CoursePlayer = ({
                 />
               </div>
 
-              {/* Right Controls: Speed, CC, Fullscreen, Assessment Button */}
+              {/* Right Controls: CC, Fullscreen, Assessment Button */}
               <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const rates = [1.0, 1.25, 1.5, 2.0]
-                    const nextIdx = (rates.indexOf(playbackRate) + 1) % rates.length
-                    setPlaybackRate(rates[nextIdx])
-                  }}
-                  className="text-xs font-bold text-slate-200 hover:text-white bg-slate-800/80 hover:bg-slate-700 px-2 py-0.5 rounded transition cursor-pointer border border-white/10"
-                  title="Playback Speed"
-                >
-                  {playbackRate}x
-                </button>
-
                 <button
                   type="button"
                   onClick={() => setShowCC(v => !v)}

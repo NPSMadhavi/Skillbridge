@@ -204,8 +204,12 @@ const UsersList = () => {
 
   const startCapturing = async () => {
     if (!videoRef.current) return
-    setCapturing(true)
     const video = videoRef.current
+    if (!video.videoWidth || !video.videoHeight || video.readyState < 2) {
+      toast.error('Camera is not ready yet. Please wait a second and ensure your face is clearly visible.')
+      return
+    }
+    setCapturing(true)
     const canvas = document.createElement('canvas')
     const capturedImages = []
 

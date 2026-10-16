@@ -1,6 +1,6 @@
 const API_BASE_URL = 'http://localhost:5000/api/v1';
 
-const getHeaders = (isAdmin = false) => {
+const getHeaders = (role = false) => {
   const headers = {
     'Content-Type': 'application/json',
   };
@@ -8,13 +8,25 @@ const getHeaders = (isAdmin = false) => {
   try {
     const adminSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || 'null');
     const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null');
+    const superAdminSession = JSON.parse(sessionStorage.getItem('skillbridge_super_admin') || 'null');
 
-    const token = isAdmin
-      ? (adminSession?.token || userSession?.token)
-      : (userSession?.token || adminSession?.token);
+    let token = null;
+    if (role === 'super') {
+      token = superAdminSession?.token;
+    } else if (role === true) {
+      token = adminSession?.token || userSession?.token;
+    } else {
+      token = userSession?.token || adminSession?.token;
+    }
 
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    // Attach tenant header for multi-database routing
+    const tenantId = sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
+    if (tenantId) {
+      headers['x-tenant-id'] = tenantId;
     }
   } catch (e) {
     console.error('Error reading session token', e);
@@ -23,16 +35,210 @@ const getHeaders = (isAdmin = false) => {
 };
 
 export const api = {
-  // Admin Auth
-  adminLogin: async (email, password) => {
-    const res = await fetch(`${API_BASE_URL}/admin/login`, {
+  // Super Admin Control Plane APIs
+  superAdminLogin: async (email, password) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
     if (!res.ok) {
       const err = await res.json();
+      throw new Error(err.error || 'Failed to login as Super Admin.');
+    }
+    return res.json();
+  },
+
+  getSuperAdminMe: async () => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/auth/me`, {
+      method: 'GET',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch Super Admin profile.');
+    }
+    return res.json();
+  },
+
+  getSuperAdmins: async () => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/admins`, {
+      method: 'GET',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch Super Admins.');
+    }
+    return res.json();
+  },
+
+  createSuperAdmin: async (adminData) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/admins`, {
+      method: 'POST',
+      headers: getHeaders('super'),
+      body: JSON.stringify(adminData),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to create Super Admin.');
+    }
+    return res.json();
+  },
+
+  deleteSuperAdmin: async (id) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/admins/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete Super Admin.');
+    }
+    return res.json();
+  },
+
+  getCompanies: async () => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies`, {
+      method: 'GET',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch companies.');
+    }
+    return res.json();
+  },
+
+  createCompany: async (companyData) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies`, {
+      method: 'POST',
+      headers: getHeaders('super'),
+      body: JSON.stringify(companyData),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to create company and database.');
+    }
+    return res.json();
+  },
+
+  getCompany: async (id) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies/${id}`, {
+      method: 'GET',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch company details.');
+    }
+    return res.json();
+  },
+
+  updateCompany: async (id, companyData) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies/${id}`, {
+      method: 'PUT',
+      headers: getHeaders('super'),
+      body: JSON.stringify(companyData),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to update company.');
+    }
+    return res.json();
+  },
+
+  updateCompanyStatus: async (id, status) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies/${id}/status`, {
+      method: 'PATCH',
+      headers: getHeaders('super'),
+      body: JSON.stringify({ status }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to update company status.');
+    }
+    return res.json();
+  },
+
+  deleteCompany: async (id, dropDatabase = true) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies/${id}?dropDatabase=${dropDatabase}`, {
+      method: 'DELETE',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete company.');
+    }
+    return res.json();
+  },
+
+  // Company Admin Auth
+  adminLogin: async (email, password, companyCode = null) => {
+    const headers = {
+      'Content-Type': 'application/json',
+    };
+    if (companyCode) {
+      headers['x-tenant-id'] = companyCode;
+    }
+    const res = await fetch(`${API_BASE_URL}/admin/login`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, password, companyCode }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
       throw new Error(err.error || 'Failed to login as admin.');
+    }
+    return res.json();
+  },
+
+  getAdminMe: async () => {
+    const res = await fetch(`${API_BASE_URL}/admin/me`, {
+      method: 'GET',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch admin profile.');
+    }
+    return res.json();
+  },
+
+  // Company Admin Management
+  getCompanyAdmins: async () => {
+    const res = await fetch(`${API_BASE_URL}/admin/admins`, {
+      method: 'GET',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch company administrators.');
+    }
+    return res.json();
+  },
+
+  createCompanyAdmin: async (adminData) => {
+    const res = await fetch(`${API_BASE_URL}/admin/admins`, {
+      method: 'POST',
+      headers: getHeaders(true),
+      body: JSON.stringify(adminData),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to create company administrator.');
+    }
+    return res.json();
+  },
+
+  deleteCompanyAdmin: async (id) => {
+    const res = await fetch(`${API_BASE_URL}/admin/admins/${id}`, {
+      method: 'DELETE',
+      headers: getHeaders(true),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to delete company administrator.');
     }
     return res.json();
   },
@@ -226,11 +432,14 @@ export const api = {
   },
 
   // Student Auth
-  studentLogin: async (email, password) => {
+  studentLogin: async (email, password, companyCode = 'default') => {
     const res = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-tenant-id': companyCode
+      },
+      body: JSON.stringify({ email, password, companyCode }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -239,11 +448,14 @@ export const api = {
     return res.json();
   },
 
-  studentFaceLogin: async (faceIdData) => {
+  studentFaceLogin: async (faceIdData, companyCode = 'default') => {
     const res = await fetch(`${API_BASE_URL}/auth/face-login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ faceIdData }),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-tenant-id': companyCode
+      },
+      body: JSON.stringify({ faceIdData, companyCode }),
     });
     if (!res.ok) {
       const err = await res.json();

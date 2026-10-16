@@ -7,7 +7,10 @@ import { fileURLToPath } from 'url';
 import authRoutes from './routes/auth.js';
 import adminRoutes from './routes/admin.js';
 import coursesRoutes from './routes/courses.js';
+import superAdminRoutes from './routes/superAdmin.js';
+import { resolveTenant } from './middleware/tenantMiddleware.js';
 import prisma from './config/prisma.js';
+import masterPrisma from './config/masterPrisma.js';
 import aiService from './services/aiService.js';
 
 // Load environment variables
@@ -78,9 +81,13 @@ async function checkDatabaseConnection() {
 // API ROUTES
 // ============================================================
 
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/admin', adminRoutes);
-app.use('/api/v1/courses', coursesRoutes);
+// Super Admin Control-Plane API (Manages companies & tenant databases)
+app.use('/api/v1/super-admin', superAdminRoutes);
+
+// Tenant-Isolated APIs (Dynamically scoped to the request's company database)
+app.use('/api/v1/auth', resolveTenant, authRoutes);
+app.use('/api/v1/admin', resolveTenant, adminRoutes);
+app.use('/api/v1/courses', resolveTenant, coursesRoutes);
 
 // ============================================================
 // HEALTH CHECK

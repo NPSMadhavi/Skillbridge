@@ -317,6 +317,7 @@ export const updateUser = async (req, res) => {
         faceEmbedding = await pythonService.registerFace(faceIdData);
         faceImage = Array.isArray(faceIdData) ? faceIdData[0] : faceIdData;
       } catch (err) {
+        console.error('[BACKEND] Face update error in updateUser:', err.message, err.stack);
         if (err.message && (err.message.includes('already exists') || err.message.includes('already registered'))) {
           return res.status(400).json({ error: err.message });
         }

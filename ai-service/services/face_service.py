@@ -52,7 +52,18 @@ class FaceService:
         """
         # Run face detection and cropping. MTCNN returns aligned tensor (3, 160, 160).
         with torch.no_grad():
-            cropped_face = self.detector(image)
+            cropped_face = None
+            try:
+                w, h = image.size
+                if w >= 20 and h >= 20:
+                    cropped_face = self.detector(image)
+                    if cropped_face is None and (w > 640 or h > 480):
+                        resized = image.resize((w // 2, h // 2))
+                        cropped_face = self.detector(resized)
+            except Exception as ex:
+                print(f"Face detector caught error on input frame: {str(ex)}")
+                cropped_face = None
+
             if cropped_face is None:
                 # Fallback: check if resizing or contrast adjustment helps detect
                 w, h = image.size
