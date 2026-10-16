@@ -200,7 +200,60 @@ export const api = {
     return res.json();
   },
 
+  adminForgotPassword: async (email, companyCode = null) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (companyCode) {
+      headers['x-tenant-id'] = companyCode;
+    }
+    const res = await fetch(`${API_BASE_URL}/admin/forgot-password`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, companyCode }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to initiate password reset.');
+    }
+    return res.json();
+  },
+
+  adminResetPassword: async ({ email, companyCode = null, code, newPassword }) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (companyCode) {
+      headers['x-tenant-id'] = companyCode;
+    }
+    const res = await fetch(`${API_BASE_URL}/admin/reset-password`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, companyCode, code, newPassword }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to reset admin password.');
+    }
+    return res.json();
+  },
+
+  adminSetInitialPassword: async ({ email, companyCode = null, tempToken = null, newPassword }) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (companyCode) {
+      headers['x-tenant-id'] = companyCode;
+    }
+    const res = await fetch(`${API_BASE_URL}/admin/set-initial-password`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ email, companyCode, tempToken, newPassword }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to set permanent password.');
+    }
+    return res.json();
+  },
+
   getAdminMe: async () => {
+
+
     const res = await fetch(`${API_BASE_URL}/admin/me`, {
       method: 'GET',
       headers: getHeaders(true),

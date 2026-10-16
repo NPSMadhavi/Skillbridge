@@ -27,8 +27,10 @@ CREATE TABLE IF NOT EXISTS "Admin" (
     "nricFin" TEXT UNIQUE,
     "phone" TEXT,
     "department" TEXT,
+    "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
 
 -- Course Table
 CREATE TABLE IF NOT EXISTS "Course" (
