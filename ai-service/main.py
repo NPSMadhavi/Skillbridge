@@ -3,11 +3,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.face import router as face_router
 from api.transcribe import router as transcribe_router
+from api.tts import router as tts_router
 from services.face_service import get_face_service
 
 app = FastAPI(
     title="SkillBridge AI Service",
-    description="Python microservice for face biometrics and Whisper speech transcription",
+    description="Python microservice for face biometrics, Whisper speech transcription, and Neural TTS",
     version="1.0.0"
 )
 
@@ -23,6 +24,7 @@ app.add_middleware(
 # Include routes
 app.include_router(face_router)
 app.include_router(transcribe_router)
+app.include_router(tts_router, prefix="/api/tts", tags=["TTS"])
 
 @app.on_event("startup")
 def startup_event():

@@ -1,10 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { toast, ToastContainer } from 'react-toastify';
-import 'react-toastify/dist/ReactToastify.css';
 import { api } from '../../services/api';
 import { containsWakeWord } from '../../services/voiceTutorService';
-
-const SUGGESTED_NAMES = ['ARIA', 'VEDA', 'ALEX', 'JARVIS', 'ATHENA', 'SARA', 'NEXA'];
 
 export default function AdminAiSettings() {
   const [aiName, setAiName] = useState('ARIA');
@@ -15,11 +11,14 @@ export default function AdminAiSettings() {
   const [companyName, setCompanyName] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [statusMessage, setStatusMessage] = useState(null);
 
   // Live Wake Word Tester states
   const [testingMic, setTestingMic] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [interimTranscript, setInterimTranscript] = useState('');
+  const [isPlayingSample, setIsPlayingSample] = useState(false);
+  const [playingGender, setPlayingGender] = useState(null);
   const recognitionRef = useRef(null);
 
   // Load existing settings
@@ -31,14 +30,16 @@ export default function AdminAiSettings() {
           setAiName(data.aiName || 'ARIA');
           setWakeWord(data.wakeWord || `Hey ${data.aiName || 'ARIA'}`);
           setVoiceGender(data.aiVoiceGender || 'FEMALE');
-          setVoiceRate(data.aiVoiceRate || 1.0);
-          setVoicePitch(data.aiVoicePitch || 1.0);
+          setVoiceRate(data.aiVoiceRate ?? 1.0);
+          setVoicePitch(data.aiVoicePitch ?? 1.0);
           setCompanyName(data.companyName || '');
         }
       })
       .catch((err) => {
         console.error('Failed to load AI settings:', err);
-        toast.error('Failed to load company AI settings.');
+        if (isMounted) {
+          setStatusMessage({ type: 'error', text: 'Failed to load company AI settings.' });
+        }
       })
       .finally(() => {
         if (isMounted) setLoading(false);
@@ -47,18 +48,39 @@ export default function AdminAiSettings() {
     return () => {
       isMounted = false;
       stopMicTest();
+      stopAllAudio();
     };
   }, []);
 
-  // Update wakeWord suggestion when aiName changes if user hasn't typed custom
+  const audioRef = useRef(null);
+
+  const stopAllAudio = () => {
+    if (audioRef.current) {
+      try {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      } catch (_) { }
+      audioRef.current = null;
+    }
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch (_) { }
+    }
+  };
+
+  // Auto-dismiss success notification
+  useEffect(() => {
+    if (statusMessage?.type === 'success') {
+      const timer = setTimeout(() => setStatusMessage(null), 3500);
+      return () => clearTimeout(timer);
+    }
+  }, [statusMessage]);
+
   const handleAiNameChange = (val) => {
     setAiName(val);
     const trimmed = val.trim();
-    if (trimmed) {
-      setWakeWord(`Hey ${trimmed}`);
-    } else {
-      setWakeWord('Hey ARIA');
-    }
+    setWakeWord(trimmed ? `Hey ${trimmed}` : 'Hey ARIA');
   };
 
   const handleSelectSuggested = (name) => {
@@ -66,53 +88,128 @@ export default function AdminAiSettings() {
     setWakeWord(`Hey ${name}`);
   };
 
-  // Test Web Speech Sample
-  const playVoiceSample = () => {
-    try {
-      window.speechSynthesis.cancel();
-      const currentName = aiName.trim() || 'ARIA';
-      const sampleText = `Hello! I am ${currentName}, your company's personal AI tutor. Say "${wakeWord || `Hey ${currentName}`}" anytime during your course to ask me questions!`;
+  // Helper to select the highest quality natural/neural browser voice
+  const getBestNaturalVoice = (voices, gender) => {
+    if (!voices || voices.length === 0) return null;
+    const enVoices = voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
+    const isMale = String(gender).toUpperCase() === 'MALE';
 
-      const utter = new SpeechSynthesisUtterance(sampleText);
+    if (isMale) {
+      return (
+        enVoices.find((v) => {
+          const n = v.name.toLowerCase();
+          return (n.includes('natural') || n.includes('neural') || n.includes('online')) &&
+            (n.includes('guy') || n.includes('christopher') || n.includes('ryan') || n.includes('andrew') || n.includes('brian'));
+        }) ||
+        enVoices.find((v) => v.name.toLowerCase().includes('google') && v.name.toLowerCase().includes('male')) ||
+        enVoices.find((v) => v.name.toLowerCase().includes('natural') && !v.name.toLowerCase().includes('female')) ||
+        enVoices.find((v) => (v.name.toLowerCase().includes('male') || v.name.toLowerCase().includes('george')) && !v.name.toLowerCase().includes('david')) ||
+        enVoices.find((v) => v.name.toLowerCase().includes('david')) ||
+        enVoices[0]
+      );
+    } else {
+      return (
+        enVoices.find((v) => {
+          const n = v.name.toLowerCase();
+          return (n.includes('natural') || n.includes('neural') || n.includes('online')) &&
+            (n.includes('jenny') || n.includes('ava') || n.includes('emma') || n.includes('aria') || n.includes('sonia'));
+        }) ||
+        enVoices.find((v) => v.name.toLowerCase().includes('google us english') || v.name.toLowerCase().includes('google uk english female')) ||
+        enVoices.find((v) => v.name.toLowerCase().includes('google') && !v.name.toLowerCase().includes('male')) ||
+        enVoices.find((v) => (v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('neural')) && !v.name.toLowerCase().includes('guy') && !v.name.toLowerCase().includes('male')) ||
+        enVoices.find((v) => (v.name.toLowerCase().includes('female') || v.name.toLowerCase().includes('samantha')) && !v.name.toLowerCase().includes('zira')) ||
+        enVoices.find((v) => v.name.toLowerCase().includes('zira')) ||
+        enVoices[0]
+      );
+    }
+  };
+
+  const playBrowserNaturalVoice = (text, gender, onEnd) => {
+    try {
+      if (!window.speechSynthesis) {
+        onEnd();
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
       utter.rate = voiceRate;
       utter.pitch = voicePitch;
 
-      const voices = window.speechSynthesis.getVoices();
+      const voices = window.speechSynthesis.getVoices() || [];
       if (voices.length > 0) {
-        if (voiceGender === 'MALE') {
-          const maleVoice = voices.find(v =>
-            v.lang.startsWith('en') &&
-            (v.name.toLowerCase().includes('male') ||
-             v.name.toLowerCase().includes('guy') ||
-             v.name.toLowerCase().includes('george') ||
-             v.name.toLowerCase().includes('james'))
-          );
-          if (maleVoice) utter.voice = maleVoice;
-        } else {
-          const femaleVoice = voices.find(v =>
-            v.lang.startsWith('en') &&
-            (v.name.toLowerCase().includes('female') ||
-             v.name.toLowerCase().includes('zira') ||
-             v.name.toLowerCase().includes('samantha') ||
-             v.name.toLowerCase().includes('jenny'))
-          );
-          if (femaleVoice) utter.voice = femaleVoice;
+        const bestVoice = getBestNaturalVoice(voices, gender);
+        if (bestVoice) {
+          utter.voice = bestVoice;
         }
       }
 
+      utter.onend = onEnd;
+      utter.onerror = onEnd;
+
       window.speechSynthesis.speak(utter);
-      toast.info(`Playing sample greeting for ${currentName}...`);
     } catch (e) {
-      console.warn('Speech synthesis error:', e);
-      toast.error('Unable to play browser speech sample.');
+      console.warn('Browser speech error:', e);
+      onEnd();
     }
+  };
+
+  // Play realistic AI Voice Sample (Studio Neural Audio with Browser Natural Fallback)
+  const playVoiceSample = async (targetGender = null) => {
+    stopAllAudio();
+
+    const effectiveGender = targetGender || voiceGender;
+    const currentName = aiName.trim() || 'ARIA';
+    const sampleText = `Hello! I am ${currentName}, your personal AI tutor. Say "${wakeWord || `Hey ${currentName}`}" anytime to ask me questions!`;
+
+    setIsPlayingSample(true);
+    setPlayingGender(effectiveGender);
+
+    const onPlayFinish = () => {
+      setIsPlayingSample(false);
+      setPlayingGender(null);
+    };
+
+    // 1. Primary Engine: Studio Neural AI Voice (Edge/Azure Neural Audio)
+    try {
+      const audioUrl = api.getTtsAudioUrl(sampleText, {
+        gender: effectiveGender,
+        rate: voiceRate,
+        pitch: voicePitch,
+      });
+
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.onended = onPlayFinish;
+      audio.onerror = () => {
+        console.warn('Neural audio stream unavailable, using browser natural voice fallback');
+        playBrowserNaturalVoice(sampleText, effectiveGender, onPlayFinish);
+      };
+
+      await audio.play();
+      return;
+    } catch (err) {
+      console.warn('Neural audio error, falling back:', err);
+    }
+
+    // 2. Fallback Engine: Browser Natural Neural Voice
+    playBrowserNaturalVoice(sampleText, effectiveGender, onPlayFinish);
+  };
+
+  const handleSelectVoiceGender = (gender) => {
+    setVoiceGender(gender);
+    playVoiceSample(gender);
   };
 
   // Interactive Live Wake Word Mic Test
   const startMicTest = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
-      toast.warning('Browser SpeechRecognition is not supported in this browser. Please use Chrome/Edge for live mic testing.');
+      setStatusMessage({
+        type: 'error',
+        text: 'Microphone recognition is not supported in this browser. Please use Chrome or Edge.',
+      });
       return;
     }
 
@@ -141,9 +238,8 @@ export default function AdminAiSettings() {
           setTestResult({
             success: true,
             recognized: transcript,
-            timestamp: new Date().toLocaleTimeString()
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
           });
-          toast.success(`🎉 Wake word recognized: "${transcript}"!`);
         }
       };
 
@@ -155,16 +251,15 @@ export default function AdminAiSettings() {
 
       rec.onend = () => {
         if (testingMic) {
-          try { rec.start(); } catch {}
+          try { rec.start(); } catch { }
         }
       };
 
       rec.start();
       recognitionRef.current = rec;
-      toast.info(`🎙️ Mic active! Try saying "${wakeWord}" aloud.`);
     } catch (err) {
       console.error('Failed to start speech recognition test:', err);
-      toast.error('Failed to access microphone for wake testing.');
+      setStatusMessage({ type: 'error', text: 'Failed to access microphone for testing.' });
       setTestingMic(false);
     }
   };
@@ -175,7 +270,7 @@ export default function AdminAiSettings() {
       try {
         recognitionRef.current.onend = null;
         recognitionRef.current.stop();
-      } catch {}
+      } catch { }
       recognitionRef.current = null;
     }
   };
@@ -184,6 +279,7 @@ export default function AdminAiSettings() {
   const handleSave = async (e) => {
     e.preventDefault();
     setSaving(true);
+    setStatusMessage(null);
 
     const cleanName = aiName.trim() || 'ARIA';
     const cleanWake = wakeWord.trim() || `Hey ${cleanName}`;
@@ -193,23 +289,28 @@ export default function AdminAiSettings() {
         aiName: cleanName,
         wakeWord: cleanWake,
         aiVoiceGender: voiceGender,
-        aiVoiceName: voiceGender === 'MALE' ? 'Alex' : 'Veda',
+        aiVoiceName: voiceGender === 'MALE' ? 'en-US-GuyNeural' : 'en-US-JennyNeural',
         aiVoiceRate: parseFloat(voiceRate),
-        aiVoicePitch: parseFloat(voicePitch)
+        aiVoicePitch: parseFloat(voicePitch),
       });
 
-      toast.success(res.message || 'AI setup saved successfully!');
+      setStatusMessage({
+        type: 'success',
+        text: res.message || 'AI settings updated successfully.',
+      });
 
-      // Update session storage so immediate UI elements adapt
       const currentSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || '{}');
       sessionStorage.setItem('skillbridge_admin', JSON.stringify({
         ...currentSession,
         aiName: cleanName,
-        wakeWord: cleanWake
+        wakeWord: cleanWake,
       }));
     } catch (err) {
       console.error('Save AI settings error:', err);
-      toast.error(err.message || 'Failed to save AI settings.');
+      setStatusMessage({
+        type: 'error',
+        text: err.message || 'Failed to save AI settings.',
+      });
     } finally {
       setSaving(false);
     }
@@ -218,268 +319,225 @@ export default function AdminAiSettings() {
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="flex items-center space-x-3 text-slate-500">
-          <svg className="animate-spin h-5 w-5 text-[#f06400]" viewBox="0 0 24 24" fill="none">
+        <div className="flex items-center gap-3 text-muted">
+          <svg className="animate-spin h-5 w-5 text-orange" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
           </svg>
-          <span className="text-sm font-medium">Loading AI Tutor configuration…</span>
+          <span className="text-sm font-medium">Loading settings…</span>
         </div>
       </div>
     );
   }
 
-  const effectiveName = aiName.trim() || 'ARIA';
-
   return (
-    <div className="animate-rise-in space-y-6 sm:space-y-8 max-w-5xl pb-12 font-sans">
-      {/* Page Header */}
-      <div className="flex flex-col gap-2">
-        <div className="inline-flex items-center gap-2 w-fit rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-[11px] font-bold tracking-wider text-[#e05800] uppercase">
-          AI ASSISTANT & WAKE WORD SETUP
+    <div className="animate-rise-in space-y-6 max-w-4xl pb-10">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-xl font-bold tracking-tight text-fg sm:text-2xl">
+            AI Tutor Settings
+          </h1>
+          <p className="mt-1 text-xs text-muted sm:text-sm">
+            Configure the AI tutor name, activation phrase, and voice delivery{companyName ? ` for ${companyName}` : ''}.
+          </p>
         </div>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[#0f172a]">
-          Company AI Tutor Setup
-        </h1>
-        <p className="text-sm text-slate-500">
-          Configure the AI identity and custom wake word for <strong className="text-slate-800">{companyName || 'your organization'}</strong>. Learners will address your AI tutor by this custom name.
-        </p>
       </div>
 
+      {/* In-page Feedback Banner */}
+      {statusMessage && (
+        <div
+          className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm font-medium transition-all ${statusMessage.type === 'success'
+            ? 'border border-emerald-200 bg-emerald-50 text-emerald-800'
+            : 'border border-rose-200 bg-rose-50 text-rose-800'
+            }`}
+        >
+          <div className="flex items-center gap-2.5">
+            {statusMessage.type === 'success' ? (
+              <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+            ) : (
+              <svg className="w-4 h-4 text-rose-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            )}
+            <span>{statusMessage.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setStatusMessage(null)}
+            className="text-xs text-muted hover:text-fg transition-colors cursor-pointer px-1.5 py-0.5 rounded"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       <form onSubmit={handleSave} className="space-y-6">
-        {/* Card 1: AI Identity & Wake Word */}
-        <section className="rounded-3xl border border-slate-200/80 bg-white p-6 sm:p-8 shadow-sm">
-          <div className="flex items-center space-x-3 border-b border-slate-100 pb-5 mb-6">
-            <div className="w-10 h-10 rounded-2xl bg-orange-50 border border-orange-200/60 flex items-center justify-center text-lg">
-              🤖
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-[#0f172a]">
-                AI Identity & Activation Word
-              </h2>
-              <p className="text-xs text-slate-500">
-                Default name is ARIA. You can set any custom name your learners will love.
-              </p>
-            </div>
+        {/* Section 1: AI Tutor Identity & Wake Phrase */}
+        <section className="rounded-2xl border border-line bg-panel p-5 sm:p-6 shadow-xs">
+          <div className="mb-5 pb-3 border-b border-line/60">
+            <h2 className="font-display text-sm font-bold text-fg uppercase tracking-wider">
+              Identity & Activation
+            </h2>
           </div>
 
-          <div className="grid gap-6 md:grid-cols-2">
+          <div className="grid gap-5 md:grid-cols-2">
             {/* AI Name Input */}
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                <span>AI Tutor Name</span>
-                <span className="text-[11px] font-normal text-slate-400">Default: ARIA</span>
+              <label htmlFor="aiTutorName" className="text-xs font-semibold uppercase tracking-wider text-muted">
+                AI Tutor Name
               </label>
-              <div className="relative rounded-2xl bg-[#edf4fe] px-4 py-3 border border-transparent focus-within:border-blue-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-100/60 transition-all">
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. ARIA, VEDA, ALEX, JARVIS"
-                  value={aiName}
-                  onChange={(e) => handleAiNameChange(e.target.value)}
-                  className="w-full bg-transparent border-none outline-none text-[15px] font-semibold text-slate-900 placeholder-slate-400 focus:outline-none"
-                />
-              </div>
-              <p className="text-[11.5px] text-slate-500">
-                Learners will see: <strong className="text-blue-600">"{effectiveName} AI Tutor"</strong> across all course lectures.
-              </p>
-
-              {/* Quick Select Chips */}
-              <div className="pt-2">
-                <span className="text-[11px] font-semibold text-slate-400 block mb-1.5 uppercase tracking-wider">
-                  Quick Suggestions:
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {SUGGESTED_NAMES.map((name) => (
-                    <button
-                      key={name}
-                      type="button"
-                      onClick={() => handleSelectSuggested(name)}
-                      className={`px-3 py-1 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                        aiName.toUpperCase() === name
-                          ? 'bg-[#f06400] text-white shadow-xs'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {name}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <input
+                id="aiTutorName"
+                type="text"
+                required
+                placeholder="e.g. ARIA"
+                value={aiName}
+                onChange={(e) => handleAiNameChange(e.target.value)}
+                className="w-full rounded-xl border border-line bg-ink/50 px-3.5 py-2.5 text-sm font-medium text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel focus:border-navy focus:shadow-[0_0_0_3px_rgba(14,47,92,0.1)]"
+              />
             </div>
 
-            {/* Primary Wake Word */}
+            {/* Wake Word Input & Live Mic Action */}
             <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                <span>Primary Wake Phrase</span>
-                <span className="text-[11px] font-normal text-slate-400">Voice Trigger</span>
+              <label htmlFor="wakePhrase" className="text-xs font-semibold uppercase tracking-wider text-muted">
+                Wake Phrase
               </label>
-              <div className="relative rounded-2xl bg-[#edf4fe] px-4 py-3 border border-transparent focus-within:border-blue-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-100/60 transition-all">
-                <input
-                  type="text"
-                  required
-                  placeholder={`e.g. Hey ${effectiveName}`}
-                  value={wakeWord}
-                  onChange={(e) => setWakeWord(e.target.value)}
-                  className="w-full bg-transparent border-none outline-none text-[15px] font-semibold text-slate-900 placeholder-slate-400 focus:outline-none"
-                />
-              </div>
-              <p className="text-[11.5px] text-slate-500">
-                Learners say this during slide playback to pause the lecture and ask questions hands-free.
-              </p>
+              <input
+                id="wakePhrase"
+                type="text"
+                required
+                placeholder={`e.g. Hey ${aiName.trim() || 'ARIA'}`}
+                value={wakeWord}
+                onChange={(e) => setWakeWord(e.target.value)}
+                className="w-full rounded-xl border border-line bg-ink/50 px-3.5 py-2.5 text-sm font-medium text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel focus:border-navy focus:shadow-[0_0_0_3px_rgba(14,47,92,0.1)]"
+              />
 
-              {/* Multilingual Trigger Preview */}
-              <div className="mt-3 p-3 rounded-2xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-bold text-slate-600 block mb-1 uppercase tracking-wider">
-                  Supported Wake Phrases in All Languages:
-                </span>
-                <ul className="text-[11.5px] text-slate-600 space-y-1">
-                  <li>🇬🇧 <strong>English:</strong> "Hey {effectiveName}", "{effectiveName}", "Hi {effectiveName}", "Hello {effectiveName}"</li>
-                  <li>🇨🇳 <strong>Chinese:</strong> "你好 {effectiveName}", "嘿 {effectiveName}"</li>
-                  <li>🇲🇾 <strong>Malay:</strong> "Hai {effectiveName}", "Helo {effectiveName}"</li>
-                  <li>🇮🇳 <strong>Tamil:</strong> "வணக்கம் {effectiveName}", "ஹாய் {effectiveName}"</li>
-                  <li>🇧🇩 <strong>Bangla:</strong> "হ্যালো {effectiveName}", "নমস্কার {effectiveName}"</li>
-                  <li>🇮🇳 <strong>Telugu:</strong> "హలో {effectiveName}", "నమస్కారం {effectiveName}", "హే {effectiveName}"</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </section>
+              {/* Mic Test Controls */}
+              <div className="pt-1 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={testingMic ? stopMicTest : startMicTest}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${testingMic
+                    ? 'bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100'
+                    : 'border border-line bg-ink hover:bg-slate-200 text-fg'
+                    }`}
+                >
+                  <svg className={`w-3.5 h-3.5 ${testingMic ? 'text-rose-600 animate-pulse' : 'text-muted'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  </svg>
+                  <span>{testingMic ? 'Stop Test' : 'Test Mic'}</span>
+                </button>
 
-        {/* Card 2: Interactive Live Mic Tester */}
-        <section className="rounded-3xl border border-slate-200/80 bg-white p-6 sm:p-8 shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-5 mb-6">
-            <div className="flex items-center space-x-3">
-              <div className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-200/60 flex items-center justify-center text-lg">
-                🎙️
-              </div>
-              <div>
-                <h2 className="text-base font-bold text-[#0f172a]">
-                  Interactive Wake Word Tester
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Test your microphone in real-time to verify wake word recognition for <strong>"{wakeWord}"</strong>.
-                </p>
-              </div>
-            </div>
+                {testingMic && (
+                  <span className="inline-flex items-center gap-1.5 text-xs text-navy font-medium">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                    Listening for &ldquo;{wakeWord}&rdquo;
+                  </span>
+                )}
 
-            <button
-              type="button"
-              onClick={testingMic ? stopMicTest : startMicTest}
-              className={`px-4 py-2.5 rounded-2xl text-xs font-bold transition-all flex items-center space-x-2 cursor-pointer ${
-                testingMic
-                  ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'
-                  : 'bg-blue-600 text-white shadow-[0_4px_12px_rgba(37,99,235,0.25)] hover:bg-blue-700'
-              }`}
-            >
-              <span>{testingMic ? '⏹ Stop Mic Test' : '🎙️ Start Mic Test'}</span>
-            </button>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-5 flex flex-col items-center justify-center text-center">
-            {testingMic ? (
-              <div className="space-y-3">
-                <div className="relative mx-auto w-12 h-12 flex items-center justify-center">
-                  <div className="absolute inset-0 rounded-full bg-blue-400 animate-ping opacity-30" />
-                  <div className="relative w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center shadow-md">
-                    🎙️
-                  </div>
-                </div>
-                <p className="text-sm font-semibold text-slate-800">
-                  Listening… Speak into your mic: <span className="text-[#f06400]">"{wakeWord}"</span>
-                </p>
-                {interimTranscript && (
-                  <p className="text-xs font-mono bg-white px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 max-w-md mx-auto">
-                    Live speech: "{interimTranscript}"
-                  </p>
+                {testResult && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-[11px] font-medium text-emerald-800">
+                    <svg className="w-3 h-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Recognized: &ldquo;{testResult.recognized}&rdquo;
+                  </span>
                 )}
               </div>
-            ) : (
-              <div className="text-slate-400 text-xs py-2">
-                Click <strong>"Start Mic Test"</strong> above and speak your wake phrase to test detection accuracy.
-              </div>
-            )}
 
-            {testResult && (
-              <div className="mt-4 p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center space-x-2 animate-rise-in">
-                <span>✅</span>
-                <span>
-                  <strong>Wake Word Detected!</strong> Successfully matched "{testResult.recognized}" at {testResult.timestamp}.
-                </span>
-              </div>
-            )}
+              {testingMic && interimTranscript && (
+                <p className="text-[11px] font-mono text-muted truncate">
+                  Heard: &ldquo;{interimTranscript}&rdquo;
+                </p>
+              )}
+            </div>
           </div>
         </section>
 
-        {/* Card 3: Voice Persona & Speech Synthesis */}
-        <section className="rounded-3xl border border-slate-200/80 bg-white p-6 sm:p-8 shadow-sm">
-          <div className="flex items-center space-x-3 border-b border-slate-100 pb-5 mb-6">
-            <div className="w-10 h-10 rounded-2xl bg-purple-50 border border-purple-200/60 flex items-center justify-center text-lg">
-              🔊
-            </div>
-            <div>
-              <h2 className="text-base font-bold text-[#0f172a]">
-                Voice Persona & Delivery
+        {/* Section 2: Voice Persona & Characteristics */}
+        <section className="rounded-2xl border border-line bg-panel p-5 sm:p-6 shadow-xs">
+          <div className="mb-5 pb-3 border-b border-line/60 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="font-display text-sm font-bold text-fg uppercase tracking-wider">
+                Voice & Delivery
               </h2>
-              <p className="text-xs text-slate-500">
-                Choose the voice gender and speech characteristics for {effectiveName}.
-              </p>
             </div>
+            <button
+              type="button"
+              onClick={playVoiceSample}
+              disabled={isPlayingSample}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line bg-ink hover:bg-slate-200 text-xs font-medium text-fg transition cursor-pointer disabled:opacity-50"
+            >
+              <svg className={`w-3.5 h-3.5 text-orange ${isPlayingSample ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              </svg>
+              <span>{isPlayingSample ? 'Playing sample…' : 'Play Greeting Sample'}</span>
+            </button>
           </div>
 
           <div className="grid gap-6 sm:grid-cols-2">
             {/* Voice Gender Selection */}
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                AI Voice Persona
+            <div className="space-y-2">
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted block">
+                Voice Tone
               </label>
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={() => setVoiceGender('FEMALE')}
-                  className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
-                    voiceGender === 'FEMALE'
-                      ? 'border-[#f06400] bg-orange-50/60 ring-2 ring-[#f06400]/20'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  onClick={() => handleSelectVoiceGender('FEMALE')}
+                  className={`p-3.5 rounded-xl border text-left transition cursor-pointer ${voiceGender === 'FEMALE'
+                    ? 'border-orange bg-orange/5 ring-1 ring-orange/30'
+                    : 'border-line bg-ink/30 hover:border-sky/40'
+                    }`}
                 >
-                  <div className="text-xl mb-1">👩</div>
-                  <div className="text-sm font-bold text-slate-900">Female Voice</div>
-                  <div className="text-[11px] text-slate-500">Warm, natural, clear tone (e.g. Veda)</div>
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-sm text-fg">Female</div>
+                    {playingGender === 'FEMALE' && (
+                      <span className="flex items-center gap-1 text-[11px] text-orange font-semibold animate-pulse">
+                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                        </svg>
+                        Playing
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted">Warm, lifelike &amp; natural</div>
                 </button>
 
                 <button
                   type="button"
-                  onClick={() => setVoiceGender('MALE')}
-                  className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
-                    voiceGender === 'MALE'
-                      ? 'border-[#f06400] bg-orange-50/60 ring-2 ring-[#f06400]/20'
-                      : 'border-slate-200 bg-white hover:border-slate-300'
-                  }`}
+                  onClick={() => handleSelectVoiceGender('MALE')}
+                  className={`p-3.5 rounded-xl border text-left transition cursor-pointer ${voiceGender === 'MALE'
+                    ? 'border-orange bg-orange/5 ring-1 ring-orange/30'
+                    : 'border-line bg-ink/30 hover:border-sky/40'
+                    }`}
                 >
-                  <div className="text-xl mb-1">👨</div>
-                  <div className="text-sm font-bold text-slate-900">Male Voice</div>
-                  <div className="text-[11px] text-slate-500">Deep, articulate, authoritative tone</div>
-                </button>
-              </div>
-
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={playVoiceSample}
-                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-colors flex items-center space-x-2 cursor-pointer"
-                >
-                  <span>🔊 Play Greeting Sample</span>
+                  <div className="flex items-center justify-between">
+                    <div className="font-semibold text-sm text-fg">Male</div>
+                    {playingGender === 'MALE' && (
+                      <span className="flex items-center gap-1 text-[11px] text-orange font-semibold animate-pulse">
+                        <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+                        </svg>
+                        Playing
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-muted">Articulate, human &amp; grounded</div>
                 </button>
               </div>
             </div>
 
-            {/* Speech Rate & Pitch Sliders */}
-            <div className="space-y-4 bg-slate-50/70 p-5 rounded-2xl border border-slate-200/80">
+            {/* Sliders */}
+            <div className="space-y-4">
+              {/* Speech Rate */}
               <div className="space-y-1.5">
-                <div className="flex justify-between text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  <span>Speech Rate</span>
-                  <span className="font-mono text-[#f06400]">{voiceRate}x</span>
+                <div className="flex justify-between text-xs font-semibold text-muted">
+                  <span className="uppercase tracking-wider">Speech Rate</span>
+                  <span className="font-mono text-fg font-bold">{voiceRate.toFixed(2)}x</span>
                 </div>
                 <input
                   type="range"
@@ -488,19 +546,20 @@ export default function AdminAiSettings() {
                   step="0.05"
                   value={voiceRate}
                   onChange={(e) => setVoiceRate(parseFloat(e.target.value))}
-                  className="w-full accent-[#f06400] cursor-pointer"
+                  className="w-full accent-orange cursor-pointer"
                 />
-                <div className="flex justify-between text-[10px] text-slate-400">
-                  <span>0.8x (Deliberate)</span>
+                <div className="flex justify-between text-[10px] text-muted">
+                  <span>0.8x (Slower)</span>
                   <span>1.0x (Normal)</span>
-                  <span>1.3x (Brisk)</span>
+                  <span>1.3x (Faster)</span>
                 </div>
               </div>
 
-              <div className="space-y-1.5 pt-2 border-t border-slate-200">
-                <div className="flex justify-between text-xs font-bold text-slate-700 uppercase tracking-wider">
-                  <span>Voice Pitch</span>
-                  <span className="font-mono text-[#f06400]">{voicePitch}x</span>
+              {/* Voice Pitch */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs font-semibold text-muted">
+                  <span className="uppercase tracking-wider">Voice Pitch</span>
+                  <span className="font-mono text-fg font-bold">{voicePitch.toFixed(2)}x</span>
                 </div>
                 <input
                   type="range"
@@ -509,10 +568,10 @@ export default function AdminAiSettings() {
                   step="0.05"
                   value={voicePitch}
                   onChange={(e) => setVoicePitch(parseFloat(e.target.value))}
-                  className="w-full accent-[#f06400] cursor-pointer"
+                  className="w-full accent-orange cursor-pointer"
                 />
-                <div className="flex justify-between text-[10px] text-slate-400">
-                  <span>0.8x (Deeper)</span>
+                <div className="flex justify-between text-[10px] text-muted">
+                  <span>0.8x (Lower)</span>
                   <span>1.0x (Natural)</span>
                   <span>1.2x (Higher)</span>
                 </div>
@@ -521,40 +580,27 @@ export default function AdminAiSettings() {
           </div>
         </section>
 
-        {/* Submit Actions */}
-        <div className="flex items-center justify-end space-x-3 pt-2">
+        {/* Submit Button */}
+        <div className="flex justify-end pt-2">
           <button
             type="submit"
             disabled={saving}
-            className="py-3.5 px-6 rounded-2xl bg-[#f06400] hover:bg-[#e05800] active:scale-[0.99] text-white font-semibold text-[14.5px] shadow-[0_8px_20px_rgba(240,100,0,0.28)] transition-all flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer"
+            className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-orange px-5 py-2.5 text-sm font-semibold text-white shadow-[0_8px_20px_rgba(240,106,0,0.22)] transition hover:brightness-105 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {saving ? (
-              <span className="flex items-center space-x-2">
+              <>
                 <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                 </svg>
-                <span>Saving Setup…</span>
-              </span>
+                <span>Saving…</span>
+              </>
             ) : (
-              <span>Save AI & Wake Word Setup →</span>
+              <span>Save AI Settings</span>
             )}
           </button>
         </div>
       </form>
-
-      <ToastContainer
-        position="top-right"
-        autoClose={3500}
-        hideProgressBar={false}
-        newestOnTop
-        closeOnClick
-        rtl={false}
-        pauseOnFocusLoss={false}
-        draggable
-        pauseOnHover
-        theme="colored"
-      />
     </div>
   );
 }

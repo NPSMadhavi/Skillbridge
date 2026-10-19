@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams, useLocation } from 'react-router-dom'
 import AdminLayout from './components/admin/AdminLayout'
 import Header from './components/Header'
@@ -107,34 +107,80 @@ const CoursePlayerRoute = () => {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const [course, setCourse] = useState(location.state?.course || null)
-  const [loading, setLoading] = useState(!course)
-  const [accessError, setAccessError] = useState('')
+  const fetchedIdRef = useRef(null)
+
+  // Initialize course instantly from router state or fast client cache
+  const [course, setCourse] = useState(() => {
+    if (location.state?.course) return location.state.course;
+    const cached = api.getCachedCourse(id);
+    if (cached) return mapRagCourse(cached);
+    return null;
+  });
+
+  const [loading, setLoading] = useState(!course);
+  const [accessError, setAccessError] = useState('');
 
   useEffect(() => {
-    const hasFullVisuals = Boolean(course?.fileText || course?.lessons?.[0]?.visuals?.length);
-    if (id && (!course || !hasFullVisuals)) {
-      setLoading(true)
-      setAccessError('')
-      api.getCourseDetail(id)
-        .then(res => {
-          setCourse(mapRagCourse(res))
-        })
-        .catch(err => {
-          console.error("Failed to load course details for player:", err)
-          setAccessError(err.message || 'Access denied. You are not assigned to this course.')
-        })
-        .finally(() => setLoading(false))
-    }
-  }, [id, course])
+    if (!id || fetchedIdRef.current === id) return;
+    fetchedIdRef.current = id;
 
-  if (loading) {
+    let isMounted = true;
+    api.getCourseDetail(id)
+      .then(res => {
+        if (!isMounted) return;
+        const mapped = mapRagCourse(res);
+        setCourse(prev => {
+          if (!prev) return mapped;
+          return {
+            ...prev,
+            ...mapped,
+            lessons: (mapped.lessons && mapped.lessons.length > 0) ? mapped.lessons : prev.lessons
+          };
+        });
+        setLoading(false);
+      })
+      .catch(err => {
+        if (!isMounted) return;
+        console.error("Failed to load course details for player:", err);
+        setCourse(prev => {
+          if (!prev) {
+            setAccessError(err.message || 'Access denied. You are not assigned to this course.');
+          }
+          return prev;
+        });
+        setLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [id]);
+
+  if (loading && !course) {
     return (
-      <div className="min-h-svh bg-[#0b0e14] flex flex-col items-center justify-center text-white">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-orange/20 border-t-orange mb-4" />
-        <p className="text-sm font-semibold text-slate-300">Loading AI Tutor Player...</p>
+      <div className="min-h-screen bg-[#f8fafc] flex flex-col overflow-hidden animate-pulse">
+        <div className="h-14 bg-white border-b border-slate-200 px-6 flex items-center justify-between">
+          <div className="h-4 w-20 bg-slate-200 rounded" />
+          <div className="h-4 w-48 bg-slate-200 rounded" />
+          <div className="h-8 w-32 bg-slate-200 rounded-lg" />
+        </div>
+        <div className="flex-1 flex gap-4 p-4 max-w-7xl mx-auto w-full">
+          <div className="w-80 bg-white rounded-2xl border border-slate-200 p-4 space-y-3 hidden md:block">
+            <div className="h-4 w-32 bg-slate-200 rounded" />
+            <div className="h-12 bg-slate-100 rounded-xl" />
+            <div className="h-12 bg-slate-100 rounded-xl" />
+            <div className="h-12 bg-slate-100 rounded-xl" />
+          </div>
+          <div className="flex-1 bg-white rounded-2xl border border-slate-200 p-6 flex flex-col justify-between">
+            <div className="h-6 w-64 bg-slate-200 rounded" />
+            <div className="h-72 bg-slate-900 rounded-2xl flex items-center justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange/20 border-t-orange" />
+            </div>
+            <div className="h-12 bg-slate-100 rounded-xl" />
+          </div>
+        </div>
       </div>
-    )
+    );
   }
 
   if (accessError || !course) {
@@ -191,7 +237,14 @@ const AssessmentRoute = () => {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const [course, setCourse] = useState(location.state?.course || null)
+  const fetchedIdRef = useRef(null)
+
+  const [course, setCourse] = useState(() => {
+    if (location.state?.course) return location.state.course;
+    const cached = api.getCachedCourse(id);
+    if (cached) return mapRagCourse(cached);
+    return null;
+  });
   const [loading, setLoading] = useState(!course)
   const [accessDenied, setAccessDenied] = useState(false)
 
@@ -200,23 +253,23 @@ const AssessmentRoute = () => {
   const nextLessonId = location.state?.nextLessonId
 
   useEffect(() => {
-    if (!course && id) {
-      setLoading(true)
-      api.getCourseDetail(id)
-        .then(res => setCourse(mapRagCourse(res)))
-        .catch(err => {
-          console.error('Failed to load course for assessment:', err)
-          setAccessDenied(true)
-        })
-        .finally(() => setLoading(false))
-    }
+    if (!id || course || fetchedIdRef.current === id) return;
+    fetchedIdRef.current = id;
+    setLoading(true);
+    api.getCourseDetail(id)
+      .then(res => setCourse(mapRagCourse(res)))
+      .catch(err => {
+        console.error('Failed to load course for assessment:', err)
+        setAccessDenied(true)
+      })
+      .finally(() => setLoading(false))
   }, [id, course])
 
   if (!sessionStorage.getItem('skillbridge_user')) {
     return <Navigate to="/login" replace />
   }
 
-  if (loading) {
+  if (loading && !course) {
     return (
       <div className="min-h-screen bg-[#f4f7fc] flex flex-col items-center justify-center text-slate-800">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-[#ff8c21]/20 border-t-[#ff8c21] mb-4" />

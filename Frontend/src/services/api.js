@@ -293,16 +293,33 @@ export const api = {
   },
 
   getCompanyAiSettings: async (companyCode = null) => {
-    const code = companyCode || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
-    const res = await fetch(`${API_BASE_URL}/admin/company-ai-settings?code=${encodeURIComponent(code)}`, {
+    let code = companyCode;
+    if (!code) {
+      try {
+        const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null');
+        const adminSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || 'null');
+        code = userSession?.tenant?.code || userSession?.user?.tenantCode || userSession?.user?.tenant || userSession?.tenantCode || adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
+      } catch (_) {
+        code = 'default';
+      }
+    }
+    const cleanCode = (code || 'default').trim().toLowerCase();
+    const res = await fetch(`${API_BASE_URL}/admin/company-ai-settings?code=${encodeURIComponent(cleanCode)}`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
-        'x-tenant-id': code
-      }
+        'x-tenant-id': cleanCode,
+      },
     });
     if (!res.ok) {
-      return { aiName: 'ARIA', wakeWord: 'Hey ARIA' };
+      return {
+        aiName: 'ARIA',
+        wakeWord: 'Hey ARIA',
+        aiVoiceGender: 'FEMALE',
+        aiVoiceName: 'en-US-JennyNeural',
+        aiVoiceRate: 1.0,
+        aiVoicePitch: 1.0,
+      };
     }
     return res.json();
   },
@@ -666,7 +683,20 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Failed to fetch courses catalog.');
     }
-    return res.json();
+    const data = await res.json();
+    try {
+      if (Array.isArray(data) && typeof window !== 'undefined') {
+        window.__courseCache = window.__courseCache || new Map();
+        data.forEach(c => {
+          if (c?.id) {
+            window.__courseCache.set(String(c.id), c);
+            try { sessionStorage.setItem(`skillbridge_cached_course_${c.id}`, JSON.stringify(c)); } catch (_) {}
+          }
+        });
+        sessionStorage.setItem('skillbridge_cached_courses', JSON.stringify(data));
+      }
+    } catch (_) {}
+    return data;
   },
 
   getCourseDetail: async (id) => {
@@ -678,7 +708,49 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Failed to fetch course details.');
     }
-    return res.json();
+    const data = await res.json();
+    try {
+      if (data?.id && typeof window !== 'undefined') {
+        window.__courseCache = window.__courseCache || new Map();
+        window.__courseCache.set(String(data.id), data);
+        sessionStorage.setItem(`skillbridge_cached_course_${data.id}`, JSON.stringify(data));
+      }
+    } catch (_) {}
+    return data;
+  },
+
+  getCachedCourse: (id) => {
+    if (!id || typeof window === 'undefined') return null;
+    try {
+      // 1. Check in-memory map
+      if (window.__courseCache && window.__courseCache.has(String(id))) {
+        return window.__courseCache.get(String(id));
+      }
+      // 2. Check course-specific sessionStorage
+      const specific = sessionStorage.getItem(`skillbridge_cached_course_${id}`);
+      if (specific) {
+        const parsed = JSON.parse(specific);
+        if (parsed?.id) {
+          window.__courseCache = window.__courseCache || new Map();
+          window.__courseCache.set(String(id), parsed);
+          return parsed;
+        }
+      }
+      // 3. Check catalog in sessionStorage
+      const catalog = sessionStorage.getItem('skillbridge_cached_courses');
+      if (catalog) {
+        const list = JSON.parse(catalog);
+        if (Array.isArray(list)) {
+          const match = list.find(c => String(c.id) === String(id));
+          if (match) {
+            window.__courseCache = window.__courseCache || new Map();
+            window.__courseCache.set(String(id), match);
+            return match;
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
   },
 
   getLessonExplanation: async (id, lessonId, lessonTitle, language) => {
@@ -778,5 +850,17 @@ export const api = {
       throw new Error(err.error || 'Failed to chat with AI Tutor.');
     }
     return res.json();
+  },
+
+  getTtsAudioUrl: (text, options = {}) => {
+    const { voice, gender = 'FEMALE', rate = 1.0, pitch = 1.0 } = options;
+    const params = new URLSearchParams({
+      text: (text || '').trim(),
+      gender,
+      rate: String(rate),
+      pitch: String(pitch),
+    });
+    if (voice) params.append('voice', voice);
+    return `${API_BASE_URL}/tts/synthesize?${params.toString()}`;
   },
 };

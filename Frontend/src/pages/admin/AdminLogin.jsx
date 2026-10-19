@@ -384,20 +384,6 @@ export default function AdminLogin() {
           {/* MODE 1: LOGIN FORM */}
           {mode === 'login' && (
             <form onSubmit={handleLoginSubmit} className="mt-5 space-y-3.5" noValidate>
-              {/* Company Code Field (Optional / Auto-resolved) */}
-              <div className="relative flex items-center rounded-2xl bg-[#edf4fe] px-4 py-3 border border-transparent focus-within:border-blue-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-100/60 transition-all">
-                <span className="pointer-events-none shrink-0">
-                  <BuildingIcon />
-                </span>
-                <input
-                  type="text"
-                  autoComplete="organization"
-                  placeholder="Company Code (e.g. acme) - Optional"
-                  value={companyCode}
-                  onChange={(e) => setCompanyCode(e.target.value)}
-                  className="w-full bg-transparent border-none outline-none text-[13.5px] text-slate-800 placeholder-slate-400 pl-3 focus:outline-none"
-                />
-              </div>
 
               {/* Admin Email Field */}
               <div className="relative flex items-center rounded-2xl bg-[#edf4fe] px-4 py-3 border border-transparent focus-within:border-blue-300 focus-within:bg-white focus-within:ring-4 focus-within:ring-blue-100/60 transition-all">
@@ -733,24 +719,6 @@ export default function AdminLogin() {
             </form>
           )}
         </section>
-
-        {/* Footer Navigation Links */}
-        <footer className="mt-6 flex flex-col items-center space-y-2 text-center">
-          <button
-            type="button"
-            onClick={() => navigate('/super-admin/login')}
-            className="text-[12.5px] text-slate-500 hover:text-[#0f172a] hover:underline transition-colors cursor-pointer"
-          >
-            System Super Admin? Enter Control Plane →
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/login')}
-            className="text-[12px] text-slate-400 hover:text-slate-600 hover:underline transition-colors cursor-pointer"
-          >
-            Learner or Employee? Go to Student Portal →
-          </button>
-        </footer>
       </div>
 
       <ToastContainer
