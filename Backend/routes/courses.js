@@ -361,7 +361,7 @@ router.get('/', authenticateToken, async (req, res) => {
             FROM "UserCourseAssignment" uca
             WHERE uca."courseId" = c.id
           ) AS "assignedUsersCount",
-          COALESCE(c."modulesSummary", c.curriculum) AS curriculum
+          c.curriculum AS curriculum
         FROM "Course" c
         ORDER BY c."createdAt" DESC;
       `;
@@ -402,7 +402,7 @@ router.get('/', authenticateToken, async (req, res) => {
           FROM "UserCourseAssignment" uca
           WHERE uca."courseId" = c.id
         ) AS "assignedUsersCount",
-        COALESCE(c."modulesSummary", c.curriculum) AS curriculum
+        c.curriculum AS curriculum
       FROM "Course" c
       WHERE c.id = ANY(${assignedIds}::text[])
       ORDER BY c."createdAt" DESC;
@@ -418,9 +418,7 @@ router.get('/', authenticateToken, async (req, res) => {
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
     if (req.tenantCode && req.tenantCode !== 'default') {
-      try {
-        await tenantService.syncDefaultCoursesToTenant(req.tenantCode);
-      } catch (_) {}
+      tenantService.syncDefaultCoursesToTenant(req.tenantCode).catch(() => {});
     }
 
     const course = await prisma.course.findUnique({

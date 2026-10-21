@@ -492,10 +492,10 @@ const CoursePlayer = ({
         setAiWakeWord(settings.wakeWord || `Hey ${settings.aiName}`)
         if (settings.aiVoiceGender || settings.aiVoiceName || settings.aiVoiceRate) {
           setAiVoiceConfig({
-            gender: settings.aiVoiceGender || 'female',
+            gender: (settings.aiVoiceGender || 'female').toLowerCase(),
             voiceName: settings.aiVoiceName || '',
-            rate: settings.aiVoiceRate || 0.95,
-            pitch: settings.aiVoicePitch || 1.0
+            rate: typeof settings.aiVoiceRate === 'number' ? settings.aiVoiceRate : 0.95,
+            pitch: typeof settings.aiVoicePitch === 'number' ? settings.aiVoicePitch : 1.0
           })
         }
         setChatMessages(prev => {
@@ -672,76 +672,65 @@ const CoursePlayer = ({
 
     // 0. If company admin set a specific preferred voice name
     if (aiVoiceConfig?.voiceName) {
-      const explicit = voices.find(v => v.name.toLowerCase().includes(aiVoiceConfig.voiceName.toLowerCase()))
+      const keyword = aiVoiceConfig.voiceName.toLowerCase().replace(/^en-us-/, '').replace(/neural$/, '')
+      const explicit = voices.find(v => v.name.toLowerCase().includes(keyword))
       if (explicit) return explicit
     }
 
-    // Explicitly exclude robotic David and user-disliked Aria voices
+    // Explicitly exclude robotic David, Zira and legacy desktop voices
     const isDisallowed = (name) => {
       const n = (name || '').toLowerCase()
-      return n.includes('aria') || n.includes('david')
+      return n.includes('david') || n.includes('zira') || n.includes('desktop')
     }
 
     if (l === 'en') {
       const enVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en') && !isDisallowed(v.name))
-      const isMale = aiVoiceConfig?.gender === 'male'
+      const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male'
 
       if (isMale) {
         const maleVoice = enVoices.find(v => {
           const n = v.name.toLowerCase()
-          return n.includes('natural') && (n.includes('guy') || n.includes('christopher') || n.includes('brian') || n.includes('ryan') || n.includes('andrew') || n.includes('male'))
-        }) || enVoices.find(v => v.name.toLowerCase().includes('male'))
+          return (n.includes('natural') || n.includes('neural') || n.includes('online')) &&
+            (n.includes('guy') || n.includes('christopher') || n.includes('ryan') || n.includes('andrew') || n.includes('brian') || n.includes('eric'))
+        }) || enVoices.find(v => v.name.toLowerCase().includes('google') && v.name.toLowerCase().includes('male'))
+          || enVoices.find(v => (v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('neural')) && !v.name.toLowerCase().includes('female'))
+          || enVoices.find(v => v.name.toLowerCase().includes('male'))
         if (maleVoice) {
           console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen male voice: ${maleVoice.name} (${maleVoice.lang})`)
           return maleVoice
         }
-      }
+      } else {
+        // Female:
+        // 1. Microsoft Jenny (Natural) / Ava / Emma / Aria / Sonia
+        const naturalFemale = enVoices.find(v => {
+          const n = v.name.toLowerCase()
+          return (n.includes('natural') || n.includes('neural') || n.includes('online')) &&
+            (n.includes('jenny') || n.includes('ava') || n.includes('emma') || n.includes('aria') || n.includes('sonia') || n.includes('neerja'))
+        })
+        if (naturalFemale) {
+          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${naturalFemale.name} (${naturalFemale.lang})`)
+          return naturalFemale
+        }
 
-      // 1. Google US English / Google UK English Female (The authentic Veda gTTS voice)
-      const googleVoice = enVoices.find(v => {
-        const n = v.name.toLowerCase()
-        return n.includes('google us english') || n.includes('google uk english female') || n.includes('google')
-      })
-      if (googleVoice) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${googleVoice.name} (${googleVoice.lang})`)
-        return googleVoice
-      }
+        // 2. Google US English / Google UK English Female
+        const googleVoice = enVoices.find(v => {
+          const n = v.name.toLowerCase()
+          return n.includes('google us english') || n.includes('google uk english female') || (n.includes('google') && !n.includes('male'))
+        })
+        if (googleVoice) {
+          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${googleVoice.name} (${googleVoice.lang})`)
+          return googleVoice
+        }
 
-      // 2. Microsoft Jenny (Natural) - The warm, gentle, authentic educator voice
-      const jennyVoice = enVoices.find(v => {
-        const n = v.name.toLowerCase()
-        return n.includes('jenny') && n.includes('natural')
-      })
-      if (jennyVoice) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${jennyVoice.name} (${jennyVoice.lang})`)
-        return jennyVoice
-      }
-
-      // 3. Microsoft Ava / Emma / Sonia / Neerja (Natural)
-      const naturalVoice = enVoices.find(v => {
-        const n = v.name.toLowerCase()
-        return (n.includes('ava') || n.includes('emma') || n.includes('sonia') || n.includes('neerja')) && n.includes('natural')
-      })
-      if (naturalVoice) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${naturalVoice.name} (${naturalVoice.lang})`)
-        return naturalVoice
-      }
-
-      // 4. Any other Microsoft Natural female/neutral voice (excluding male voices)
-      const anyNatural = enVoices.find(v => {
-        const n = v.name.toLowerCase()
-        return n.includes('natural') && !n.includes('guy') && !n.includes('christopher') && !n.includes('brian') && !n.includes('male')
-      })
-      if (anyNatural) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${anyNatural.name} (${anyNatural.lang})`)
-        return anyNatural
-      }
-
-      // 5. Microsoft Zira Desktop (Clear Windows female voice)
-      const ziraVoice = enVoices.find(v => v.name.toLowerCase().includes('zira'))
-      if (ziraVoice) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${ziraVoice.name} (${ziraVoice.lang})`)
-        return ziraVoice
+        // 3. Any other natural female voice
+        const anyNatural = enVoices.find(v => {
+          const n = v.name.toLowerCase()
+          return (n.includes('natural') || n.includes('neural') || n.includes('online')) && !n.includes('guy') && !n.includes('male')
+        })
+        if (anyNatural) {
+          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${anyNatural.name} (${anyNatural.lang})`)
+          return anyNatural
+        }
       }
 
       // 6. Apple / WebKit natural voices (Samantha, Karen, Victoria)
@@ -911,14 +900,52 @@ const CoursePlayer = ({
         }
       }, safetyTimeoutMs)
 
-      setTimeout(() => {
-        try {
-          window.speechSynthesis.speak(utterance)
-        } catch (speakErr) {
-          console.warn('[VOICE] Speech synthesis speak error:', speakErr)
-          finishTTS()
+      // Try Studio Neural AI voice first, with automatic browser Web Speech fallback
+      try {
+        const audioUrl = api.getTtsAudioUrl(cleanText, {
+          gender: (aiVoiceConfig?.gender || 'female').toUpperCase(),
+          voice: aiVoiceConfig?.voiceName,
+          rate: aiVoiceConfig?.rate || 1.0,
+          pitch: aiVoiceConfig?.pitch || 1.0,
+        })
+
+        const audio = new Audio(audioUrl)
+        if (window._skillbridgeCurrentAudio) {
+          try {
+            window._skillbridgeCurrentAudio.pause()
+            window._skillbridgeCurrentAudio.currentTime = 0
+          } catch (_) { }
         }
-      }, 60)
+        window._skillbridgeCurrentAudio = audio
+
+        audio.onended = () => finishTTS()
+        audio.onerror = () => {
+          console.warn('[VOICE] Studio neural stream unavailable, using natural browser speech')
+          try {
+            window.speechSynthesis.speak(utterance)
+          } catch (speakErr) {
+            finishTTS()
+          }
+        }
+
+        audio.play().catch(() => {
+          try {
+            window.speechSynthesis.speak(utterance)
+          } catch (speakErr) {
+            finishTTS()
+          }
+        })
+      } catch (err) {
+        console.warn('[VOICE] Studio audio init failed, falling back to Web Speech:', err)
+        setTimeout(() => {
+          try {
+            window.speechSynthesis.speak(utterance)
+          } catch (speakErr) {
+            console.warn('[VOICE] Speech synthesis speak error:', speakErr)
+            finishTTS()
+          }
+        }, 60)
+      }
     } catch (e) {
       console.warn('[VOICE] Speech synthesis failed:', e)
       setIsAriaSpeaking(false)
@@ -950,6 +977,11 @@ const CoursePlayer = ({
     }
 
     try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
       window.speechSynthesis.cancel();
       window.speechSynthesis.resume();
     } catch (e) { }
@@ -1776,8 +1808,8 @@ const CoursePlayer = ({
             } else {
               utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
             }
-            utterance.rate = 0.95;
-            utterance.pitch = 1.0;
+            utterance.rate = aiVoiceConfig?.rate || 0.95;
+            utterance.pitch = aiVoiceConfig?.pitch || 1.0;
           }
           utteranceRef.current = utterance; // Prevent GC cancellation bug
 
@@ -1808,8 +1840,8 @@ const CoursePlayer = ({
                 } else {
                   nextUtterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
                 }
-                nextUtterance.rate = 0.95;
-                nextUtterance.pitch = 1.0;
+                nextUtterance.rate = aiVoiceConfig?.rate || 0.95;
+                nextUtterance.pitch = aiVoiceConfig?.pitch || 1.0;
                 ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx + 1}`, nextUtterance);
                 const preDuration = Math.round(performance.now() - preStartTime);
                 console.log(`[PERF:AUDIO_LOAD_END] Concept ${idx + 2} pre-warmed in ${preDuration}ms`);

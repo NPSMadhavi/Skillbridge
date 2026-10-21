@@ -10,3 +10,4 @@ torch==2.13.0
 torchvision==0.28.0
 python-multipart
 faster-whisper
+edge-tts>=7.0.0

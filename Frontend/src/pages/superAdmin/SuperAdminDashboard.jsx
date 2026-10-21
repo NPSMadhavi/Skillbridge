@@ -336,7 +336,7 @@ export default function SuperAdminDashboard() {
   );
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-[#0f172a] flex font-sans">
+    <div className="h-screen w-screen bg-[#f8fafc] text-[#0f172a] flex font-sans overflow-hidden">
       {/* 1. SEPARATE SIDEBAR COMPONENT */}
       <SuperAdminSidebar
         activeTab={activeTab}
@@ -350,9 +350,9 @@ export default function SuperAdminDashboard() {
       />
 
       {/* 2. MAIN CONTENT AREA */}
-      <div className="flex-1 min-w-0 flex flex-col min-h-screen">
+      <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
         {/* Top Navbar */}
-        <header className="h-18 bg-white border-b border-slate-200 px-6 flex items-center justify-between sticky top-0 z-20">
+        <header className="h-16 shrink-0 bg-white border-b border-slate-200 px-6 flex items-center justify-between z-20">
           <div className="flex items-center space-x-3">
             <button
               onClick={() => setSidebarOpen(true)}
@@ -377,7 +377,6 @@ export default function SuperAdminDashboard() {
           </div>
 
           <div className="flex items-center space-x-3">
-
             {activeTab === 'superAdmins' ? (
               <button
                 onClick={() => {
@@ -409,30 +408,30 @@ export default function SuperAdminDashboard() {
           </div>
         </header>
 
-        {/* Content Body */}
-        <main className="flex-1 p-6 space-y-6 max-w-7xl w-full mx-auto">
-          {/* Action Success Alert */}
-          {actionSuccess && (
-            <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between shadow-xs">
-              <div className="flex items-center space-x-2 font-medium">
-                <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <span>{actionSuccess}</span>
+        {/* Content Body - Only this container scrolls */}
+        <main className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          <div className="max-w-7xl w-full mx-auto space-y-6 pb-12">
+            {/* Action Success Alert */}
+            {actionSuccess && (
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center justify-between shadow-xs">
+                <div className="flex items-center space-x-2 font-medium">
+                  <svg className="w-4 h-4 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>{actionSuccess}</span>
+                </div>
+                <button onClick={() => setActionSuccess(null)} className="text-emerald-700 hover:text-emerald-900 text-xs cursor-pointer">
+                  ✕
+                </button>
               </div>
-              <button onClick={() => setActionSuccess(null)} className="text-emerald-700 hover:text-emerald-900 text-xs cursor-pointer">
-                ✕
-              </button>
-            </div>
-          )}
+            )}
 
-          {/* KPI Summary Cards */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* KPI Summary Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div
               onClick={() => setActiveTab('companies')}
-              className={`bg-white border rounded-2xl p-5 shadow-xs cursor-pointer transition-all ${
-                activeTab === 'companies' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
-              }`}
+              className={`bg-white border rounded-2xl p-5 shadow-xs cursor-pointer transition-all ${activeTab === 'companies' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
+                }`}
             >
               <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Companies</div>
               <div className="text-3xl font-extrabold text-[#0f172a] mt-2">{companies.length}</div>
@@ -452,24 +451,14 @@ export default function SuperAdminDashboard() {
 
             <div
               onClick={() => setActiveTab('superAdmins')}
-              className={`bg-white border rounded-2xl p-5 shadow-xs cursor-pointer transition-all ${
-                activeTab === 'superAdmins' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
-              }`}
+              className={`bg-white border rounded-2xl p-5 shadow-xs cursor-pointer transition-all ${activeTab === 'superAdmins' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
+                }`}
             >
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Super Admins</span>
-                <span className="text-[10px] font-bold text-[#f06400] bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200">
-                  Control Plane
-                </span>
               </div>
               <div className="text-3xl font-extrabold text-[#f06400] mt-2">{superAdmins.length}</div>
               <div className="text-xs text-slate-500 mt-1">Platform administrators</div>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Platform Status</div>
-              <div className="text-xl font-extrabold text-emerald-600 mt-2">All Systems Online</div>
-              <div className="text-xs text-slate-500 mt-1">Enterprise services active</div>
             </div>
           </div>
 
@@ -764,6 +753,7 @@ export default function SuperAdminDashboard() {
               </div>
             </div>
           )}
+          </div>
         </main>
       </div>
 
