@@ -427,38 +427,38 @@ export default function SuperAdminDashboard() {
             )}
 
             {/* KPI Summary Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-3.5">
             <div
               onClick={() => setActiveTab('companies')}
-              className={`bg-white border rounded-2xl p-5 shadow-xs cursor-pointer transition-all ${activeTab === 'companies' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
+              className={`bg-white border rounded-xl p-3.5 sm:p-4 shadow-xs cursor-pointer transition-all ${activeTab === 'companies' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
                 }`}
             >
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Companies</div>
-              <div className="text-3xl font-extrabold text-[#0f172a] mt-2">{companies.length}</div>
-              <div className="text-xs text-slate-500 mt-1">Registered organizations</div>
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Total Companies</div>
+              <div className="text-2xl font-bold text-[#0f172a] mt-1.5">{companies.length}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Registered organizations</div>
             </div>
 
             <div
               onClick={() => setActiveTab('companies')}
-              className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs transition-all hover:border-slate-300 cursor-pointer"
+              className="bg-white border border-slate-200 rounded-xl p-3.5 sm:p-4 shadow-xs transition-all hover:border-slate-300 cursor-pointer"
             >
-              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Organizations</div>
-              <div className="text-3xl font-extrabold text-[#0e2246] mt-2">
+              <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Active Organizations</div>
+              <div className="text-2xl font-bold text-[#0e2246] mt-1.5">
                 {companies.filter(c => c.status === 'ACTIVE').length}
               </div>
-              <div className="text-xs text-slate-500 mt-1">Operational companies</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Operational companies</div>
             </div>
 
             <div
               onClick={() => setActiveTab('superAdmins')}
-              className={`bg-white border rounded-2xl p-5 shadow-xs cursor-pointer transition-all ${activeTab === 'superAdmins' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
+              className={`bg-white border rounded-xl p-3.5 sm:p-4 shadow-xs cursor-pointer transition-all ${activeTab === 'superAdmins' ? 'border-[#0e2246] ring-2 ring-blue-100' : 'border-slate-200 hover:border-slate-300'
                 }`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Super Admins</span>
+                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Super Admins</span>
               </div>
-              <div className="text-3xl font-extrabold text-[#f06400] mt-2">{superAdmins.length}</div>
-              <div className="text-xs text-slate-500 mt-1">Platform administrators</div>
+              <div className="text-2xl font-bold text-[#f06400] mt-1.5">{superAdmins.length}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Platform administrators</div>
             </div>
           </div>
 

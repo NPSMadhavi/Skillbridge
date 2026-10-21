@@ -201,7 +201,7 @@ const AdminLayout = () => {
           </div>
         </header>
 
-        <main className="min-h-[calc(100vh-4rem)] p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
+        <main className="min-h-[calc(100vh-4rem)] p-4 sm:p-6 lg:p-8 w-full">
           <Outlet />
         </main>
       </div>
