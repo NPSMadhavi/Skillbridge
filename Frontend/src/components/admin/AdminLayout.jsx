@@ -90,7 +90,6 @@ const AdminLayout = () => {
   const navigate = useNavigate()
   const admin = getAdminSession()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
   const [profile, setProfile] = useState(null)
 
   useEffect(() => {
@@ -116,15 +115,7 @@ const AdminLayout = () => {
     return <Navigate to="/admin" replace />
   }
 
-  const slug = profile?.tenant?.slug || profile?.tenant?.code || admin.slug || admin.tenant || 'default'
   const companyName = profile?.tenant?.name || admin.companyName || 'SkillBridge Organization'
-
-  const handleCopySlug = () => {
-    navigator.clipboard.writeText(slug)
-    setCopied(true)
-    toast.info(`Company slug "${slug}" copied to clipboard!`)
-    setTimeout(() => setCopied(false), 2000)
-  }
 
   const handleLogout = () => {
     sessionStorage.removeItem('skillbridge_admin')
@@ -132,7 +123,7 @@ const AdminLayout = () => {
   }
 
   const linkClass = ({ isActive }) =>
-    `w-full flex items-center gap-3 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition cursor-pointer ${isActive
+    `w-full flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] font-semibold transition cursor-pointer ${isActive
       ? 'bg-navy text-white shadow-sm'
       : 'text-muted hover:bg-ink hover:text-fg'
     }`
@@ -149,14 +140,14 @@ const AdminLayout = () => {
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-[272px] flex-col border-r border-line bg-panel transition-transform duration-300 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        className={`fixed inset-y-0 left-0 z-50 flex w-[240px] flex-col border-r border-line bg-panel transition-transform duration-300 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
       >
-        <div className="h-16 px-5 flex items-center border-b border-line shrink-0">
-          <img src={logo} alt="SkillBridge" className="h-9 w-auto max-w-[200px] object-contain" />
+        <div className="h-16 px-4 flex items-center border-b border-line shrink-0">
+          <img src={logo} alt="SkillBridge" className="h-11 w-auto max-w-full object-contain" />
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 px-3.5 py-4 overflow-y-auto" aria-label="Admin">
+        <nav className="flex flex-1 flex-col gap-1 px-2.5 py-3.5 overflow-y-auto" aria-label="Admin">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
@@ -170,8 +161,8 @@ const AdminLayout = () => {
           ))}
         </nav>
 
-        <div className="border-t border-line px-3.5 py-3.5 shrink-0 space-y-2">
-          <div className="rounded-xl bg-ink px-3.5 py-2 border border-line/50">
+        <div className="border-t border-line px-3 py-3 shrink-0 space-y-2">
+          <div className="rounded-xl bg-ink px-3 py-2 border border-line/50">
             <p className="text-[10px] uppercase font-bold text-muted tracking-wider">Signed in as</p>
             <p className="truncate text-xs font-semibold text-fg mt-0.5">{admin.email}</p>
           </div>
@@ -179,7 +170,7 @@ const AdminLayout = () => {
           <button
             type="button"
             onClick={handleLogout}
-            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-line bg-panel px-3.5 py-2 text-xs font-semibold text-muted transition hover:border-danger/40 hover:text-danger hover:bg-danger/5"
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-xs font-semibold text-muted transition hover:border-danger/40 hover:text-danger hover:bg-danger/5"
           >
             <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
               <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -189,7 +180,7 @@ const AdminLayout = () => {
         </div>
       </aside>
 
-      <div className="lg:pl-[272px]">
+      <div className="lg:pl-[240px]">
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-line bg-panel/90 px-4 backdrop-blur-xl sm:px-6">
           <div className="flex items-center gap-3 min-w-0">
             <button
@@ -203,37 +194,9 @@ const AdminLayout = () => {
               </svg>
             </button>
             <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="font-display text-sm font-semibold text-fg sm:text-base truncate">
-                  {companyName}
-                </p>
-                <span className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-semibold bg-navy/10 text-navy border border-navy/20">
-                  <span className="text-[10px] text-muted uppercase font-sans font-bold">Slug:</span>
-                  <span>{slug}</span>
-                  <button
-                    type="button"
-                    title="Copy Company Slug"
-                    onClick={handleCopySlug}
-                    className="ml-1 text-navy hover:text-orange transition-colors cursor-pointer"
-                  >
-                    {copied ? '✓' : '📋'}
-                  </button>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={handleCopySlug}
-              className="flex sm:hidden items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-navy/10 text-navy border border-navy/20 cursor-pointer"
-            >
-              <span className="max-w-[80px] truncate">{slug}</span>
-              <span>{copied ? '✓' : '📋'}</span>
-            </button>
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-navy font-display text-xs font-bold text-white">
-              {(admin.fullName || 'AD').substring(0, 2).toUpperCase()}
+              <p className="font-display text-sm font-semibold text-fg sm:text-base truncate">
+                {companyName}
+              </p>
             </div>
           </div>
         </header>

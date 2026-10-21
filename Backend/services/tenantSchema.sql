@@ -98,3 +98,24 @@ CREATE TABLE IF NOT EXISTS "UserCourseAssignment" (
 
 CREATE INDEX IF NOT EXISTS "UserCourseAssignment_userId_idx" ON "UserCourseAssignment"("userId");
 CREATE INDEX IF NOT EXISTS "UserCourseAssignment_courseId_idx" ON "UserCourseAssignment"("courseId");
+
+-- Schema Migrations for Existing Databases
+ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "fullName" TEXT;
+ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "nricFin" TEXT;
+ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
+ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;
+ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "topic" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "subtopic" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "concept" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "chunkType" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "sourcePage" INTEGER;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "sourceSlides" JSONB;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "sourceSection" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "prerequisites" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "keyPoints" JSONB;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "relatedConcepts" JSONB;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "metadata" JSONB;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "semanticSummary" TEXT;
+
