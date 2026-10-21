@@ -22,18 +22,6 @@ const AdminDashboard = () => {
   const [stats, setStats] = useState({ totalUsers: 0, faceEnrolled: 0, regionsCovered: 0, pendingFaceId: 0 })
   const [recent, setRecent] = useState([])
   const [loading, setLoading] = useState(true)
-  const [copiedSlug, setCopiedSlug] = useState(false)
-
-  const session = JSON.parse(sessionStorage.getItem('skillbridge_admin') || 'null')
-  const slug = session?.slug || session?.tenant || 'default'
-  const companyName = session?.companyName || 'Your Organization'
-
-  const handleCopySlug = () => {
-    navigator.clipboard.writeText(slug)
-    setCopiedSlug(true)
-    toast.info(`Company slug "${slug}" copied to clipboard!`)
-    setTimeout(() => setCopiedSlug(false), 2000)
-  }
 
   useEffect(() => {
     const fetchDashboardData = async () => {

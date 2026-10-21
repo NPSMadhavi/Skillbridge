@@ -136,6 +136,15 @@ export const tenantService = {
       }
     });
 
+    // Ensure backwards-compatible schema columns exist in tenant DB
+    client.$executeRawUnsafe(`
+      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "fullName" TEXT;
+      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "nricFin" TEXT;
+      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
+      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;
+    `).catch(() => {});
+
     tenantClients.set(normalizedCode, client);
     return client;
   },
@@ -572,6 +581,17 @@ export const tenantService = {
         });
         console.log('[Multi-Tenant] Seeded default company pointing to primary database.');
       }
+
+      // Ensure required schema columns exist in default database
+      await defaultPrisma.$executeRawUnsafe(`
+        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
+        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "fullName" TEXT;
+        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "nricFin" TEXT;
+        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
+        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;
+      `).catch(err => {
+        console.warn('[Multi-Tenant] Auto-migration on default DB skipped/failed:', err.message);
+      });
     } catch (err) {
       console.warn('[Multi-Tenant] Could not ensure default company:', err.message);
     }

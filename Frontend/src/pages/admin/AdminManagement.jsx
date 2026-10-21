@@ -142,29 +142,11 @@ export default function AdminManagement() {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-display text-xl font-bold text-fg sm:text-2xl">
-              Company Administrators
-            </h1>
-            {tenantCode && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-navy/10 px-2.5 py-0.5 text-xs font-mono font-semibold text-navy border border-navy/20">
-                <span>Slug: {tenantCode}</span>
-                <button
-                  type="button"
-                  title="Copy Company Slug"
-                  onClick={() => {
-                    navigator.clipboard.writeText(tenantCode);
-                    toast.info(`Company slug "${tenantCode}" copied to clipboard!`);
-                  }}
-                  className="hover:text-orange transition-colors cursor-pointer text-[11px]"
-                >
-                  📋
-                </button>
-              </span>
-            )}
-          </div>
+          <h1 className="font-display text-xl font-bold text-fg sm:text-2xl">
+            Company Administrators
+          </h1>
           <p className="mt-1 text-xs text-muted sm:text-sm">
-            Create and manage additional administrators for your organization. All administrators are strictly scoped to your dedicated company database.
+            Create and manage administrators for your organization.
           </p>
         </div>
 
@@ -177,21 +159,6 @@ export default function AdminManagement() {
           </svg>
           <span>Create Company Admin</span>
         </button>
-      </div>
-
-      {/* Uniqueness & Security Banner */}
-      <div className="rounded-2xl border border-sky/30 bg-sky/5 p-4 text-xs text-fg flex items-start gap-3">
-        <div className="w-8 h-8 rounded-lg bg-sky/15 text-sky flex items-center justify-center shrink-0">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-          </svg>
-        </div>
-        <div>
-          <span className="font-bold text-sky">Multi-Admin Scope & FIN Uniqueness:</span>
-          <p className="mt-0.5 text-muted leading-relaxed">
-            Administrators created here have full administrative privileges for <strong>{tenantCode}</strong> only and cannot view or manage other companies. Each admin's <strong>NRIC / FIN Number</strong> is enforced as strictly unique within your company database.
-          </p>
-        </div>
       </div>
 
       {/* Admins Table Card */}
@@ -321,7 +288,7 @@ export default function AdminManagement() {
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-fg">Register Company Admin</h2>
-                  <p className="text-xs text-muted">Provision an administrator for company <strong className="text-sky">{tenantCode}</strong></p>
+                  <p className="text-xs text-muted">Provision a new administrator account for your organization.</p>
                 </div>
               </div>
               <button
