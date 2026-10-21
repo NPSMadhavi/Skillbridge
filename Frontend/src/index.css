@@ -52,6 +52,17 @@
     -ms-overflow-style: none;
     scrollbar-width: none;
   }
+
+  /* Disable browser-native password reveal/clear buttons (avoids duplicate eye icons on Edge/Windows) */
+  input[type="password"]::-ms-reveal,
+  input[type="password"]::-ms-clear,
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    pointer-events: none !important;
+  }
 }
 
 @keyframes rise-in {

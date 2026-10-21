@@ -33,45 +33,6 @@ const AdminCourses = () => {
   // View details modal state
   const [viewingCourse, setViewingCourse] = useState(null)
 
-  // Assign Learners modal state
-  const [assignCourse, setAssignCourse] = useState(null)
-  const [allUsers, setAllUsers] = useState([])
-  const [selectedUserIds, setSelectedUserIds] = useState([])
-  const [loadingAssignments, setLoadingAssignments] = useState(false)
-  const [savingAssignments, setSavingAssignments] = useState(false)
-
-  const handleOpenAssignUsers = async (course) => {
-    setAssignCourse(course)
-    setLoadingAssignments(true)
-    try {
-      const [users, assignmentsData] = await Promise.all([
-        allUsers.length > 0 ? Promise.resolve(allUsers) : api.getUsers(),
-        api.getCourseAssignments(course.id)
-      ])
-      setAllUsers(users || [])
-      setSelectedUserIds((assignmentsData.assignedUsers || []).map(u => u.id))
-    } catch (err) {
-      console.error(err)
-      toast.error('Failed to load course assignments.')
-    } finally {
-      setLoadingAssignments(false)
-    }
-  }
-
-  const handleSaveCourseAssignments = async () => {
-    if (!assignCourse) return
-    setSavingAssignments(true)
-    try {
-      const res = await api.assignCourseUsers(assignCourse.id, selectedUserIds)
-      setCoursesList(prev => prev.map(c => c.id === assignCourse.id ? { ...c, assignedUsersCount: res.assignedUserIds?.length || 0 } : c))
-      toast.success('Course learners assigned successfully!')
-      setAssignCourse(null)
-    } catch (err) {
-      toast.error(err.message || 'Failed to save learners assignment.')
-    } finally {
-      setSavingAssignments(false)
-    }
-  }
 
   const totalPages = Math.max(1, Math.ceil(coursesList.length / pageSize))
 
@@ -285,7 +246,11 @@ const AdminCourses = () => {
         </div>
       ) : coursesList.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line bg-panel px-6 py-12 text-center shadow-sm">
-          <span className="text-4xl">📚</span>
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-orange/10 text-orange">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </div>
           <h3 className="mt-4 font-display text-lg font-bold text-fg">No courses published</h3>
           <p className="mt-1 text-sm text-muted max-w-md mx-auto">
             Get started by uploading a course document (PDF, Word, TXT, etc.) to automatically generate a course module.
@@ -328,20 +293,8 @@ const AdminCourses = () => {
                     <p className="text-xs text-muted leading-relaxed flex-1 line-clamp-3">
                       {course.description}
                     </p>
-                    <div className="mt-4 border-t border-line pt-4 flex items-center justify-between text-xs">
-                      <span className="text-muted truncate max-w-[110px]" title={course.fileName}>
-                        📄 {course.fileName}
-                      </span>
+                    <div className="mt-4 border-t border-line pt-4 flex items-center justify-end text-xs">
                       <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenAssignUsers(course)}
-                          className="cursor-pointer rounded-lg bg-sky/10 border border-sky/30 text-sky px-2 py-1 text-xs font-semibold hover:bg-sky/20 transition flex items-center gap-1"
-                          title="Assign learners to this course"
-                        >
-                          <span>👥</span>
-                          <span>{course.assignedUsersCount || 0} Learners</span>
-                        </button>
                         <button
                           type="button"
                           onClick={() => setViewingCourse(course)}
@@ -503,15 +456,11 @@ const AdminCourses = () => {
                       onChange={handleFileChange}
                       className="hidden"
                     />
-                    <span className="text-3xl">
-                      {selectedFile ? (
-                        selectedFile.name.endsWith('.pdf') ? '📄' :
-                        selectedFile.name.match(/\.(docx?|doc)$/i) ? '📝' :
-                        selectedFile.name.match(/\.(txt|md|text)$/i) ? '📃' :
-                        selectedFile.name.match(/\.(pptx?|ppt)$/i) ? '📑' :
-                        selectedFile.name.match(/\.(mp3|wav|m4a|aac|ogg|flac|webm|mp4)$/i) ? '🎙️' : '📁'
-                      ) : '📄'}
-                    </span>
+                    <div className="grid h-10 w-10 place-items-center rounded-xl bg-orange/10 text-orange">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                    </div>
                     <span className="mt-2 text-xs font-bold text-fg break-all max-w-full px-2">
                       {selectedFile ? selectedFile.name : 'Upload Document or Audio'}
                     </span>
@@ -524,8 +473,11 @@ const AdminCourses = () => {
                 </div>
 
                 {errorMsg && (
-                  <div className="rounded-lg border border-danger/20 bg-danger/5 p-3 text-xs font-semibold text-danger">
-                    ⚠️ {errorMsg}
+                  <div className="rounded-lg border border-danger/20 bg-danger/5 p-3 text-xs font-semibold text-danger flex items-center gap-2">
+                    <svg className="w-4 h-4 text-danger shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <span>{errorMsg}</span>
                   </div>
                 )}
 
@@ -552,11 +504,11 @@ const AdminCourses = () => {
                   <div className="absolute inset-0 animate-spin rounded-full border-4 border-orange/20 border-t-orange" />
                 </div>
                 <h3 className="font-display font-bold text-fg text-sm">
-                  {stage === 'uploading' && '📤 Uploading Document...'}
-                  {stage === 'parsing' && '🔍 Parsing Text Content...'}
-                  {stage === 'structuring' && '🧠 Chunking & Structuring Curriculum...'}
-                  {stage === 'finalizing' && '✨ Synthesizing Study Notes...'}
-                  {!stage && '⚡ Creating Course Module...'}
+                  {stage === 'uploading' && 'Uploading Document...'}
+                  {stage === 'parsing' && 'Parsing Text Content...'}
+                  {stage === 'structuring' && 'Chunking & Structuring Curriculum...'}
+                  {stage === 'finalizing' && 'Synthesizing Study Notes...'}
+                  {!stage && 'Creating Course Module...'}
                 </h3>
                 <p className="mt-2 text-xs text-muted max-w-[260px] mx-auto leading-relaxed">
                   Structuring course curriculum, lessons, and assessment questions...
@@ -612,8 +564,11 @@ const AdminCourses = () => {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-muted">Course Document</span>
-                  <span className="text-[11px] text-muted font-mono truncate max-w-[200px]" title={editingCourse.fileName}>
-                    📄 {editingCourse.fileName}
+                  <span className="text-[11px] text-muted font-mono truncate max-w-[200px] inline-flex items-center gap-1" title={editingCourse.fileName}>
+                    <svg className="w-3 h-3 text-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <span className="truncate">{editingCourse.fileName}</span>
                   </span>
                 </div>
 
@@ -626,15 +581,11 @@ const AdminCourses = () => {
                     onChange={handleEditFileChange}
                     className="hidden"
                   />
-                  <span className="text-2xl">
-                    {editFile ? (
-                      editFile.name.endsWith('.pdf') ? '📄' :
-                      editFile.name.match(/\.(docx?|doc)$/i) ? '📝' :
-                      editFile.name.match(/\.(txt|md|text)$/i) ? '📃' :
-                      editFile.name.match(/\.(pptx?|ppt)$/i) ? '📑' :
-                      editFile.name.match(/\.(mp3|wav|m4a|aac|ogg|flac|webm|mp4)$/i) ? '🎙️' : '📁'
-                    ) : '🔄'}
-                  </span>
+                  <div className="grid h-9 w-9 place-items-center rounded-lg bg-orange/10 text-orange">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </div>
                   <span className="mt-1.5 text-xs font-bold text-fg break-all max-w-full px-2">
                     {editFile ? editFile.name : 'Upload New Document to Replace (Optional)'}
                   </span>
@@ -660,8 +611,11 @@ const AdminCourses = () => {
               </div>
 
               {editErrorMsg && (
-                <div className="rounded-lg border border-danger/20 bg-danger/5 p-3 text-xs font-semibold text-danger">
-                  ⚠️ {editErrorMsg}
+                <div className="rounded-lg border border-danger/20 bg-danger/5 p-3 text-xs font-semibold text-danger flex items-center gap-2">
+                  <svg className="w-4 h-4 text-danger shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <span>{editErrorMsg}</span>
                 </div>
               )}
 
@@ -694,7 +648,10 @@ const AdminCourses = () => {
             <div className="flex items-center justify-between border-b border-line pb-3">
               <div>
                 <h2 className="font-display text-lg font-bold text-fg">{viewingCourse.title}</h2>
-                <p className="text-xs text-muted mt-0.5">Reference Document: 📄 {viewingCourse.fileName}</p>
+                <p className="text-xs text-muted mt-0.5 inline-flex items-center gap-1.5">
+                  <span>Reference Document:</span>
+                  <span className="font-mono text-fg">{viewingCourse.fileName}</span>
+                </p>
               </div>
               <button
                 type="button"
@@ -765,152 +722,7 @@ const AdminCourses = () => {
         document.body
       )}
 
-      {/* Assign Learners Modal */}
-      {assignCourse && createPortal(
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-navy/60 backdrop-blur-md overflow-y-auto"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="relative w-full max-w-lg rounded-3xl border border-line bg-panel p-6 shadow-2xl my-auto animate-rise-in max-h-[85vh] flex flex-col justify-between overflow-hidden">
-            <div className="flex items-center justify-between border-b border-line pb-4 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="h-10 w-10 rounded-xl bg-sky/10 border border-sky/20 text-sky grid place-items-center font-bold text-lg">
-                  👥
-                </div>
-                <div>
-                  <h2 className="font-display text-lg font-semibold text-fg">
-                    Assign Learners
-                  </h2>
-                  <p className="text-xs text-muted truncate max-w-xs">
-                    {assignCourse.title}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAssignCourse(null)}
-                className="grid h-8 w-8 cursor-pointer place-items-center rounded-lg border border-line bg-ink text-muted hover:text-fg transition"
-              >
-                ✕
-              </button>
-            </div>
 
-            <div className="flex items-center justify-between py-2 border-b border-line/40 shrink-0 text-xs">
-              <span className="text-muted font-medium">
-                {selectedUserIds.length} of {allUsers.length} learner{allUsers.length === 1 ? '' : 's'} assigned
-              </span>
-              {allUsers.length > 0 && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedUserIds(allUsers.map((u) => u.id))}
-                    className="text-sky hover:underline cursor-pointer border-0 bg-transparent font-semibold"
-                  >
-                    Select all
-                  </button>
-                  <span className="text-muted">•</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedUserIds([])}
-                    className="text-muted hover:text-fg cursor-pointer border-0 bg-transparent font-medium"
-                  >
-                    Clear all
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div className="flex-1 min-h-0 overflow-y-auto my-3 space-y-2 pr-1">
-              {loadingAssignments ? (
-                <div className="space-y-2 animate-pulse pr-1">
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <div key={i} className="flex items-center gap-3 p-3 rounded-2xl border border-line/70 bg-ink/30">
-                      <div className="h-4 w-4 rounded bg-ink shrink-0" />
-                      <div className="h-9 w-9 rounded-xl bg-ink shrink-0" />
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="h-3 w-28 rounded bg-ink" />
-                          <div className="h-2.5 w-16 rounded bg-ink/70" />
-                        </div>
-                        <div className="h-2.5 w-36 rounded bg-ink/60" />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : allUsers.length === 0 ? (
-                <div className="py-10 text-center text-xs text-muted">
-                  No registered users found. Register users from the Register User page.
-                </div>
-              ) : (
-                allUsers.map((u) => {
-                  const isChecked = selectedUserIds.includes(u.id);
-                  return (
-                    <div
-                      key={u.id}
-                      onClick={() => {
-                        setSelectedUserIds((prev) =>
-                          prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
-                        );
-                      }}
-                      className={`flex items-center gap-3 p-3 rounded-xl border transition cursor-pointer select-none ${
-                        isChecked
-                          ? 'border-sky/60 bg-sky/5 shadow-xs'
-                          : 'border-line bg-ink/30 hover:border-line/90'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) => {
-                          e.stopPropagation();
-                          setSelectedUserIds((prev) =>
-                            prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
-                          );
-                        }}
-                        className="h-4 w-4 rounded text-sky focus:ring-sky/40 border-line cursor-pointer"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className={`text-xs font-bold truncate ${isChecked ? 'text-sky' : 'text-fg'}`}>
-                            {u.fullName}
-                          </p>
-                          <span className="text-[10px] text-muted font-mono">{u.finNumber}</span>
-                        </div>
-                        <p className="text-[11px] text-muted truncate">{u.email}</p>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <div className="pt-3 border-t border-line flex items-center justify-between shrink-0">
-              <span className="text-[11px] text-muted">
-                {selectedUserIds.length === 0 ? '⚠️ No learners assigned' : 'Selected learners can play this course'}
-              </span>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAssignCourse(null)}
-                  className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2 text-xs font-semibold text-fg hover:border-sky/40"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  disabled={savingAssignments}
-                  onClick={handleSaveCourseAssignments}
-                  className="cursor-pointer rounded-xl border-0 bg-sky px-4 py-2 text-xs font-bold text-white shadow-md hover:brightness-105 transition disabled:opacity-60"
-                >
-                  {savingAssignments ? 'Saving...' : 'Save Assignments'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
 
     </div>
   )
