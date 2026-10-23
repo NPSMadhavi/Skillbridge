@@ -1,4 +1,5 @@
 import os
+import re
 import tempfile
 from typing import Optional
 
@@ -52,24 +53,51 @@ def transcribe_audio_bytes(file_bytes: bytes, filename: str = "voice.webm", lang
         temp_file.close()
         
         print(f"[WhisperService] Transcribing audio file ({len(file_bytes)} bytes, target_lang: {whisper_lang or 'auto'}): {temp_path}")
-        if whisper_lang:
-            segments, info = model.transcribe(temp_path, beam_size=5, vad_filter=False, condition_on_previous_text=False, language=whisper_lang)
-        else:
-            segments, info = model.transcribe(temp_path, beam_size=5, vad_filter=False, condition_on_previous_text=False)
-        
-        transcription = " ".join([segment.text for segment in segments]).strip()
-        detected_language = info.language or whisper_lang or "en"
+        try:
+            # Softer VAD: strict no_speech was returning "" for valid short questions
+            transcribe_kwargs = dict(
+                beam_size=1,
+                best_of=1,
+                vad_filter=False,
+                condition_on_previous_text=False,
+                no_speech_threshold=0.45,
+                compression_ratio_threshold=2.6,
+            )
+            if whisper_lang:
+                segments, info = model.transcribe(temp_path, language=whisper_lang, **transcribe_kwargs)
+            else:
+                segments, info = model.transcribe(temp_path, **transcribe_kwargs)
+            
+            transcription = " ".join([segment.text for segment in segments]).strip()
+            detected_language = info.language or whisper_lang or "en"
+        except Exception as decode_err:
+            print(f"[WhisperService] Audio decoding notice: {decode_err}. Returning empty text.")
+            return "", whisper_lang or "en"
 
-        # Suppress known exact Whisper silence/repetition hallucinations
+        # Suppress known exact Whisper silence/repetition hallucinations.
+        # Greeting-only outputs ("hey", "hi") must not wake the tutor.
         exact_hallucinations = {
             "thank you", "thank you.", "thanks for watching", "thank you for watching",
             "see you next time", "see you in the next video", "see you later",
             "subtitles by", "like and subscribe", "subscribe", "subtitles",
-            "you", "bye", "goodbye"
+            "you", "bye", "goodbye",
+            "hey", "hi", "hello", "hai", "helo", "yo", "ok", "okay", "yes", "yeah",
+            "heria", "hearia", "haria",  # common mis-hearings of "hey"
+            "thank you very much", "you are very welcome", "youre very welcome",
+            "i hope you have a nice day", "i think its done now right",
         }
-        clean_lower = transcription.lower().strip().replace(".", "").replace("!", "").replace(",", "").strip()
+        clean_lower = transcription.lower().strip().replace(".", "").replace("!", "").replace(",", "").replace("?", "").strip()
         if clean_lower in exact_hallucinations:
-            print(f"[WhisperService] Suppressed silence hallucination: \"{transcription}\"")
+            print(f"[WhisperService] Suppressed silence/greeting hallucination: \"{transcription}\"")
+            transcription = ""
+
+        # Repeated-sentence Whisper loops from ambient noise
+        parts = [p.strip() for p in re.split(r"[.!?]+", clean_lower) if len(p.strip()) > 8]
+        if len(parts) >= 2 and len(set(parts)) == 1:
+            print(f"[WhisperService] Suppressed repeated-sentence hallucination: \"{transcription}\"")
+            transcription = ""
+        elif len(parts) >= 3 and len(set(parts)) <= 2:
+            print(f"[WhisperService] Suppressed low-variety sentence loop: \"{transcription}\"")
             transcription = ""
 
         print(f"[WhisperService] Result: \"{transcription}\" (detected_language: {detected_language}, probability: {info.language_probability:.2f})")

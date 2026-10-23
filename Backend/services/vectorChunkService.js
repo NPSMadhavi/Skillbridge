@@ -345,20 +345,45 @@ export class VectorChunkService {
             const sourceLang = detectDominantScript(expText);
             const explanations = { ...(lesson.explanations || {}) };
             explanations[sourceLang] = expText;
+
+            // Compute dynamic duration from actual spoken word count
+            const words = expText.split(/\s+/).filter(Boolean).length;
+            const totalSecs = Math.max(75, Math.min(360, Math.round(words / 2.15)));
+            const m = Math.floor(totalSecs / 60).toString().padStart(2, '0');
+            const s = Math.floor(totalSecs % 60).toString().padStart(2, '0');
+            const dynamicDuration = `${m}:${s}`;
+
             return {
               ...lesson,
               title: lesson.title === 'undefined' ? concept : lesson.title,
               sourceSlides: Array.isArray(slides) && slides.length > 0 ? slides : lesson.sourceSlides,
+              duration: dynamicDuration,
               explanation: sourceLang === 'en' ? expText : lesson.explanation,
               explanations
             };
           });
 
+          // Recalculate module durations based on actual lesson times
+          if (Array.isArray(curr?.curriculum)) {
+            curr.curriculum = curr.curriculum.map(mod => {
+              const modLessons = curr.lessons.filter(l => (l.moduleTitle || l.chapterTitle) === mod.title);
+              const totalSecs = modLessons.reduce((acc, l) => {
+                const parts = String(l.duration || '').split(':').map(p => parseInt(p, 10) || 0);
+                return acc + (parts.length === 2 ? parts[0] * 60 + parts[1] : 90);
+              }, 0);
+              return {
+                ...mod,
+                lessons: modLessons.length || mod.lessons,
+                duration: `${Math.max(1, Math.round(totalSecs / 60))}m`
+              };
+            });
+          }
+
           await prisma.course.update({
             where: { id: courseId },
             data: { curriculum: curr }
           });
-          console.log(`[pgvector] Pre-populated unique, authentic explanations for all ${curr.lessons.length} lessons in Course.curriculum.`);
+          console.log(`[pgvector] Pre-populated unique, authentic explanations and dynamic durations for all ${curr.lessons.length} lessons in Course.curriculum.`);
         }
       }
     } catch (preErr) {

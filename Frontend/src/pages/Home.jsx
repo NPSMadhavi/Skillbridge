@@ -1,6 +1,8 @@
 import { useMemo, useState, useEffect, useCallback } from 'react'
 import { courses } from '../data/courses'
 import { api } from '../services/api'
+import { cleanUnsupportedWords } from '../utils/textCleaner'
+import { getStudentUser } from '../utils/authSession'
 
 const CourseBookIcon = ({ className = "h-5 w-5" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -51,34 +53,106 @@ const DonutProgress = ({ percentage = 0 }) => {
 }
 
 const mapRagCourse = (dbCourse) => {
+  if (!dbCourse) return null;
+  if (dbCourse._isMapped && Array.isArray(dbCourse.lessons) && dbCourse.lessons.length > 0) {
+    return dbCourse;
+  }
+
   const curriculumData = typeof dbCourse.curriculum === 'string'
     ? JSON.parse(dbCourse.curriculum)
-    : dbCourse.curriculum;
+    : (dbCourse.curriculumData || (typeof dbCourse.curriculum === 'object' && !Array.isArray(dbCourse.curriculum) ? dbCourse.curriculum : {}));
+
+  // Extract authentic original slides, pages, and visuals
+  const slides = (Array.isArray(curriculumData.slides) && curriculumData.slides.length > 0)
+    ? curriculumData.slides
+    : (Array.isArray(dbCourse.slides) ? dbCourse.slides : []);
+
+  const pages = (Array.isArray(curriculumData.pages) && curriculumData.pages.length > 0)
+    ? curriculumData.pages
+    : (Array.isArray(dbCourse.pages) ? dbCourse.pages : []);
+
+  const visuals = (Array.isArray(curriculumData.visuals) && curriculumData.visuals.length > 0)
+    ? curriculumData.visuals
+    : (Array.isArray(dbCourse.visuals) ? dbCourse.visuals : []);
+
+  const fileType = curriculumData.fileType || dbCourse.fileType || (dbCourse.fileName?.split('.').pop()?.toLowerCase()) || '';
+
+  // Extract lessons from dbCourse.lessons, curriculumData.lessons, or synthesize from chunks / slides
+  let lessons = [];
+  if (Array.isArray(dbCourse.lessons) && dbCourse.lessons.length > 0) {
+    lessons = dbCourse.lessons;
+  } else if (Array.isArray(curriculumData.lessons) && curriculumData.lessons.length > 0) {
+    lessons = curriculumData.lessons;
+  } else if (Array.isArray(dbCourse.curriculumData?.lessons) && dbCourse.curriculumData.lessons.length > 0) {
+    lessons = dbCourse.curriculumData.lessons;
+  }
+
+  const chunks = Array.isArray(dbCourse.chunks) ? dbCourse.chunks : [];
+  if (lessons.length === 0 && chunks.length > 0) {
+    lessons = chunks.map((c, idx) => ({
+      id: idx + 1,
+      title: cleanUnsupportedWords(c.concept || c.topic || `Concept ${idx + 1}`),
+      moduleTitle: cleanUnsupportedWords(c.topic || dbCourse.title),
+      chapterTitle: cleanUnsupportedWords(c.topic || dbCourse.title),
+      sourceSlides: Array.isArray(c.sourceSlides) && c.sourceSlides.length > 0 ? c.sourceSlides : [c.sourcePage || idx + 1],
+      duration: '02:30',
+      status: idx === 0 ? 'active' : 'locked',
+      explanation: c.chunkText || c.semanticSummary || '',
+      bulletPoints: (Array.isArray(c.keyPoints) ? c.keyPoints : []).map(kp => cleanUnsupportedWords(kp))
+    }));
+  } else if (lessons.length === 0 && slides.length > 0) {
+    lessons = slides.map((s, idx) => ({
+      id: idx + 1,
+      title: cleanUnsupportedWords(s.title || `Slide ${idx + 1}`),
+      moduleTitle: `Slide Presentation`,
+      chapterTitle: `Slide Presentation`,
+      sourceSlides: [s.slideNumber || idx + 1],
+      duration: '02:00',
+      status: idx === 0 ? 'active' : 'locked',
+      explanation: s.fullText || '',
+      bulletPoints: (s.bulletPoints || []).map(bp => cleanUnsupportedWords(bp))
+    }));
+  } else if (lessons.length > 0) {
+    lessons = lessons.map(l => ({
+      ...l,
+      title: cleanUnsupportedWords(l.title),
+      moduleTitle: cleanUnsupportedWords(l.moduleTitle || l.chapterTitle, dbCourse.title),
+      chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, dbCourse.title)
+    }));
+  }
 
   return {
+    _isMapped: true,
     id: dbCourse.id,
     isCustom: true,
-    title: dbCourse.title,
+    title: cleanUnsupportedWords(dbCourse.title),
     instructor: 'ARIA AI Tutor',
     category: 'AI Custom Courses',
     level: 'Adaptive',
     rating: 5.0,
     reviewCount: 'Dynamic',
     students: 'Published',
-    modules: curriculumData.curriculum?.length || curriculumData.lessons?.length || 1,
+    duration: 'Self-Paced',
+    modules: curriculumData.curriculum?.length || Math.ceil(lessons.length / 4) || 1,
     price: 0,
     free: true,
     badge: 'AI Course',
     badgeTone: 'orange',
     tags: ['AI-POWERED'],
     image: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #60a5fa 100%)',
-    description: dbCourse.description || curriculumData.description || 'AI custom course generated from document.',
+    description: cleanUnsupportedWords(dbCourse.description || curriculumData.description || 'AI custom course generated from document.'),
     fileName: dbCourse.fileName,
     fileText: dbCourse.fileText,
+    fileType,
+    slides,
+    pages,
+    visuals,
+    chunks,
     learning: curriculumData.learning || [],
     includes: curriculumData.includes || [],
-    curriculum: curriculumData.curriculum || [],
-    lessons: curriculumData.lessons || [],
+    curriculum: Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : [],
+    curriculumData,
+    lessons,
     quiz: curriculumData.quiz || []
   };
 };
@@ -116,14 +190,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
   const [loading, setLoading] = useState(true)
   const loadingCourses = loading
 
-  const user = useMemo(() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James', role: 'STUDENT' }
-    } catch {
-      return { fullName: 'James', role: 'STUDENT' }
-    }
-  }, [])
+  const user = useMemo(() => getStudentUser() || { fullName: 'Learner', role: 'STUDENT' }, [])
 
   const userId = useMemo(() => {
     return user?.id || user?.finNumber || user?.email || 'guest';
@@ -340,7 +407,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
       {/* Top Greeting Header */}
       <div className="shrink-0 mb-1.5 sm:mb-2">
         <h1 className="font-display text-lg sm:text-xl lg:text-2xl font-bold tracking-tight text-[#1e2e4a]">
-          Welcome Back, {user.fullName || 'James'}
+          Welcome Back, {user.fullName || 'Learner'}
         </h1>
         <p className="text-xs text-slate-400 font-medium mt-0.5">
           {formattedDate}

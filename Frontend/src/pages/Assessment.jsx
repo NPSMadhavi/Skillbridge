@@ -2,6 +2,7 @@ import { useMemo, useEffect, useState } from 'react'
 import Certificate from './Certificate'
 import { api } from '../services/api'
 import { triggerCertificateBlast } from '../utils/confettiBlast'
+import { getStudentUser } from '../utils/authSession'
 
 const fallbackQuestions = [
   {
@@ -75,14 +76,7 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
   const [showCertificate, setShowCertificate] = useState(false)
   const [showFailedView, setShowFailedView] = useState(false)
 
-  const user = useMemo(() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James', role: 'STUDENT' }
-    } catch {
-      return { fullName: 'James', role: 'STUDENT' }
-    }
-  }, [])
+  const user = useMemo(() => getStudentUser() || { fullName: 'Learner', role: 'STUDENT' }, [])
 
   const userId = useMemo(() => {
     return user?.id || user?.finNumber || user?.email || 'guest';

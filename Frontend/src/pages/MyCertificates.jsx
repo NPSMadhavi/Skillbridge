@@ -4,6 +4,7 @@ import { courses as defaultCourses } from '../data/courses'
 import { api } from '../services/api'
 import Certificate from './Certificate'
 import { downloadCertificateDirect } from '../utils/certificatePdf'
+import { getStudentUser, getStudentDisplayName } from '../utils/authSession'
 
 const MyCertificates = () => {
   const navigate = useNavigate()
@@ -12,19 +13,9 @@ const MyCertificates = () => {
   const [loading, setLoading] = useState(true)
   const [downloadingCourseId, setDownloadingCourseId] = useState(null)
 
-  // Retrieve logged-in user from sessionStorage
-  const user = useMemo(() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James Joseph', email: 'james@skillbridge.com' }
-    } catch {
-      return { fullName: 'James Joseph', email: 'james@skillbridge.com' }
-    }
-  }, [])
+  const user = useMemo(() => getStudentUser() || { fullName: 'Learner' }, [])
 
-  const userDisplayName = useMemo(() => {
-    return user?.fullName || user?.name || (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'James Joseph')
-  }, [user])
+  const userDisplayName = useMemo(() => getStudentDisplayName(user, 'Learner'), [user])
 
   // Load ONLY actually completed courses and their verified progress
   useEffect(() => {

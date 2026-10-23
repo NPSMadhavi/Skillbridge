@@ -115,46 +115,95 @@ class AIService {
     return err;
   }
 
+  async _callOpenAIFallback(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+    const apiKey = (process.env.OPENAI_API_KEY || '').trim();
+    if (!apiKey) {
+      return null;
+    }
+    const model = (process.env.OPENAI_MODEL || 'gpt-4o-mini').trim();
+    const messages = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    if (Array.isArray(conversationHistory)) {
+      for (const item of conversationHistory.slice(-8)) {
+        const isUser = item.role === 'user' || item.sender === 'user';
+        const content = item.content || item.text || '';
+        if (content && typeof content === 'string') {
+          messages.push({ role: isUser ? 'user' : 'assistant', content });
+        }
+      }
+    }
+    if (userPrompt) {
+      messages.push({ role: 'user', content: userPrompt });
+    }
+
+    const payload = {
+      model,
+      messages,
+      temperature: 0.3
+    };
+    if (jsonMode) {
+      payload.response_format = { type: 'json_object' };
+    }
+
+    console.log(`[AIService] Local LLM gateway unavailable or timed out; seamlessly falling back to OpenAI (${model})...`);
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, {
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 30000
+    });
+    const text = resp.data?.choices?.[0]?.message?.content;
+    if (typeof text === 'string' && text.trim()) {
+      return text.trim();
+    }
+    return null;
+  }
+
   /**
    * Sends a single constructed tutor/curriculum prompt to the self-hosted Veda gateway.
    * POST ${SKILLBRIDGE_LLM_GATEWAY_URL}/chat  { "message": "..." }
-   * Reads the answer from the `response` field. Does not fall back to OpenAI.
+   * Seamlessly falls back to OpenAI if the local gateway is slow, timed out, or unavailable.
    */
   async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
-    const gatewayUrl = this.getGatewayBaseUrl();
-    const message = this._buildGatewayMessage(systemPrompt, userPrompt, jsonMode, conversationHistory);
-
+    let gatewayUrl;
     try {
-      const response = await axios.post(`${gatewayUrl}/chat`, { message }, {
-        headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
-        timeout: jsonMode ? 180000 : 120000
-      });
-
-      const text = response.data?.response;
-      if (typeof text !== 'string' || !text.trim()) {
-        console.warn('[AIService] Local LLM gateway returned an invalid response payload.');
-        throw this._gatewayUnavailableError(502);
-      }
-      return text.trim();
-    } catch (error) {
-      if (error.status && error.message && error.message.startsWith('The AI tutor')) {
-        throw error;
-      }
-      if (error.code === 'ECONNABORTED') {
-        console.warn('[AIService] Local LLM gateway timed out.');
-        throw this._gatewayUnavailableError(504);
-      }
-      if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'EHOSTUNREACH' || error.code === 'ETIMEDOUT') {
-        console.warn(`[AIService] Local LLM gateway unreachable (${error.code}).`);
-        throw this._gatewayUnavailableError(503);
-      }
-      if (error.response) {
-        console.warn(`[AIService] Local LLM gateway HTTP ${error.response.status}.`);
-        throw this._gatewayUnavailableError(503);
-      }
-      console.warn('[AIService] Local LLM gateway request failed.');
-      throw this._gatewayUnavailableError(503);
+      gatewayUrl = this.getGatewayBaseUrl();
+    } catch {
+      gatewayUrl = null;
     }
+
+    if (gatewayUrl) {
+      const message = this._buildGatewayMessage(systemPrompt, userPrompt, jsonMode, conversationHistory);
+      try {
+        const response = await axios.post(`${gatewayUrl}/chat`, { message }, {
+          headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+          timeout: jsonMode ? 180000 : 25000
+        });
+
+        const text = response.data?.response;
+        if (typeof text === 'string' && text.trim()) {
+          return text.trim();
+        }
+        console.warn('[AIService] Local LLM gateway returned empty response. Attempting fallback...');
+      } catch (error) {
+        console.warn(`[AIService] Local LLM gateway issue (${error.code || error.response?.status || error.message}). Attempting OpenAI fallback...`);
+      }
+    }
+
+    // Automatic fallback to OpenAI if configured
+    try {
+      const fallbackResult = await this._callOpenAIFallback(systemPrompt, userPrompt, jsonMode, conversationHistory);
+      if (fallbackResult) {
+        return fallbackResult;
+      }
+    } catch (fbError) {
+      console.warn('[AIService] OpenAI fallback notice:', fbError.message);
+    }
+
+    throw this._gatewayUnavailableError(503);
   }
 
   /**
@@ -222,6 +271,93 @@ class AIService {
     }
   }
 
+  /**
+   * Explains the content currently visible in the learner's document viewer.
+   * Adheres strictly to the Qwen AI Tutor prompt and returns structured JSON:
+   * {
+   *   page_or_slide_number: number,
+   *   title: string,
+   *   spoken_explanation: string,
+   *   key_points: string[],
+   *   safety_warnings: string[],
+   *   suggested_next_transition: string
+   * }
+   */
+  async explainVisibleContent(contentInfo, courseTitle = '', language = 'en') {
+    const pageNum = contentInfo.pageNumber || contentInfo.page_number || contentInfo.slideNumber || 1;
+    const pageTitle = contentInfo.title || `Page ${pageNum}`;
+    const rawContent = contentInfo.text || contentInfo.fullText || contentInfo.content || '';
+    const visualDesc = (contentInfo.visuals || contentInfo.images || [])
+      .map(v => v.name || v.descr || '')
+      .filter(Boolean)
+      .join('; ') || '';
+
+    const systemPrompt = `You are SkillBridge AI Tutor, an instructor explaining uploaded training materials.
+Explain the content currently visible in the learner's document viewer.
+
+Rules:
+- Use the extracted content from the uploaded file and approved course context as your source of truth.
+- Explain the visible page or slide in its original reading order.
+- Explain headings, paragraphs, bullet points, tables, diagrams, examples, and safety instructions when their content is available.
+- Use simple, practical language suitable for the learner.
+- Give additional examples only when useful and consistent with the source.
+- Do not invent facts or claim to see information that has not been extracted.
+- Do not redesign, recreate, or replace the original document.
+- Keep the original page or slide visible while explaining it.
+- Answer follow-up questions using the current page and relevant course context.
+- If information is unavailable, clearly acknowledge the limitation.
+- Generate a natural spoken explanation suitable for text-to-speech.
+${language && language !== 'en' ? `- Provide the spoken_explanation, key_points, safety_warnings, and suggested_next_transition in ${language}.` : ''}
+
+Return structured output containing ONLY valid JSON matching:
+{
+  "page_or_slide_number": ${pageNum},
+  "title": "${pageTitle.replace(/"/g, '\\"')}",
+  "spoken_explanation": "Natural, clear spoken explanation of this exact page or slide for text-to-speech narration...",
+  "key_points": ["Key takeaway 1", "Key takeaway 2", "Key takeaway 3"],
+  "safety_warnings": ["Any safety precautions, warnings, or operational caveats mentioned, or empty if none"],
+  "suggested_next_transition": "Short transition phrase leading to the next section or conclusion"
+}`;
+
+    const userPrompt = `Training Course: "${courseTitle}"
+Visible Page/Slide: ${pageNum} (${pageTitle})
+${visualDesc ? `Visual/Diagram Elements: ${visualDesc}\n` : ''}
+Extracted Document Content for this Page/Slide:
+${rawContent.slice(0, 10000)}
+
+Provide your structured explanation for this visible content.`;
+
+    try {
+      const response = await this._callLLM(systemPrompt, userPrompt, true);
+      const parsed = this._parseJsonObject(response);
+      if (parsed && (parsed.spoken_explanation || parsed.title)) {
+        return {
+          page_or_slide_number: parsed.page_or_slide_number || pageNum,
+          title: parsed.title || pageTitle,
+          spoken_explanation: parsed.spoken_explanation || parsed.explanation || '',
+          key_points: Array.isArray(parsed.key_points) ? parsed.key_points : [],
+          safety_warnings: Array.isArray(parsed.safety_warnings) ? parsed.safety_warnings : [],
+          suggested_next_transition: parsed.suggested_next_transition || 'Let us proceed to the next section.'
+        };
+      }
+    } catch (err) {
+      console.warn('[AIService] explainVisibleContent LLM notice, using structured fallback:', err.message);
+    }
+
+    // Structured fallback
+    return {
+      page_or_slide_number: pageNum,
+      title: pageTitle,
+      spoken_explanation: `In this section of ${courseTitle || 'the course'}, we review ${pageTitle}. ${rawContent ? rawContent.slice(0, 300).replace(/\\n+/g, ' ') : 'Please observe the document content displayed on screen.'}`,
+      key_points: [
+        `Review the core guidelines shown on page ${pageNum}`,
+        `Follow standard operational procedures outlined in the training material`
+      ],
+      safety_warnings: [],
+      suggested_next_transition: `Proceed to page ${pageNum + 1} when ready.`
+    };
+  }
+
   _slideTeachingText(slide) {
     if (!slide) return '';
     const visual = (slide.images || [])
@@ -267,10 +403,20 @@ class AIService {
     return out;
   }
 
-  _lessonDuration(index) {
-    const mins = 7 + (index % 6);
-    const secs = (index * 15) % 60;
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  _lessonDuration(index, lesson = null) {
+    const exp = lesson?.explanation || lesson?.explanations?.en || '';
+    if (exp && exp.length > 30) {
+      const words = exp.trim().split(/\s+/).filter(Boolean).length;
+      const totalSecs = Math.max(75, Math.min(300, Math.round(words / 2.15)));
+      const m = Math.floor(totalSecs / 60).toString().padStart(2, '0');
+      const s = Math.floor(totalSecs % 60).toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+    const slideCount = Array.isArray(lesson?.sourceSlides) && lesson.sourceSlides.length > 0 ? lesson.sourceSlides.length : 1;
+    const baseSecs = Math.min(300, Math.max(75, slideCount * 75 + ((index * 17) % 35)));
+    const m = Math.floor(baseSecs / 60).toString().padStart(2, '0');
+    const s = Math.floor(baseSecs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
   }
 
   _defaultQuiz(courseTitle, lessonTitle) {
@@ -306,15 +452,28 @@ class AIService {
           title: moduleTitle,
           lessons: 0,
           duration: '0m',
+          totalSecs: 0,
           locked: modulesMap.length > 0
         });
       }
       const modId = moduleKey.get(moduleTitle);
       modulesMap[modId - 1].lessons += 1;
-      modulesMap[modId - 1].duration = `${modulesMap[modId - 1].lessons * 8}m`;
+
       const sourceSlides = Array.isArray(l.sourceSlides)
         ? l.sourceSlides.map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0)
         : [];
+
+      // Calculate realistic dynamic duration (override static "08:00" or empty placeholders)
+      let duration = l.duration;
+      if (!duration || duration === '08:00' || duration === '8m' || duration === '10 mins') {
+        duration = this._lessonDuration(idx, { ...l, sourceSlides });
+      }
+
+      const parts = String(duration).split(':').map(p => parseInt(p, 10) || 0);
+      const lessonSecs = parts.length === 2 ? parts[0] * 60 + parts[1] : (parseInt(duration, 10) || 120);
+      modulesMap[modId - 1].totalSecs += lessonSecs;
+      modulesMap[modId - 1].duration = `${Math.max(1, Math.round(modulesMap[modId - 1].totalSecs / 60))}m`;
+
       return {
         ...l,
         id: idx + 1,
@@ -324,10 +483,13 @@ class AIService {
         moduleTitle,
         title: l.title,
         sourceSlides,
-        duration: l.duration || this._lessonDuration(idx),
+        duration,
         status: idx === 0 ? 'active' : 'locked'
       };
     });
+
+    // Cleanup temporary totalSecs helper
+    modulesMap.forEach(m => delete m.totalSecs);
 
     if (normalized.length === 0) {
       normalized.push({
@@ -338,10 +500,10 @@ class AIService {
         moduleTitle: formattedTitle,
         title: `${formattedTitle} Core Training`,
         sourceSlides: [1],
-        duration: '08:00',
+        duration: '02:30',
         status: 'active'
       });
-      modulesMap.push({ title: formattedTitle, lessons: 1, duration: '8m', locked: false });
+      modulesMap.push({ title: formattedTitle, lessons: 1, duration: '3m', locked: false });
     }
 
     return {
@@ -386,7 +548,6 @@ class AIService {
   }
 
   _sanitizeGeneratedCourse(parsed, slides, fileName) {
-    const MAX_LESSONS = 24;
     const slideCount = (slides || []).length;
     let lessons = Array.isArray(parsed?.lessons) ? parsed.lessons : [];
     lessons = lessons.filter(l => l && !isGarbageTitle(l.title));
@@ -395,15 +556,32 @@ class AIService {
       return this._groupSlidesIntoLessons(slides, fileName);
     }
 
-    if (lessons.length > MAX_LESSONS) {
-      const groupSize = Math.ceil(lessons.length / MAX_LESSONS);
+    // 1. Deduplicate lessons covering the exact same slides or identical title
+    const seenSlideKeys = new Set();
+    const seenTitles = new Set();
+    const deduped = [];
+    for (const l of lessons) {
+      const sns = Array.isArray(l.sourceSlides) ? [...l.sourceSlides].sort((a, b) => a - b).join(',') : '';
+      const cleanT = String(l.title || '').trim().toLowerCase();
+      if (sns && seenSlideKeys.has(sns)) continue;
+      if (cleanT && seenTitles.has(cleanT)) continue;
+      if (sns) seenSlideKeys.add(sns);
+      if (cleanT) seenTitles.add(cleanT);
+      deduped.push(l);
+    }
+    lessons = deduped.length ? deduped : lessons;
+
+    // 2. Prevent over-fragmentation: aim for meaningful chunks of 2-5 slides per lesson
+    const maxTarget = slideCount > 0 ? Math.min(14, Math.max(4, Math.ceil(slideCount / 2.5))) : 16;
+    if (lessons.length > maxTarget) {
+      const groupSize = Math.ceil(lessons.length / maxTarget);
       const merged = [];
       for (let i = 0; i < lessons.length; i += groupSize) {
         const group = lessons.slice(i, i + groupSize);
         const sourceSlides = [...new Set(group.flatMap(l => Array.isArray(l.sourceSlides) ? l.sourceSlides : []))];
         merged.push({
           ...group[0],
-          title: group[0].title,
+          title: group.length > 1 && !group[0].title.includes('&') ? `${group[0].title} & Applications` : group[0].title,
           moduleTitle: group[0].moduleTitle || group[0].chapterTitle,
           sourceSlides
         });
@@ -568,15 +746,6 @@ Return ONLY JSON:
     const textLength = (fullText || '').length;
 
     console.log(`[AI Comprehension] Studying document "${fileName}" (${fileType.toUpperCase()}, ${textLength} chars, ${slides.length} slides, ${pages.length} pages)...`);
-
-    if (curriculum?.lessons?.length > 0 && (slides.length > 0 || pages.length > 0)) {
-      console.log(`[AI Comprehension] Using local LLM to write chunks for ${curriculum.lessons.length} curriculum lessons.`);
-      try {
-        return await this._chunkByCurriculumLessons(fileName, docMetadata);
-      } catch (e) {
-        console.warn('[AI Comprehension] Curriculum-guided LLM chunking failed, continuing with document pass:', e.message);
-      }
-    }
 
     // For very large documents (> 35k chars or > 24 slides), use hierarchical multi-pass comprehension
     if (textLength > 35000 || slides.length > 24) {
@@ -920,9 +1089,9 @@ RULES:
     const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
     const generatedChunks = [];
 
-    // 1. PPT/PPTX Structural Chunking — cluster related slides, never 1 garbage title = 1 chunk
+    // 1. PPT/PPTX Structural Chunking — cluster related slides granularly (1-2 slides per chunk)
     if (isPpt && slides.length > 0) {
-      const groupSize = Math.max(2, Math.ceil(slides.length / 16));
+      const groupSize = Math.max(1, Math.min(2, Math.ceil(slides.length / 16)));
       for (let i = 0; i < slides.length; i += groupSize) {
         const group = slides.slice(i, i + groupSize);
         const teaching = group.map(s => this._slideTeachingText(s) || s.fullText || '').join('\n\n');
@@ -1130,9 +1299,9 @@ HARD RULES:
 - Ignore OCR garbage, OLE binary fragments, font names, and symbol strings. Titles like "UT5FAMX%", "#E.R$#E*", "^^~^^~", "Ecz v2b0", ".- AMM,HCC" are INVALID.
 - Every module and lesson title must be readable words a trainer would say (English or Bangla).
 - Do NOT create one lesson per slide or per noisy fragment.
-- Group related consecutive slides into lessons. A typical safety/operations deck has 6-18 lessons (absolute max 24).
+- Group related consecutive slides into lessons. A typical safety/operations deck has 5-10 structured lessons (aim for 2-5 slides per lesson so each lesson is a substantive training unit, never 1 lesson per slide).
 - Each lesson MUST include sourceSlides: an array of integer slide numbers covered by that lesson.
-- Prefer 2-8 slides per lesson. Multiple slides that teach one topic = one lesson.
+- Calculate realistic lesson duration in MM:SS based on slide count and content (e.g. 1-2 slides = "01:45" to "02:30", 3-5 slides = "03:15" to "04:30"). Module duration is the sum of its lessons (e.g. "6m", "9m"). NEVER return "08:00" for all lessons.
 - IMAGE SLIDES: use the vision/OCR meaning, then teach it as a shop-floor trainer would.
 
 Return ONLY JSON:
@@ -1141,13 +1310,13 @@ Return ONLY JSON:
   "description": "2-3 sentence overview",
   "learning": ["skill 1", "skill 2", "skill 3", "skill 4"],
   "includes": ["Interactive ARIA AI Avatar Tutoring", "Content-driven curriculum", "Voice Q&A", "Assessment & certificate"],
-  "curriculum": [{ "title": "Module title", "lessons": 2, "duration": "16m", "locked": false }],
+  "curriculum": [{ "title": "Module title", "lessons": 2, "duration": "6m", "locked": false }],
   "lessons": [{
     "id": 1,
     "chapterTitle": "Module title",
     "moduleTitle": "Module title",
     "title": "Readable lesson title",
-    "duration": "08:00",
+    "duration": "02:45",
     "status": "active",
     "sourceSlides": [1, 2, 3]
   }],
@@ -1495,10 +1664,14 @@ PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
           flatLessons.push(lessonObj);
         }
 
+        const modSecs = modLessons.reduce((acc, l) => {
+          const parts = String(l.duration || '').split(':').map(p => parseInt(p, 10) || 0);
+          return acc + (parts.length === 2 ? parts[0] * 60 + parts[1] : 120);
+        }, 0);
         modules.push({
           title: modTitle,
           lessons: modLessons.length,
-          duration: `${modLessons.length * 8}m`,
+          duration: `${Math.max(1, Math.round(modSecs / 60))}m`,
           locked: modId > 1
         });
         currentCluster = [];
@@ -1528,13 +1701,13 @@ PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
         title: `${formattedTitle} Core Training`,
         sourceSlides: [1],
         visuals: slideVisuals,
-        duration: '08:00',
+        duration: '02:30',
         status: 'active'
       });
       modules.push({
         title: formattedTitle,
         lessons: 1,
-        duration: '8m',
+        duration: '3m',
         locked: false
       });
     }

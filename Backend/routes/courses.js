@@ -2,13 +2,17 @@ import express from 'express';
 import multer from 'multer';
 import axios from 'axios';
 import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
 import prisma, { defaultPrisma } from '../config/prisma.js';
+import masterPrisma from '../config/masterPrisma.js';
 import aiService from '../services/aiService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
 import documentExtractor from '../services/documentExtractor.js';
 import tenantService from '../services/tenantService.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
+import { cleanUnsupportedWords } from '../utils/contentQuality.js';
 
 const router = express.Router();
 const upload = multer({
@@ -58,6 +62,19 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     // Override the title/description with Admin input if needed, but preserve structure
     generatedCourse.title = title.trim();
     generatedCourse.description = description.trim();
+    generatedCourse.fileType = fileType || docResult.fileType;
+    generatedCourse.fileName = req.file.originalname;
+
+    // Retain exact original document structure and page/slide visual images in curriculum
+    if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
+      generatedCourse.slides = docResult.slides;
+    }
+    if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
+      generatedCourse.pages = docResult.pages;
+    }
+    if (Array.isArray(docResult.images) && docResult.images.length > 0) {
+      generatedCourse.visuals = docResult.images;
+    }
 
     console.log(`[Curriculum Design] Curriculum structured. Saving course to database...`);
     const targetPrisma = req.prisma || prisma;
@@ -70,6 +87,89 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         curriculum: generatedCourse,
       },
     });
+
+    // Save original file buffer and individual slide/page images to disk for lightweight streaming
+    try {
+      const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(newCourse.id));
+      const slidesDir = path.join(courseUploadDir, 'slides');
+      const pagesDir = path.join(courseUploadDir, 'pages');
+      fs.mkdirSync(slidesDir, { recursive: true });
+      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), req.file.buffer);
+      console.log(`[File Storage] Saved original file to ${path.join(courseUploadDir, req.file.originalname)}`);
+
+      // Extract slide images to disk
+      if (Array.isArray(generatedCourse.slides)) {
+        generatedCourse.slides = generatedCourse.slides.map((s, idx) => {
+          const sNum = s.slideNumber || idx + 1;
+          const slideFile = path.join(slidesDir, `Slide${sNum}.png`);
+          const rawData = s.fullSlideImage?.dataUrl || s.images?.[0]?.dataUrl || s.dataUrl;
+          if (rawData && rawData.startsWith('data:image')) {
+            const base64Part = rawData.split(',')[1];
+            if (base64Part) {
+              fs.writeFileSync(slideFile, Buffer.from(base64Part, 'base64'));
+            }
+          }
+          const imageUrl = `/api/v1/courses/${newCourse.id}/slides/${sNum}/image`;
+          return {
+            ...s,
+            slideNumber: sNum,
+            image: imageUrl,
+            fullSlideImage: {
+              id: `full_slide_${sNum}`,
+              url: imageUrl,
+              slideNumber: sNum,
+              fileName: `Slide${sNum}.png`,
+              mimetype: 'image/png'
+            },
+            images: (s.images || []).map((im, imIdx) => ({
+              ...im,
+              dataUrl: undefined,
+              url: `/api/v1/courses/${newCourse.id}/slides/${sNum}/image`
+            }))
+          };
+        });
+      }
+
+      // Extract page images to disk
+      if (Array.isArray(generatedCourse.pages)) {
+        generatedCourse.pages = generatedCourse.pages.map((p, idx) => {
+          const pNum = p.page_number || p.pageNumber || idx + 1;
+          const pageFile = path.join(pagesDir, `Page${pNum}.png`);
+          const rawData = p.pageImage?.dataUrl || p.images?.[0]?.dataUrl || p.dataUrl;
+          if (rawData && rawData.startsWith('data:image')) {
+            const base64Part = rawData.split(',')[1];
+            if (base64Part) {
+              fs.writeFileSync(pageFile, Buffer.from(base64Part, 'base64'));
+            }
+          }
+          const imageUrl = `/api/v1/courses/${newCourse.id}/pages/${pNum}/image`;
+          return {
+            ...p,
+            page_number: pNum,
+            pageNumber: pNum,
+            image: imageUrl,
+            pageImage: {
+              id: `full_page_${pNum}`,
+              url: imageUrl,
+              pageNumber: pNum,
+              fileName: `Page${pNum}.png`,
+              mimetype: 'image/png'
+            },
+            images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
+          };
+        });
+      }
+
+      // Update course in DB with lightweight sanitized curriculum
+      await targetPrisma.course.update({
+        where: { id: newCourse.id },
+        data: { curriculum: generatedCourse }
+      });
+      console.log(`[File Storage] Saved slide/page PNGs to disk and sanitized course payload in database.`);
+    } catch (saveErr) {
+      console.warn(`[File Storage] Notice saving course files:`, saveErr.message);
+    }
 
     // Store semantic chunks and generate vector embeddings directly in PostgreSQL pgvector
     try {
@@ -111,6 +211,152 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
   } catch (error) {
     console.error('[Document Extraction] Failed to publish course:', error);
     res.status(500).json({ error: error.message || 'Failed to process document and publish course.' });
+  }
+});
+
+// Serve the original uploaded file (PDF, PPTX, DOCX, Image, etc.) for viewing/download
+router.get('/:id/file', authenticateToken, async (req, res) => {
+  try {
+    const targetPrisma = req.prisma || prisma;
+    const course = await targetPrisma.course.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, fileName: true, title: true }
+    });
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+
+    const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(course.id));
+    if (!fs.existsSync(courseUploadDir)) {
+      return res.status(404).json({ error: 'Original document file not found on server.' });
+    }
+    const files = fs.readdirSync(courseUploadDir);
+    const targetFile = files.find(f => f.toLowerCase() === (course.fileName || '').toLowerCase()) || files[0];
+    if (!targetFile) {
+      return res.status(404).json({ error: 'Original document file not found.' });
+    }
+
+    const fullPath = path.join(courseUploadDir, targetFile);
+    const ext = path.extname(targetFile).toLowerCase();
+    const mimeMap = {
+      '.pdf': 'application/pdf',
+      '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      '.ppt': 'application/vnd.ms-powerpoint',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.doc': 'application/msword',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.webp': 'image/webp',
+      '.txt': 'text/plain',
+      '.md': 'text/markdown'
+    };
+    const contentType = mimeMap[ext] || 'application/octet-stream';
+    const inline = req.query.download === '1' ? 'attachment' : 'inline';
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `${inline}; filename="${encodeURIComponent(targetFile)}"`);
+    fs.createReadStream(fullPath).pipe(res);
+  } catch (err) {
+    console.error('Error serving course file:', err);
+    res.status(500).json({ error: 'Failed to retrieve original course file.' });
+  }
+});
+
+// Serve slide image (PNG) for course (PowerPoint slides)
+router.get('/:id/slides/:slideNum/image', async (req, res) => {
+  try {
+    const courseId = req.params.id;
+    const slideNum = parseInt(req.params.slideNum, 10);
+    if (isNaN(slideNum) || slideNum < 1) {
+      return res.status(400).json({ error: 'Invalid slide number.' });
+    }
+
+    const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
+    const slidesDir = path.join(courseUploadDir, 'slides');
+    const slideFile = path.join(slidesDir, `Slide${slideNum}.png`);
+
+    if (fs.existsSync(slideFile)) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return fs.createReadStream(slideFile).pipe(res);
+    }
+
+    // Fallback: Check if slide image is stored in DB curriculum
+    const targetPrisma = req.prisma || prisma;
+    const course = await targetPrisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, curriculum: true, fileName: true }
+    });
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+
+    const cur = typeof course.curriculum === 'string' ? JSON.parse(course.curriculum) : (course.curriculum || {});
+    const targetSlide = (cur.slides || []).find(s => s.slideNumber === slideNum) || cur.slides?.[slideNum - 1];
+    const rawData = targetSlide?.fullSlideImage?.dataUrl || targetSlide?.images?.[0]?.dataUrl;
+
+    if (rawData && rawData.startsWith('data:image')) {
+      const base64Part = rawData.split(',')[1];
+      if (base64Part) {
+        fs.mkdirSync(slidesDir, { recursive: true });
+        const buf = Buffer.from(base64Part, 'base64');
+        fs.writeFileSync(slideFile, buf);
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.end(buf);
+      }
+    }
+
+    return res.status(404).json({ error: `Slide image ${slideNum} not found.` });
+  } catch (err) {
+    console.error('Error serving slide image:', err);
+    res.status(500).json({ error: 'Failed to retrieve slide image.' });
+  }
+});
+
+// Serve page image (PNG) for course (PDF / documents)
+router.get('/:id/pages/:pageNum/image', async (req, res) => {
+  try {
+    const courseId = req.params.id;
+    const pageNum = parseInt(req.params.pageNum, 10);
+    if (isNaN(pageNum) || pageNum < 1) {
+      return res.status(400).json({ error: 'Invalid page number.' });
+    }
+
+    const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
+    const pagesDir = path.join(courseUploadDir, 'pages');
+    const pageFile = path.join(pagesDir, `Page${pageNum}.png`);
+
+    if (fs.existsSync(pageFile)) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return fs.createReadStream(pageFile).pipe(res);
+    }
+
+    const targetPrisma = req.prisma || prisma;
+    const course = await targetPrisma.course.findUnique({
+      where: { id: courseId },
+      select: { id: true, curriculum: true }
+    });
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+
+    const cur = typeof course.curriculum === 'string' ? JSON.parse(course.curriculum) : (course.curriculum || {});
+    const targetPage = (cur.pages || []).find(p => (p.page_number || p.pageNumber) === pageNum) || cur.pages?.[pageNum - 1];
+    const rawData = targetPage?.pageImage?.dataUrl || targetPage?.images?.[0]?.dataUrl;
+
+    if (rawData && rawData.startsWith('data:image')) {
+      const base64Part = rawData.split(',')[1];
+      if (base64Part) {
+        fs.mkdirSync(pagesDir, { recursive: true });
+        const buf = Buffer.from(base64Part, 'base64');
+        fs.writeFileSync(pageFile, buf);
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        return res.end(buf);
+      }
+    }
+
+    return res.status(404).json({ error: `Page image ${pageNum} not found.` });
+  } catch (err) {
+    console.error('Error serving page image:', err);
+    res.status(500).json({ error: 'Failed to retrieve page image.' });
   }
 });
 
@@ -294,22 +540,64 @@ function formatCourseForCatalog(course) {
       }
     }
 
+    // If lessons array is empty, synthesize clean lessons from course.chunks
+    const rawLessons = (Array.isArray(curriculumSummary.lessons) && curriculumSummary.lessons.length > 0)
+      ? curriculumSummary.lessons
+      : (Array.isArray(course.chunks) && course.chunks.length > 0)
+        ? course.chunks.map((c, cIdx) => ({
+            id: cIdx + 1,
+            title: cleanUnsupportedWords(c.concept || c.topic || `Lesson ${cIdx + 1}`),
+            duration: '02:30',
+            moduleId: `mod_${Math.floor(cIdx / 4) + 1}`,
+            moduleTitle: cleanUnsupportedWords(c.topic || course.title),
+            chapterTitle: cleanUnsupportedWords(c.topic || course.title),
+            explanation: c.chunkText || c.semanticSummary || '',
+            sourceSlides: Array.isArray(c.sourceSlides) && c.sourceSlides.length > 0 ? c.sourceSlides : [c.sourcePage || cIdx + 1]
+          }))
+        : [];
+
     // Strip heavy base64 visuals and raw slide data from lessons for fast catalog listing
-    const sanitizedLessons = (curriculumSummary.lessons || []).map((l) => ({
-      id: l.id,
-      title: l.title,
-      duration: l.duration,
-      moduleId: l.moduleId,
+    const sanitizedLessons = rawLessons.map((l, lIdx) => ({
+      id: l.id || lIdx + 1,
+      title: cleanUnsupportedWords(l.title, `Lesson ${lIdx + 1}`),
+      duration: l.duration || '02:30',
+      moduleId: l.moduleId || `mod_${Math.floor(lIdx / 4) + 1}`,
       chapterId: l.chapterId,
-      moduleTitle: l.moduleTitle,
-      chapterTitle: l.chapterTitle,
+      moduleTitle: cleanUnsupportedWords(l.moduleTitle || l.chapterTitle, course.title),
+      chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, course.title),
       explanation: l.explanation,
       sourceSlides: l.sourceSlides,
     }));
 
+    const fileType = (curriculumSummary.fileType || course.fileName?.split('.').pop() || '').toLowerCase();
+    const slideSummaries = Array.isArray(curriculumSummary.slides)
+      ? curriculumSummary.slides.map((s, idx) => ({
+          slideNumber: s.slideNumber || idx + 1,
+          title: cleanUnsupportedWords(s.title || `Slide ${idx + 1}`),
+          type: 'slide',
+          image: `/api/v1/courses/${course.id}/slides/${s.slideNumber || idx + 1}/image`,
+          bulletPoints: (s.bulletPoints || []).map(bp => cleanUnsupportedWords(bp)),
+          headings: (s.headings || []).map(h => cleanUnsupportedWords(h)),
+          paragraphs: s.paragraphs || []
+        }))
+      : [];
+
+    const pageSummaries = Array.isArray(curriculumSummary.pages)
+      ? curriculumSummary.pages.map((p, idx) => ({
+          page_number: p.page_number || p.pageNumber || idx + 1,
+          title: cleanUnsupportedWords(p.title || `Page ${idx + 1}`),
+          type: 'page',
+          image: `/api/v1/courses/${course.id}/pages/${p.page_number || p.pageNumber || idx + 1}/image`
+        }))
+      : [];
+
     curriculumSummary = {
-      title: curriculumSummary.title,
-      description: curriculumSummary.description,
+      title: cleanUnsupportedWords(curriculumSummary.title || course.title),
+      description: cleanUnsupportedWords(curriculumSummary.description || course.description),
+      fileType,
+      fileName: course.fileName,
+      slides: slideSummaries,
+      pages: pageSummaries,
       includes: curriculumSummary.includes,
       learning: curriculumSummary.learning,
       curriculum: curriculumSummary.curriculum,
@@ -318,12 +606,19 @@ function formatCourseForCatalog(course) {
     };
   }
 
+  const detectedFileType = (curriculumSummary?.fileType || course.fileName?.split('.').pop() || '').toLowerCase();
+
   return {
     id: course.id,
-    title: course.title,
-    description: course.description,
+    title: cleanUnsupportedWords(course.title),
+    description: cleanUnsupportedWords(course.description),
     fileName: course.fileName,
+    fileType: detectedFileType,
+    slides: curriculumSummary?.slides || [],
+    pages: curriculumSummary?.pages || [],
     curriculum: curriculumSummary,
+    lessons: curriculumSummary?.lessons || [],
+    chunks: course.chunks || [],
     createdAt: course.createdAt,
     updatedAt: course.updatedAt,
     assignedUsersCount: course.assignedUsersCount ?? course._count?.assignments ?? 0,
@@ -421,7 +716,9 @@ router.get('/:id', authenticateToken, async (req, res) => {
       tenantService.syncDefaultCoursesToTenant(req.tenantCode).catch(() => {});
     }
 
-    const course = await prisma.course.findUnique({
+    const targetPrisma = req.prisma || prisma;
+
+    let course = await targetPrisma.course.findUnique({
       where: { id: req.params.id },
       include: {
         chunks: {
@@ -448,6 +745,36 @@ router.get('/:id', authenticateToken, async (req, res) => {
         },
       },
     });
+
+    if (!course && defaultPrisma && defaultPrisma !== targetPrisma) {
+      course = await defaultPrisma.course.findUnique({
+        where: { id: req.params.id },
+        include: {
+          chunks: {
+            orderBy: { chunkIndex: 'asc' },
+            select: {
+              id: true,
+              chunkIndex: true,
+              chunkText: true,
+              topic: true,
+              subtopic: true,
+              concept: true,
+              chunkType: true,
+              sourcePage: true,
+              sourceSlides: true,
+              sourceSection: true,
+              keyPoints: true,
+              relatedConcepts: true,
+              semanticSummary: true,
+              metadata: true
+            }
+          },
+          _count: {
+            select: { assignments: true },
+          },
+        },
+      });
+    }
 
     if (!course) {
       return res.status(404).json({ error: 'Course not found.' });
@@ -535,9 +862,26 @@ router.get('/:id', authenticateToken, async (req, res) => {
           }
         }
 
+        const cleanLessonVisuals = Array.isArray(lesson.visuals)
+          ? lesson.visuals.map(v => ({
+              ...v,
+              dataUrl: undefined,
+              url: v.sourceSlide ? `/api/v1/courses/${course.id}/slides/${v.sourceSlide}/image` : v.url
+            }))
+          : [];
+
+        if (slideData && Array.isArray(slideData.images)) {
+          slideData.images = slideData.images.map(img => ({
+            ...img,
+            dataUrl: undefined,
+            url: img.sourceSlide ? `/api/v1/courses/${course.id}/slides/${img.sourceSlide}/image` : img.url
+          }));
+        }
+
         return {
           ...lesson,
           sourceSlides: sNums,
+          visuals: cleanLessonVisuals,
           slideData,
           chunkData: matchedChunk ? {
             chunkIndex: matchedChunk.chunkIndex,
@@ -549,9 +893,107 @@ router.get('/:id', authenticateToken, async (req, res) => {
       });
     }
 
+    // Sanitize heavy base64 strings from curriculumData.slides and curriculumData.pages
+    if (Array.isArray(curriculumData.slides)) {
+      curriculumData.slides = curriculumData.slides.map((s, idx) => {
+        const sNum = s.slideNumber || (idx + 1);
+        const imageUrl = `/api/v1/courses/${course.id}/slides/${sNum}/image`;
+        return {
+          ...s,
+          slideNumber: sNum,
+          image: imageUrl,
+          fullSlideImage: {
+            id: `full_slide_${sNum}`,
+            url: imageUrl,
+            slideNumber: sNum,
+            fileName: `Slide${sNum}.png`,
+            mimetype: 'image/png'
+          },
+          images: Array.isArray(s.images)
+            ? s.images.map(img => {
+                if (String(img.id).startsWith('full_slide') || img.slideNumber === sNum) {
+                  return { ...img, url: imageUrl, dataUrl: undefined };
+                }
+                return { ...img, dataUrl: undefined };
+              })
+            : []
+        };
+      });
+    }
+
+    if (Array.isArray(curriculumData.pages)) {
+      curriculumData.pages = curriculumData.pages.map((p, idx) => {
+        const pNum = p.page_number || p.pageNumber || (idx + 1);
+        const imageUrl = `/api/v1/courses/${course.id}/pages/${pNum}/image`;
+        return {
+          ...p,
+          page_number: pNum,
+          pageNumber: pNum,
+          image: imageUrl,
+          pageImage: {
+            id: `full_page_${pNum}`,
+            url: imageUrl,
+            pageNumber: pNum,
+            fileName: `Page${pNum}.png`,
+            mimetype: 'image/png'
+          },
+          images: []
+        };
+      });
+    }
+
+    if (Array.isArray(curriculumData.visuals)) {
+      curriculumData.visuals = curriculumData.visuals.map(v => ({
+        ...v,
+        dataUrl: undefined,
+        url: v.sourceSlide ? `/api/v1/courses/${course.id}/slides/${v.sourceSlide}/image` : v.url
+      }));
+    }
+
+    const cleanChunks = (course.chunks || []).map(c => ({
+      ...c,
+      topic: cleanUnsupportedWords(c.topic),
+      subtopic: cleanUnsupportedWords(c.subtopic),
+      concept: cleanUnsupportedWords(c.concept),
+      keyPoints: Array.isArray(c.keyPoints) ? c.keyPoints.map(kp => cleanUnsupportedWords(kp)) : [],
+      semanticSummary: cleanUnsupportedWords(c.semanticSummary)
+    }));
+
+    const detectedFileType = (curriculumData?.fileType || course.fileName?.split('.').pop() || '').toLowerCase();
+
+    // If curriculumData.lessons is empty or sparse, populate from clean chunks so all concepts are divided into lessons
+    if ((!Array.isArray(curriculumData.lessons) || curriculumData.lessons.length === 0) && cleanChunks.length > 0) {
+      curriculumData.lessons = cleanChunks.map((c, idx) => ({
+        id: idx + 1,
+        title: cleanUnsupportedWords(c.concept || c.topic || `Lesson ${idx + 1}`),
+        duration: '02:30',
+        moduleTitle: cleanUnsupportedWords(c.topic || course.title),
+        chapterTitle: cleanUnsupportedWords(c.topic || course.title),
+        sourceSlides: Array.isArray(c.sourceSlides) && c.sourceSlides.length > 0 ? c.sourceSlides : [c.sourcePage || idx + 1],
+        status: idx === 0 ? 'active' : 'locked',
+        explanation: c.chunkText || c.semanticSummary || '',
+        bulletPoints: (c.keyPoints || []).map(kp => cleanUnsupportedWords(kp))
+      }));
+    } else if (Array.isArray(curriculumData.lessons)) {
+      curriculumData.lessons = curriculumData.lessons.map(l => ({
+        ...l,
+        title: cleanUnsupportedWords(l.title),
+        moduleTitle: cleanUnsupportedWords(l.moduleTitle || l.chapterTitle, course.title),
+        chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, course.title)
+      }));
+    }
+
     res.json({
       ...course,
+      title: cleanUnsupportedWords(course.title),
+      description: cleanUnsupportedWords(course.description),
+      chunks: cleanChunks,
+      fileType: detectedFileType,
+      slides: curriculumData.slides || [],
+      pages: curriculumData.pages || [],
+      visuals: curriculumData.visuals || [],
       curriculum: curriculumData,
+      lessons: curriculumData.lessons || [],
       assignedUsersCount: course._count?.assignments || 0,
     });
   } catch (error) {
@@ -696,6 +1138,12 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
           console.log(`[PERF:LESSON_FETCH_END] Served lesson "${lessonTitle}" directly from PostgreSQL DB cache in ${fetchDuration}ms (0 network / 0 LLM latency)`);
           return res.json({
             explanation: cachedExplanation,
+            spoken_explanation: cachedExplanation,
+            title: lessonTitle,
+            page_or_slide_number: existingLesson.sourceSlides?.[0] || existingLesson.id || 1,
+            key_points: existingLesson.key_points || [],
+            safety_warnings: existingLesson.safety_warnings || [],
+            suggested_next_transition: 'Proceed to the next section when ready.',
             visuals: existingLesson.visuals || [],
             sourceSlides: existingLesson.sourceSlides || [],
             language: targetLangInfo,
@@ -794,11 +1242,28 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
       console.warn(`[Persisted Cache] Notice on persisting lesson explanation:`, persistErr.message);
     }
 
+    // Generate structured Qwen AI Tutor guidance (spoken_explanation, key_points, safety_warnings, suggested_next_transition)
+    let structuredTutor = null;
+    try {
+      structuredTutor = await aiService.explainVisibleContent({
+        pageNumber: matchingLesson?.sourceSlides?.[0] || matchingLesson?.id || 1,
+        title: lessonTitle,
+        text: explanation,
+        visuals: uniqueVisuals
+      }, course.title, targetLanguage);
+    } catch (_) {}
+
     const totalDuration = Date.now() - fetchStartTime;
     console.log(`[PERF:LESSON_FETCH_END] Total instant lesson fetch completed in ${totalDuration}ms (0 slow external LLM delay)`);
 
     res.json({
-      explanation,
+      explanation: structuredTutor?.spoken_explanation || explanation,
+      spoken_explanation: structuredTutor?.spoken_explanation || explanation,
+      title: structuredTutor?.title || lessonTitle,
+      page_or_slide_number: structuredTutor?.page_or_slide_number || matchingLesson?.sourceSlides?.[0] || 1,
+      key_points: structuredTutor?.key_points || [],
+      safety_warnings: structuredTutor?.safety_warnings || [],
+      suggested_next_transition: structuredTutor?.suggested_next_transition || 'Proceed to the next section when ready.',
       visuals: uniqueVisuals,
       sourceSlides: matchingLesson?.sourceSlides || [],
       language: targetLangInfo,
@@ -809,6 +1274,53 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
   } catch (error) {
     console.error('Failed to generate dynamic lesson guide:', error);
     res.status(500).json({ error: 'Failed to generate custom lesson guide.' });
+  }
+});
+
+// 4c. Generate structured Qwen explanation for a specific page/slide in the universal document viewer
+router.post('/:id/page/:pageNum/explain', authenticateToken, async (req, res) => {
+  try {
+    const course = await prisma.course.findUnique({
+      where: { id: req.params.id }
+    });
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+
+    const hasAccess = await checkCourseAccess(req, course.id);
+    if (!hasAccess) return res.status(403).json({ error: 'Access denied.' });
+
+    const pageNum = parseInt(req.params.pageNum, 10) || 1;
+    const { language } = req.body;
+    const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
+
+    let curriculum = course.curriculum;
+    if (typeof curriculum === 'string') {
+      try { curriculum = JSON.parse(curriculum); } catch { curriculum = {}; }
+    }
+
+    const slides = curriculum?.slides || [];
+    const pages = curriculum?.pages || [];
+    const targetSlide = slides.find(s => s.slideNumber === pageNum || s.sourceSlide === pageNum);
+    const targetPage = pages.find(p => p.page_number === pageNum || p.pageNumber === pageNum);
+
+    const title = targetSlide?.title || targetPage?.title || `Page ${pageNum}`;
+    const text = targetSlide?.fullText || targetPage?.text || '';
+    const visuals = targetSlide?.images || targetPage?.images || (targetPage?.pageImage ? [targetPage.pageImage] : []);
+
+    const structured = await aiService.explainVisibleContent({
+      pageNumber: pageNum,
+      title,
+      text,
+      visuals
+    }, course.title, targetLangInfo.name);
+
+    res.json({
+      ...structured,
+      visuals,
+      language: targetLangInfo
+    });
+  } catch (err) {
+    console.error('Failed to explain page content:', err);
+    res.status(500).json({ error: 'Failed to explain page content.' });
   }
 });
 
@@ -1042,11 +1554,17 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       .trim();
     const questionNorm = normalizeForEcho(message);
     const conceptNorm = normalizeForEcho(currentConcept);
-    if (conceptNorm.length > 40 && questionNorm.length > 40) {
+    const isExplicitQuestion = /\b(what|why|how|when|where|who|which|can|could|would|should|is|are|do|does|did|tell|explain|clarify|mean|help|define|elaborate)\b/i.test(message)
+      || message.includes('?')
+      || /(?:什么是|为什么|怎么|如何|请问|apa|mengapa|bagaimana|bila|என்ன|ஏன்|எப்படி|কী|কেন|কিভাবে|ఎందుకు|ఏమిటి|ఎలా)/iu.test(message);
+
+    // Only reject as an acoustic self-echo if there are NO question words AND it is a verbatim 85%+ replica of the active concept
+    if (!isExplicitQuestion && conceptNorm.length > 50 && questionNorm.length > 50) {
       const qWords = questionNorm.split(' ').filter(w => w.length > 3);
       const cSet = new Set(conceptNorm.split(' ').filter(w => w.length > 3));
       const overlap = qWords.length ? qWords.filter(w => cSet.has(w)).length / qWords.length : 0;
-      if (overlap >= 0.55 || conceptNorm.includes(questionNorm) || questionNorm.includes(conceptNorm.slice(0, 80))) {
+      if (overlap >= 0.88 && conceptNorm.includes(questionNorm)) {
+        console.log(`[RAG Chat] Suppressed acoustic self-echo (${Math.round(overlap * 100)}% overlap with active concept): "${message.slice(0, 50)}..."`);
         return res.json({
           reply: 'I did not catch a question. Please ask me something about this lesson.',
           text: 'I did not catch a question. Please ask me something about this lesson.',
@@ -1136,10 +1654,17 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
   try {
     const courseId = req.params.id;
     const { title, description, curriculum } = req.body;
+    const targetPrisma = req.prisma || prisma;
 
-    const existingCourse = await prisma.course.findUnique({
+    let existingCourse = await targetPrisma.course.findUnique({
       where: { id: courseId }
     });
+
+    if (!existingCourse && defaultPrisma && defaultPrisma !== targetPrisma) {
+      existingCourse = await defaultPrisma.course.findUnique({
+        where: { id: courseId }
+      });
+    }
 
     if (!existingCourse) {
       return res.status(404).json({ error: 'Course not found.' });
@@ -1178,15 +1703,36 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
       const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
       generatedCourse.title = finalTitle;
       generatedCourse.description = finalDescription;
+      generatedCourse.fileType = fileType || docResult.fileType;
+      generatedCourse.fileName = req.file.originalname;
+
+      if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
+        generatedCourse.slides = docResult.slides;
+      }
+      if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
+        generatedCourse.pages = docResult.pages;
+      }
+      if (Array.isArray(docResult.images) && docResult.images.length > 0) {
+        generatedCourse.visuals = docResult.images;
+      }
 
       updateData.fileName = req.file.originalname;
       updateData.fileText = textContent;
       updateData.curriculum = generatedCourse;
 
+      // Save updated original file buffer to disk
+      try {
+        const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
+        fs.mkdirSync(courseUploadDir, { recursive: true });
+        fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), req.file.buffer);
+      } catch (fErr) {
+        console.warn(`[File Storage] Notice updating course file on disk:`, fErr.message);
+      }
+
       // Re-index vector chunks and embeddings for the new document
       try {
         console.log(`[pgvector] Re-indexing course ${courseId} with semantic comprehension...`);
-        await vectorChunkService.indexCourse(prisma, courseId, docResult, generatedCourse);
+        await vectorChunkService.indexCourse(targetPrisma, courseId, docResult, generatedCourse);
         console.log(`[pgvector] Vector embeddings updated successfully.`);
       } catch (vectorErr) {
         console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);
@@ -1203,14 +1749,14 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
       }
     }
 
-    const updatedCourse = await prisma.course.update({
+    const updatedCourse = await targetPrisma.course.update({
       where: { id: courseId },
       data: updateData
     });
 
     try {
       const summary = generateModulesSummary(updateData.curriculum || existingCourse.curriculum);
-      await prisma.$executeRaw`
+      await targetPrisma.$executeRaw`
         UPDATE "Course"
         SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
         WHERE id = ${courseId};
@@ -1232,17 +1778,84 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
 router.delete('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res) => {
   try {
     const courseId = req.params.id;
-    console.log(`Admin deleting course ID: ${courseId}`);
+    console.log(`[Courses] Admin deleting course ID: ${courseId}`);
 
-    await prisma.course.delete({
-      where: { id: courseId }
-    });
+    const targetPrisma = req.prisma || prisma;
+
+    // Helper to safely clean up all relations and the course record from a Prisma client
+    const purgeCourse = async (client) => {
+      if (!client) return;
+      try {
+        await client.userCourseAssignment.deleteMany({ where: { courseId } });
+      } catch (e) {
+        console.warn('[Courses] userCourseAssignment cleanup notice:', e.message);
+      }
+
+      try {
+        await client.courseProgress.deleteMany({ where: { courseId } });
+      } catch (e) {
+        console.warn('[Courses] courseProgress cleanup notice:', e.message);
+      }
+
+      try {
+        await client.courseChunk.deleteMany({ where: { courseId } });
+      } catch (e) {
+        console.warn('[Courses] courseChunk cleanup notice:', e.message);
+      }
+
+      try {
+        await client.course.delete({ where: { id: courseId } });
+      } catch (e) {
+        if (!e.message?.includes('Record to delete does not exist') && !e.code?.includes('P2025')) {
+          console.warn('[Courses] course delete notice:', e.message);
+        }
+      }
+    };
+
+    // 1. Purge from active tenant or default database
+    await purgeCourse(targetPrisma);
+
+    // 2. Also purge from default database if targetPrisma was tenant-specific
+    if (defaultPrisma && defaultPrisma !== targetPrisma) {
+      await purgeCourse(defaultPrisma);
+    }
+
+    // 3. Purge across any other tenant company databases where course might be mirrored
+    try {
+      if (masterPrisma) {
+        const companies = await masterPrisma.company.findMany({ select: { code: true } });
+        for (const comp of companies) {
+          if (comp.code && comp.code !== req.tenantCode) {
+            try {
+              const compClient = await tenantService.getTenantClient(comp.code);
+              if (compClient) {
+                await purgeCourse(compClient);
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (mErr) {
+      console.warn('[Courses] Multi-company purge notice:', mErr.message);
+    }
+
+    // 4. Remove uploaded original document files from disk
+    try {
+      const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
+      if (fs.existsSync(courseUploadDir)) {
+        fs.rmSync(courseUploadDir, { recursive: true, force: true });
+        console.log(`[Courses] Removed uploaded files for course ${courseId}`);
+      }
+    } catch (fsErr) {
+      console.warn('[Courses] Notice removing course files:', fsErr.message);
+    }
+
     invalidateCoursesCatalogCache();
 
     res.json({ message: 'Course module deleted successfully.' });
   } catch (error) {
     console.error('Failed to delete course:', error);
-    res.status(500).json({ error: 'Failed to delete course module.' });
+    res.status(500).json({ error: error.message || 'Failed to delete course module.' });
   }
 });
 

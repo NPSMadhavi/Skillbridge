@@ -22,17 +22,84 @@ import SuperAdminDashboard from './pages/superAdmin/SuperAdminDashboard'
 import { courses as defaultCourses } from './data/courses'
 import { api } from './services/api'
 import { clearStoredLanguage, hasStoredLanguage } from './utils/language'
+import { cleanUnsupportedWords } from './utils/textCleaner'
+import { clearStudentSession, isStudentAuthenticated, getStudentUser } from './utils/authSession'
 
 // Helper to map DB AI course
 const mapRagCourse = (dbCourse) => {
+  if (!dbCourse) return null;
+  if (dbCourse._isMapped && Array.isArray(dbCourse.lessons) && dbCourse.lessons.length > 0) {
+    return dbCourse;
+  }
+
   const curriculumData = typeof dbCourse.curriculum === 'string'
     ? JSON.parse(dbCourse.curriculum)
-    : dbCourse.curriculum;
+    : (dbCourse.curriculumData || (typeof dbCourse.curriculum === 'object' && !Array.isArray(dbCourse.curriculum) ? dbCourse.curriculum : {}));
+
+  // Extract authentic original slides, pages, and visuals
+  const slides = (Array.isArray(curriculumData.slides) && curriculumData.slides.length > 0)
+    ? curriculumData.slides
+    : (Array.isArray(dbCourse.slides) ? dbCourse.slides : []);
+
+  const pages = (Array.isArray(curriculumData.pages) && curriculumData.pages.length > 0)
+    ? curriculumData.pages
+    : (Array.isArray(dbCourse.pages) ? dbCourse.pages : []);
+
+  const visuals = (Array.isArray(curriculumData.visuals) && curriculumData.visuals.length > 0)
+    ? curriculumData.visuals
+    : (Array.isArray(dbCourse.visuals) ? dbCourse.visuals : []);
+
+  const fileType = curriculumData.fileType || dbCourse.fileType || (dbCourse.fileName?.split('.').pop()?.toLowerCase()) || '';
+
+  // Extract lessons from dbCourse.lessons, curriculumData.lessons, or synthesize from chunks / slides
+  let lessons = [];
+  if (Array.isArray(dbCourse.lessons) && dbCourse.lessons.length > 0) {
+    lessons = dbCourse.lessons;
+  } else if (Array.isArray(curriculumData.lessons) && curriculumData.lessons.length > 0) {
+    lessons = curriculumData.lessons;
+  } else if (Array.isArray(dbCourse.curriculumData?.lessons) && dbCourse.curriculumData.lessons.length > 0) {
+    lessons = dbCourse.curriculumData.lessons;
+  }
+
+  const chunks = Array.isArray(dbCourse.chunks) ? dbCourse.chunks : [];
+  if (lessons.length === 0 && chunks.length > 0) {
+    lessons = chunks.map((c, idx) => ({
+      id: idx + 1,
+      title: cleanUnsupportedWords(c.concept || c.topic || `Concept ${idx + 1}`),
+      moduleTitle: cleanUnsupportedWords(c.topic || dbCourse.title),
+      chapterTitle: cleanUnsupportedWords(c.topic || dbCourse.title),
+      sourceSlides: Array.isArray(c.sourceSlides) && c.sourceSlides.length > 0 ? c.sourceSlides : [c.sourcePage || idx + 1],
+      duration: '02:30',
+      status: idx === 0 ? 'active' : 'locked',
+      explanation: c.chunkText || c.semanticSummary || '',
+      bulletPoints: (Array.isArray(c.keyPoints) ? c.keyPoints : []).map(kp => cleanUnsupportedWords(kp))
+    }));
+  } else if (lessons.length === 0 && slides.length > 0) {
+    lessons = slides.map((s, idx) => ({
+      id: idx + 1,
+      title: cleanUnsupportedWords(s.title || `Slide ${idx + 1}`),
+      moduleTitle: `Slide Presentation`,
+      chapterTitle: `Slide Presentation`,
+      sourceSlides: [s.slideNumber || idx + 1],
+      duration: '02:00',
+      status: idx === 0 ? 'active' : 'locked',
+      explanation: s.fullText || '',
+      bulletPoints: (s.bulletPoints || []).map(bp => cleanUnsupportedWords(bp))
+    }));
+  } else if (lessons.length > 0) {
+    lessons = lessons.map(l => ({
+      ...l,
+      title: cleanUnsupportedWords(l.title),
+      moduleTitle: cleanUnsupportedWords(l.moduleTitle || l.chapterTitle, dbCourse.title),
+      chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, dbCourse.title)
+    }));
+  }
 
   return {
+    _isMapped: true,
     id: dbCourse.id,
     isCustom: true,
-    title: dbCourse.title,
+    title: cleanUnsupportedWords(dbCourse.title),
     instructor: 'ARIA AI Tutor',
     category: 'AI Custom Courses',
     level: 'Adaptive',
@@ -40,21 +107,26 @@ const mapRagCourse = (dbCourse) => {
     reviewCount: 'Dynamic',
     students: 'Published',
     duration: 'Self-Paced',
-    modules: curriculumData.curriculum?.length || 0,
+    modules: curriculumData.curriculum?.length || Math.ceil(lessons.length / 4) || 1,
     price: 0,
     free: true,
     badge: 'AI Course',
     badgeTone: 'orange',
     tags: ['AI-POWERED'],
     image: 'linear-gradient(135deg, #1e3a8a 0%, #3b82f6 50%, #60a5fa 100%)',
-    description: dbCourse.description || curriculumData.description || 'AI custom course generated from document.',
+    description: cleanUnsupportedWords(dbCourse.description || curriculumData.description || 'AI custom course generated from document.'),
     fileName: dbCourse.fileName,
     fileText: dbCourse.fileText,
-    chunks: dbCourse.chunks || [],
+    fileType,
+    slides,
+    pages,
+    visuals,
+    chunks,
     learning: curriculumData.learning || [],
     includes: curriculumData.includes || [],
-    curriculum: curriculumData.curriculum || [],
-    lessons: curriculumData.lessons || [],
+    curriculum: Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : [],
+    curriculumData,
+    lessons,
     quiz: curriculumData.quiz || []
   };
 };
@@ -70,7 +142,7 @@ const getAdminSession = () => {
 // Protected Student Shell with Header
 const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
   const navigate = useNavigate()
-  const isAuthenticated = Boolean(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user'))
+  const isAuthenticated = isStudentAuthenticated()
   const languageReady = hasStoredLanguage()
 
   if (!isAuthenticated) {
@@ -86,8 +158,7 @@ const StudentShell = ({ children, searchQuery, setSearchQuery }) => {
       <Header
         onLogoClick={() => navigate('/')}
         onLogout={() => {
-          sessionStorage.removeItem('skillbridge_user')
-          localStorage.removeItem('skillbridge_user')
+          clearStudentSession()
           clearStoredLanguage()
           navigate('/login')
         }}
@@ -111,7 +182,7 @@ const CoursePlayerRoute = () => {
 
   // Initialize course instantly from router state or fast client cache
   const [course, setCourse] = useState(() => {
-    if (location.state?.course) return location.state.course;
+    if (location.state?.course) return mapRagCourse(location.state.course);
     const cached = api.getCachedCourse(id);
     if (cached) return mapRagCourse(cached);
     return null;
@@ -129,14 +200,7 @@ const CoursePlayerRoute = () => {
       .then(res => {
         if (!isMounted) return;
         const mapped = mapRagCourse(res);
-        setCourse(prev => {
-          if (!prev) return mapped;
-          return {
-            ...prev,
-            ...mapped,
-            lessons: (mapped.lessons && mapped.lessons.length > 0) ? mapped.lessons : prev.lessons
-          };
-        });
+        setCourse(mapped);
         setLoading(false);
       })
       .catch(err => {
@@ -265,7 +329,7 @@ const AssessmentRoute = () => {
       .finally(() => setLoading(false))
   }, [id, course])
 
-  if (!sessionStorage.getItem('skillbridge_user')) {
+  if (!isStudentAuthenticated()) {
     return <Navigate to="/login" replace />
   }
 
@@ -321,7 +385,7 @@ const AssessmentRoute = () => {
 // Student Login Route Component
 const StudentLoginRoute = () => {
   const navigate = useNavigate()
-  if (sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user')) {
+  if (isStudentAuthenticated()) {
     return <Navigate to="/" replace />
   }
   return (
@@ -340,7 +404,7 @@ const StudentLoginRoute = () => {
 // Language Selection Route Component
 const LanguageRoute = () => {
   const navigate = useNavigate()
-  if (!sessionStorage.getItem('skillbridge_user') && !localStorage.getItem('skillbridge_user')) {
+  if (!isStudentAuthenticated()) {
     return <Navigate to="/login" replace />
   }
   return <Language onContinue={() => navigate('/')} />
@@ -360,7 +424,7 @@ const HomeRoute = ({ searchQuery }) => {
   const handleSelectCourse = (course) => {
     if (course?.id) {
       try {
-        const user = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')?.user;
+        const user = getStudentUser();
         const userId = user?.id || user?.finNumber || user?.email || 'guest';
         localStorage.setItem(`skillbridge_last_played_${userId}`, String(course.id));
         localStorage.setItem('skillbridge_last_played', String(course.id));

@@ -77,7 +77,7 @@ export async function downloadCertificateDirect({ course, user, scorePercentage 
     user?.fullName ||
     user?.name ||
     (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : null) ||
-    'James Joseph'
+    'Learner'
   )
 
   const courseTitle = course?.title || 'SkillBridge AI Course'
@@ -233,10 +233,9 @@ function hashCode(str) {
  * Uses direct vector generation with extracted or passed metadata for 100% reliability.
  */
 export async function downloadCertificateFromElement(element, { courseTitle = 'SkillBridge Course', fileName } = {}) {
-  // Extract user and score from session if possible
-  let user = { fullName: 'James Joseph' }
+  let user = { fullName: 'Learner' }
   try {
-    const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
+    const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null')
     if (data?.user) user = data.user
   } catch {}
 

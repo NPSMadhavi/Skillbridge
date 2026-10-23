@@ -130,7 +130,7 @@ function teachingImagesForSlide(slide) {
   return unique.sort((a, b) => (b.sizeBytes || 0) - (a.sizeBytes || 0)).slice(0, 1);
 }
 
-async function analyzeImageWithQwen(img, slideNumber) {
+export async function analyzeImageWithQwen(img, slideNumber) {
   const gateway = gatewayBaseUrl();
   if (!gateway) return null;
   const buf = img.buffer || dataUrlToBuffer(img.dataUrl);
@@ -159,7 +159,7 @@ async function analyzeImageWithQwen(img, slideNumber) {
   return explanation && explanation.length > 30 ? explanation : null;
 }
 
-async function ocrFallback(images) {
+export async function ocrFallback(images) {
   const pending = images
     .filter(img => !img.ocrText && !img.visionText)
     .slice(0, 15); // Cap to prevent worker overload

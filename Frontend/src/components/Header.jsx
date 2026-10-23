@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import logo from '../assets/SkillBridge_AI.png'
+import { getStudentUser, getStudentDisplayName } from '../utils/authSession'
 
 const Header = ({ onLogout, onLogoClick }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false)
@@ -15,21 +16,12 @@ const Header = ({ onLogout, onLogoClick }) => {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // Retrieve user details from sessionStorage
-  const user = (() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James', role: 'STUDENT' }
-    } catch {
-      return { fullName: 'James', role: 'STUDENT' }
-    }
-  })()
+  const user = getStudentUser()
+  const displayName = getStudentDisplayName(user, 'Learner')
 
-  // Calculate user initial / first letter
   const initial = (() => {
-    if (!user.fullName) return 'P';
-    const clean = user.fullName.trim();
-    return clean.charAt(0).toUpperCase();
+    const clean = displayName.trim()
+    return clean ? clean.charAt(0).toUpperCase() : '?'
   })()
 
   return (
@@ -76,7 +68,7 @@ const Header = ({ onLogout, onLogoClick }) => {
               <div className="absolute right-0 mt-2 w-52 origin-top-right rounded-xl border border-[#e5eaf2] bg-white p-1.5 shadow-[0_10px_30px_rgba(15,27,45,0.08)] ring-1 ring-black/5 animate-panel-in z-50">
                 <div className="px-3 py-2 border-b border-slate-100 text-xs text-slate-400">
                   Signed in as <br />
-                  <strong className="text-slate-700 truncate block font-semibold">{user.email || user.fullName}</strong>
+                  <strong className="text-slate-700 truncate block font-semibold">{user?.email || displayName}</strong>
                 </div>
                 <button
                   type="button"

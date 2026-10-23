@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import logo from '../assets/SkillBridge_AI.png'
 import { downloadCertificateDirect } from '../utils/certificatePdf'
 import { triggerCertificateBlast } from '../utils/confettiBlast'
+import { getStudentUser, getStudentDisplayName } from '../utils/authSession'
 
 const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = false, triggerBlast = false }) => {
   const [downloading, setDownloading] = useState(false)
@@ -16,25 +17,13 @@ const Certificate = ({ course, scorePercentage = 80, onBackHome, autoDownload = 
     return () => clearTimeout(timer)
   }, [triggerBlast])
 
-  // Retrieve user full name from sessionStorage
-  const user = useMemo(() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James Joseph', firstName: 'James' }
-    } catch {
-      return { fullName: 'James Joseph', firstName: 'James' }
-    }
-  }, [])
+  const user = useMemo(() => getStudentUser() || { fullName: 'Learner' }, [])
 
-  const fullName = useMemo(() => {
-    return user?.fullName || user?.name || (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'James Joseph')
-  }, [user])
+  const fullName = useMemo(() => getStudentDisplayName(user, 'Learner'), [user])
 
   const firstName = useMemo(() => {
-    if (fullName) {
-      return fullName.trim().split(' ')[0]
-    }
-    return user.firstName || 'James'
+    if (fullName) return fullName.trim().split(' ')[0]
+    return user?.firstName || 'Learner'
   }, [fullName, user])
 
   const formattedDate = useMemo(() => {

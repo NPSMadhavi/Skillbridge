@@ -10,10 +10,59 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import aiService from './aiService.js';
-import { enrichDocumentVisuals, extractEmbeddedRasterImages } from './visualTextService.js';
-import { isGarbageTitle, isBinaryNoiseText } from '../utils/contentQuality.js';
+import { enrichDocumentVisuals, extractEmbeddedRasterImages, analyzeImageWithQwen, ocrFallback } from './visualTextService.js';
+import { isGarbageTitle, isBinaryNoiseText, firstUsefulTitleLine } from '../utils/contentQuality.js';
 
 const execPromise = util.promisify(exec);
+
+/**
+ * Renders every page in a Word document (DOCX/DOC) into high-resolution PNG images.
+ * Uses Word COM automation on Windows to export to PDF, then renders PDF pages using pypdfium2.
+ */
+async function renderDocxPagesToImages(fileBuffer, originalname) {
+  const ext = originalname.split('.').pop()?.toLowerCase() || 'docx';
+  const tmpDir = path.join(os.tmpdir(), `docx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
+  const tmpFile = path.join(tmpDir, `document.${ext}`);
+  const pdfOut = path.join(tmpDir, 'document.pdf');
+
+  try {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(tmpFile, fileBuffer);
+
+    const psScript = `
+$fullDoc = "${tmpFile.replace(/\\\\/g, '\\\\\\\\')}"
+$fullPdf = "${pdfOut.replace(/\\\\/g, '\\\\\\\\')}"
+$word = New-Object -ComObject Word.Application
+$word.Visible = $false
+try {
+  $doc = $word.Documents.Open($fullDoc, $false, $true)
+  $doc.SaveAs([ref]$fullPdf, [ref]17)
+  $doc.Close([ref]0)
+} finally {
+  $word.Quit([ref]0)
+  [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+}
+`;
+    const psFile = path.join(tmpDir, 'export_word.ps1');
+    fs.writeFileSync(psFile, psScript);
+
+    await execPromise(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 60000 });
+
+    if (fs.existsSync(pdfOut)) {
+      const pdfBuffer = fs.readFileSync(pdfOut);
+      const pageImages = await renderPdfPagesToImages(pdfBuffer);
+      return { pageImages, pdfBuffer };
+    }
+    return { pageImages: [], pdfBuffer: null };
+  } catch (err) {
+    console.warn('[Doc Extractor] Word COM document rendering notice:', err.message);
+    return { pageImages: [], pdfBuffer: null };
+  } finally {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch (e) { }
+  }
+}
 
 /**
  * Renders every slide in a PowerPoint presentation (PPTX/PPT) into high-resolution PNG images.
@@ -1094,15 +1143,152 @@ export async function extractDocument(file) {
     mimetype.includes('wordprocessingml') ||
     mimetype.includes('msword')
   ) {
-    fileType = 'docx';
+    fileType = ext === 'doc' ? 'doc' : 'docx';
+
+    // 4a. Attempt Word COM rendering to convert Word doc to exact high-res page images
+    let renderedDoc = null;
     try {
-      const result = await mammoth.extractRawText({ buffer });
-      text = result.value || '';
-    } catch (docxErr) {
-      console.warn(`[Doc Extractor] Mammoth parsing failed for ${originalname}, trying text fallback:`, docxErr.message);
-      text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
+      renderedDoc = await renderDocxPagesToImages(buffer, originalname);
+      if (renderedDoc.pageImages && renderedDoc.pageImages.length > 0) {
+        images = renderedDoc.pageImages;
+        console.log(`[Doc Extractor] Rendered ${images.length} exact Word document page images via Word COM.`);
+      }
+    } catch (wErr) {
+      console.warn('[Doc Extractor] Word COM rendering notice:', wErr.message);
     }
-    console.log(`[Doc Extractor] Word document extracted: ${text.length} characters.`);
+
+    // 4b. If Word COM produced a PDF buffer, parse per-page text from the PDF for exact page alignment
+    if (renderedDoc?.pdfBuffer) {
+      try {
+        const collectedPages = [];
+        const pdfData = await pdfParse(new Uint8Array(renderedDoc.pdfBuffer), {
+          pagerender: async (pageData) => {
+            const pageText = await renderPdfPageText(pageData);
+            const cleanText = (pageText || '').trim();
+            if (cleanText.length > 0) {
+              collectedPages.push({
+                page_number: collectedPages.length + 1,
+                text: cleanText,
+                title: cleanText.split('\n').find(l => l.trim())?.slice(0, 80) || `Page ${collectedPages.length + 1}`
+              });
+            }
+            return pageText || '';
+          }
+        });
+        if (collectedPages.length > 0) {
+          pages = collectedPages;
+          text = (pdfData.text || pages.map(p => p.text).join('\n\n')).replace(/\r\n/g, '\n');
+        }
+      } catch (pdfErr) {
+        console.warn('[Doc Extractor] Word-to-PDF page text parse notice:', pdfErr.message);
+      }
+    }
+
+    // 4c. Mammoth fallback for text if not already extracted
+    if (!text || text.trim().length === 0) {
+      try {
+        const result = await mammoth.extractRawText({ buffer });
+        text = result.value || '';
+      } catch (docxErr) {
+        console.warn(`[Doc Extractor] Mammoth parsing failed for ${originalname}, trying text fallback:`, docxErr.message);
+        text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
+      }
+    }
+
+    // 4d. Ensure pages exist and attach rendered page images
+    if (pages.length === 0 && text.trim().length > 0) {
+      pages = splitTextIntoPages(text);
+    }
+    if (images.length > 0) {
+      if (pages.length === 0) {
+        pages = images.map((img, idx) => ({
+          page_number: idx + 1,
+          title: `Page ${idx + 1}`,
+          text: `--- Page ${idx + 1} ---\n[Visual Content on Page ${idx + 1}]: Word document page ${idx + 1}`,
+          images: [img],
+          pageImage: img
+        }));
+      } else {
+        for (const rImg of images) {
+          const targetPage = pages.find(p => p.page_number === rImg.sourcePage) || pages[rImg.sourcePage - 1];
+          if (targetPage) {
+            targetPage.images = [rImg, ...(targetPage.images || []).filter(img => img.id !== rImg.id)];
+            targetPage.pageImage = rImg;
+          }
+        }
+      }
+    }
+
+    console.log(`[Doc Extractor] Word document extracted: ${pages.length} pages, ${images.length} page images, ${text.length} characters.`);
+  }
+  // 5. Image Training Files (PNG, JPG, JPEG, WEBP, BMP, TIFF)
+  else if (
+    ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff'].includes(ext) ||
+    mimetype.startsWith('image/')
+  ) {
+    fileType = ext || 'image';
+    const mimeMap = {
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      webp: 'image/webp',
+      bmp: 'image/bmp',
+      tiff: 'image/tiff'
+    };
+    const finalMime = mimeMap[ext] || mimetype || 'image/png';
+    const dataUrl = `data:${finalMime};base64,${buffer.toString('base64')}`;
+    const cleanName = originalname.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+    const pageImage = {
+      id: 'full_page_1',
+      dataUrl,
+      fileName: originalname,
+      mimetype: finalMime,
+      sourcePage: 1,
+      name: cleanName,
+      descr: `Training visual graphic: ${originalname}`,
+      purpose: `Original uploaded training visual`,
+      sizeBytes: buffer.length
+    };
+
+    images = [pageImage];
+
+    // Try Qwen Vision to read and explain the image
+    let visualText = '';
+    try {
+      console.log(`[Doc Extractor] Running Qwen Vision analysis on uploaded image: ${originalname}...`);
+      visualText = await analyzeImageWithQwen(pageImage, 1);
+    } catch (vErr) {
+      console.warn('[Doc Extractor] Qwen Vision image analysis notice:', vErr.message);
+    }
+
+    // OCR fallback if Qwen vision text is not available
+    if (!visualText || visualText.length < 30) {
+      try {
+        const ocrImages = [{ ...pageImage, buffer }];
+        await ocrFallback(ocrImages);
+        if (ocrImages[0]?.ocrText) {
+          visualText = ocrImages[0].ocrText;
+        }
+      } catch (ocrErr) {
+        console.warn('[Doc Extractor] OCR image notice:', ocrErr.message);
+      }
+    }
+
+    const pageTitle = (visualText && firstUsefulTitleLine(visualText)) || cleanName || 'Training Visual';
+    text = visualText
+      ? `--- Page 1: ${pageTitle} ---\n\n[Visual Content on Page 1]:\n${visualText}`
+      : `--- Page 1: ${pageTitle} ---\n\n[Visual Content on Page 1]: Training graphic ${originalname}`;
+
+    pages = [
+      {
+        page_number: 1,
+        title: pageTitle,
+        text,
+        images: [pageImage],
+        pageImage
+      }
+    ];
+    console.log(`[Doc Extractor] Image document parsed: 1 page visual, ${text.length} characters.`);
   }
   // 5. Plain Text, Markdown, CSV, JSON, HTML, RTF
   else if (

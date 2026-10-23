@@ -28,6 +28,10 @@ Backend/eng.traineddata
 *.ppt
 *.docx
 
+# Uploads
+uploads/
+Backend/uploads/
+
 # Build outputs
 dist/
 dist-ssr/

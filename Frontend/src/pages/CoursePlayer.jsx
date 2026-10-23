@@ -3,6 +3,8 @@ import { api } from '../services/api'
 import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWakeWord, isNoiseOrHallucination } from '../services/voiceTutorService'
 import logo from '../assets/SkillBridge_AI.png'
 import { persistLanguageSelection, readStoredLanguageCode, textMatchesLanguage } from '../utils/language'
+import { cleanUnsupportedWords, cleanForSpeech as cleanSpeechUtil } from '../utils/textCleaner'
+import { getStudentUser } from '../utils/authSession'
 
 const CourseBookIcon = ({ className = "h-5 w-5" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -63,15 +65,7 @@ const CoursePlayer = ({
   onExit,
   onAssessment
 }) => {
-  // Retrieve user details from sessionStorage
-  const user = useMemo(() => {
-    try {
-      const data = JSON.parse(sessionStorage.getItem('skillbridge_user') || 'null')
-      return data?.user || { fullName: 'James Lee', email: 'user@skillbridge.com' }
-    } catch {
-      return { fullName: 'James Lee', email: 'user@skillbridge.com' }
-    }
-  }, [])
+  const user = useMemo(() => getStudentUser() || { fullName: 'Learner', role: 'STUDENT' }, [])
 
   const userId = useMemo(() => {
     return user?.id || user?.finNumber || user?.email || 'guest';
@@ -452,6 +446,33 @@ const CoursePlayer = ({
 
   // Teaching slide states
   const [currentSentenceIdx, setCurrentSentenceIdx] = useState(0)
+
+  // Universal Document Viewer States (PowerPoint / PDF Slides)
+  const [currentPageNum, setCurrentPageNum] = useState(1)
+  const [zoomLevel, setZoomLevel] = useState(1)
+  const [fitToWidth, setFitToWidth] = useState(true)
+  const [slideImageLoadError, setSlideImageLoadError] = useState(false)
+  const [tutorGuidance, setTutorGuidance] = useState({
+    keyPoints: [],
+    safetyWarnings: [],
+    transition: ''
+  })
+
+  // Keyboard navigation for presentation slides (ArrowLeft: previous slide, ArrowRight: next slide)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (['INPUT', 'TEXTAREA'].includes(e.target?.tagName)) return;
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        e.preventDefault();
+        setCurrentPageNum(p => Math.max(1, p - 1));
+      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        e.preventDefault();
+        setCurrentPageNum(p => (documentPages.length > 0 ? Math.min(documentPages.length, p + 1) : p + 1));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Chat states initialized with localized greeting
   const [chatMessages, setChatMessages] = useState(() => [
@@ -861,9 +882,14 @@ const CoursePlayer = ({
       window._skillbridgeCurrentUtterance = utterance
 
       let hasFinished = false
+      let safetyTimer = null
       const finishTTS = () => {
         if (hasFinished) return
         hasFinished = true
+        if (safetyTimer) {
+          clearTimeout(safetyTimer)
+          safetyTimer = null
+        }
         if (window._skillbridgeResumeInterval) {
           clearInterval(window._skillbridgeResumeInterval)
           window._skillbridgeResumeInterval = null
@@ -891,9 +917,9 @@ const CoursePlayer = ({
         }
       }, 2500)
 
-      // Absolute safety timeout: max duration based on character count (min 4s, max 25s)
-      const safetyTimeoutMs = Math.min(25000, Math.max(4000, cleanText.length * 75))
-      setTimeout(() => {
+      // Safety timeout: ~12 chars/sec + buffer (min 8s, max 90s) — old 25s cap cut off long answers
+      const safetyTimeoutMs = Math.min(90000, Math.max(8000, Math.ceil(cleanText.length / 12) * 1000 + 4000))
+      safetyTimer = setTimeout(() => {
         if (!hasFinished) {
           console.warn('[VOICE] TTS safety timeout reached. Resetting ARIA speaking state.')
           finishTTS()
@@ -1009,6 +1035,16 @@ const CoursePlayer = ({
         console.log(
           '[VOICE] Wake acknowledgement finished. Listening for question.'
         );
+        const vm = voiceManagerRef.current;
+        if (vm) {
+          vm.ttsMutedUntil = 0;
+          vm.setState(TutorState.ACTIVE_LISTENING);
+          vm.resetFollowUpTimeout();
+          try {
+            vm.restartSpeechRecognition?.(true);
+          } catch (e) { }
+        }
+        setVoiceStatusText(`👂 Listening for your question…`);
       }
     );
   };
@@ -1232,7 +1268,7 @@ const CoursePlayer = ({
 
     const manager = new VoiceTutorManager({
       debug: true,
-      followUpTimeoutMs: 7000,
+      followUpTimeoutMs: 12000,
       aiName: aiTutorName,
       wakeWord: aiWakeWord,
       onWakeWordDetected: (wakePhrase) => {
@@ -1250,11 +1286,25 @@ const CoursePlayer = ({
           console.log(`[VOICE:TRANSCRIPTION] Result: "${transcription}"`)
 
           if (!transcription || isNoiseOrHallucination(transcription) || transcription.length < 3) {
-            if (!isWakeDetection && manager.state !== TutorState.SLEEPING) {
-              manager.setState(TutorState.FOLLOW_UP_LISTENING)
-              manager.resetFollowUpTimeout()
-            } else if (manager.state === TutorState.PROCESSING) {
-              manager.returnToSleep()
+            const recordedState = context.state
+            // After wake, empty Whisper must NOT sleep — keep listening for the question
+            if (
+              recordedState === TutorState.ACTIVE_LISTENING ||
+              recordedState === TutorState.FOLLOW_UP_LISTENING ||
+              manager.state === TutorState.ACTIVE_LISTENING ||
+              manager.state === TutorState.FOLLOW_UP_LISTENING ||
+              manager.state === TutorState.PROCESSING
+            ) {
+              if (!isWakeDetection && recordedState !== TutorState.SLEEPING) {
+                console.log('[VOICE] Empty/noise transcription while awake — re-listening for question')
+                manager.setState(TutorState.ACTIVE_LISTENING)
+                manager.resetFollowUpTimeout()
+                setVoiceStatusText(`👂 Still listening… ask your question (or say "${aiWakeWord}")`)
+                return
+              }
+            }
+            if (isWakeDetection || manager.state === TutorState.SLEEPING) {
+              if (manager.state !== TutorState.SLEEPING) manager.returnToSleep()
             }
             return
           }
@@ -1296,18 +1346,34 @@ const CoursePlayer = ({
             return
           }
 
+          // Final noise gate before LLM — reject ambient Whisper loops
+          if (isNoiseOrHallucination(transcription)) {
+            console.log(`[VOICE:REJECT] Hallucination/noise rejected before LLM: "${transcription.slice(0, 80)}"`)
+            if (manager.state === TutorState.PROCESSING) manager.returnToSleep()
+            return
+          }
+
           handleVoiceQuestion(transcription)
         } catch (err) {
           console.error('[VOICE] Whisper transcription failed:', err)
-          if (manager.state !== TutorState.SLEEPING) {
-            manager.setState(TutorState.FOLLOW_UP_LISTENING)
+          // Stay awake and let browser ASR / retry capture the question
+          if (
+            context.state === TutorState.ACTIVE_LISTENING ||
+            context.state === TutorState.FOLLOW_UP_LISTENING ||
+            manager.state === TutorState.PROCESSING
+          ) {
+            manager.setState(TutorState.ACTIVE_LISTENING)
             manager.resetFollowUpTimeout()
+            setVoiceStatusText('👂 Mic ready — please ask your question again')
+          } else if (manager.state !== TutorState.SLEEPING) {
+            manager.returnToSleep()
           }
         } finally {
           isTranscribingRef.current = false
         }
       },
       onQuestionReady: (questionText) => {
+        console.log(`[VOICE] Browser ASR question ready: "${questionText}"`)
         handleVoiceQuestion(questionText)
       },
       onReturnToSleep: () => {
@@ -1358,7 +1424,20 @@ const CoursePlayer = ({
         voiceManagerRef.current = null
       }
     }
-  }, [handsFreeVoice, speechRecognitionLang, selectedLanguageCode, currentLangObj, preferredLanguage, aiTutorName, aiWakeWord])
+    // Keep deps narrow — aiName/wakeWord updates must not remount (destroys mid-listen)
+  }, [handsFreeVoice, speechRecognitionLang])
+
+  // Hot-update wake config without destroying the mic session
+  useEffect(() => {
+    if (!voiceManagerRef.current) return
+    voiceManagerRef.current.aiName = aiTutorName
+    voiceManagerRef.current.wakeWord = aiWakeWord
+    voiceManagerRef.current.options = {
+      ...voiceManagerRef.current.options,
+      aiName: aiTutorName,
+      wakeWord: aiWakeWord
+    }
+  }, [aiTutorName, aiWakeWord])
 
   // Manual Microphone Button Handler (Optional manual trigger)
   const toggleRecording = async () => {
@@ -1479,6 +1558,11 @@ const CoursePlayer = ({
           }
           lessonExplanationClientCache.set(cacheKey, script);
           setExplanation(script);
+          setTutorGuidance({
+            keyPoints: res.key_points || [],
+            safetyWarnings: res.safety_warnings || [],
+            transition: res.suggested_next_transition || ''
+          });
           setLessonVisuals(res.visuals || activeLesson.visuals || []);
           setLoadingExplanation(false);
           setPipelineState('READY');
@@ -1500,27 +1584,13 @@ const CoursePlayer = ({
   // Helper to clean raw text for Speech TTS (removes hashtags, references, markdown symbols, and emojis that TTS speaks out loud)
   const cleanForSpeech = (text) => {
     if (!text) return ''
-    return text
-      .replace(EMOJI_REGEX, '')
-      .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
-      .replace(/#+/g, '')
-      .replace(/[\*_~`]+/g, '')
-      .replace(/^[-\*•➔>+:\s]+/, '')
-      .replace(/\s+/g, ' ')
-      .trim()
+    return cleanSpeechUtil(text)
   }
 
-  // Helper to clean raw text for Chalkboard Display (removes emojis, references, #, ###, markdown symbols)
+  // Helper to clean raw text for Chalkboard Display (removes emojis, references, #, ###, markdown symbols, prompt leakage)
   const cleanForBoard = (text) => {
     if (!text) return ''
-    return text
-      .replace(EMOJI_REGEX, '')
-      .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
-      .replace(/^[#*•➔>+-\s]+/, '')
-      .replace(/#+/g, '')
-      .replace(/[\*_~`]+/g, '')
-      .replace(/^[•\-\*\s]+/, '')
-      .trim()
+    return cleanUnsupportedWords(text)
   }
 
   const sentences = useMemo(() => {
@@ -1566,6 +1636,181 @@ const CoursePlayer = ({
 
     return ranked[0];
   }, [lessonVisuals, activeLesson?.visuals, activeLesson?.sourceSlides]);
+
+  const resolveMediaUrl = (url, fallbackSlideNum = 1) => {
+    if (!url) {
+      if (course?.id) {
+        return api.getCourseSlideImageUrl(course.id, fallbackSlideNum);
+      }
+      return null;
+    }
+    if (typeof url === 'string') {
+      if (url.startsWith('data:')) return url;
+      if (url.startsWith('http://') || url.startsWith('https://')) return url;
+      if (url.startsWith('/api')) {
+        return url;
+      }
+    }
+    return url;
+  };
+
+  // Reset slide image load error when current page or lesson changes
+  useEffect(() => {
+    setSlideImageLoadError(false);
+  }, [currentPageNum, activeLessonId]);
+
+  // Universal Document Viewer Page Extraction (PDF, PPTX, PPT, DOCX, DOC, Images)
+  const documentPages = useMemo(() => {
+    // 1. Check slides (PPTX, PPT)
+    const slidesList = (Array.isArray(course?.slides) && course.slides.length > 0)
+      ? course.slides
+      : (Array.isArray(course?.curriculumData?.slides) && course.curriculumData.slides.length > 0)
+        ? course.curriculumData.slides
+        : (course?.curriculum && typeof course.curriculum === 'object' && Array.isArray(course.curriculum.slides) && course.curriculum.slides.length > 0)
+          ? course.curriculum.slides
+          : null;
+
+    if (slidesList && slidesList.length > 0) {
+      return slidesList.map((s, idx) => {
+        const sNum = s.slideNumber || idx + 1;
+        const fullImg = s.fullSlideImage ||
+          (Array.isArray(s.images) ? (s.images.find(im => String(im.id || '').startsWith('full_slide') || String(im.id || '').startsWith('slide_') || im.purpose?.includes('exact powerpoint')) || s.images[0]) : null) ||
+          s.image;
+        const rawUrl = fullImg?.url || fullImg?.dataUrl || (typeof fullImg === 'string' ? fullImg : null) || s.image || s.url;
+        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, sNum) : (course?.id ? api.getCourseSlideImageUrl(course.id, sNum) : null);
+        return {
+          pageNumber: sNum,
+          title: s.title || `Slide ${sNum}`,
+          type: 'slide',
+          image: imgUrl,
+          text: s.fullText || '',
+          headings: s.headings || [],
+          paragraphs: s.paragraphs || [],
+          tables: s.tables || [],
+          bulletPoints: s.bulletPoints || [],
+          speakerNotes: s.speakerNotes || ''
+        };
+      });
+    }
+
+    // 2. Check pages (PDF, DOCX, Images, Text)
+    const pagesList = (Array.isArray(course?.pages) && course.pages.length > 0)
+      ? course.pages
+      : (Array.isArray(course?.curriculumData?.pages) && course.curriculumData.pages.length > 0)
+        ? course.curriculumData.pages
+        : (course?.curriculum && typeof course.curriculum === 'object' && Array.isArray(course.curriculum.pages) && course.curriculum.pages.length > 0)
+          ? course.curriculum.pages
+          : null;
+
+    if (pagesList && pagesList.length > 0) {
+      return pagesList.map((p, idx) => {
+        const pNum = p.page_number || p.pageNumber || idx + 1;
+        const fullImg = p.pageImage ||
+          (Array.isArray(p.images) ? (p.images.find(im => String(im.id || '').startsWith('full_page') || im.purpose?.includes('exact document page')) || p.images[0]) : null) ||
+          p.image;
+        const rawUrl = fullImg?.url || fullImg?.dataUrl || (typeof fullImg === 'string' ? fullImg : null) || p.image || p.url;
+        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, pNum) : (course?.id ? api.getCoursePageImageUrl(course.id, pNum) : null);
+        return {
+          pageNumber: pNum,
+          title: p.title || `Page ${pNum}`,
+          type: 'page',
+          image: imgUrl,
+          text: p.text || '',
+          headings: p.headings || [],
+          paragraphs: p.paragraphs || [],
+          bulletPoints: p.bulletPoints || []
+        };
+      });
+    }
+
+    // 3. Fallback: Check curriculum.lessons with visuals or slideData
+    if (Array.isArray(course?.lessons) && course.lessons.length > 0) {
+      return course.lessons.map((l, idx) => {
+        const sNum = l.sourceSlides?.[0] || idx + 1;
+        const v = (Array.isArray(l.visuals) ? (l.visuals.find(vis => String(vis.id || '').startsWith('full_')) || l.visuals[0]) : null) || l.slideData?.images?.[0];
+        const rawUrl = v?.dataUrl || v?.url;
+        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, sNum) : (course?.id ? api.getCourseSlideImageUrl(course.id, sNum) : null);
+        return {
+          pageNumber: sNum,
+          title: l.title || `Section ${idx + 1}`,
+          type: 'section',
+          image: imgUrl,
+          text: l.slideData?.fullText || l.explanation || '',
+          headings: l.slideData?.headings || [],
+          paragraphs: l.slideData?.paragraphs || [],
+          bulletPoints: l.slideData?.bulletPoints || []
+        };
+      });
+    }
+
+    return [];
+  }, [course]);
+
+  const totalPages = useMemo(() => Math.max(1, documentPages.length), [documentPages]);
+
+  const currentDocPage = useMemo(() => {
+    if (!documentPages || documentPages.length === 0) return null;
+    return documentPages.find(p => p.pageNumber === currentPageNum) || documentPages[0];
+  }, [documentPages, currentPageNum]);
+
+  const fileTypeBadge = useMemo(() => {
+    const ext = (course?.fileName || '').split('.').pop()?.toLowerCase();
+    const type = (course?.fileType || course?.curriculumData?.fileType || course?.curriculum?.fileType || ext || '').toLowerCase();
+    if (type.includes('pdf')) return 'PDF DOCUMENT';
+    if (type.includes('ppt')) return 'POWERPOINT SLIDES';
+    if (type.includes('doc')) return 'WORD DOCUMENT';
+    if (['png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff', 'image'].includes(type)) return 'ORIGINAL IMAGE';
+    return `${(ext || 'TRAINING').toUpperCase()} DOCUMENT`;
+  }, [course]);
+
+  // Synchronize currentPageNum when activeLesson changes
+  useEffect(() => {
+    if (activeLesson) {
+      const pageNum = activeLesson.sourceSlides?.[0] || (course?.lessons ? course.lessons.findIndex(l => l.id === activeLesson.id) + 1 : 1);
+      if (pageNum && pageNum !== currentPageNum) {
+        setCurrentPageNum(pageNum);
+      }
+    }
+  }, [activeLesson, course?.lessons]);
+
+  const handleNavigatePage = (targetPageNum) => {
+    if (targetPageNum < 1 || targetPageNum > totalPages) return;
+    setCurrentPageNum(targetPageNum);
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+
+    const matchingLesson = course?.lessons?.find(l => {
+      const s = Array.isArray(l.sourceSlides) ? l.sourceSlides : [l.id];
+      return s.includes(targetPageNum);
+    });
+
+    if (matchingLesson && matchingLesson.id !== activeLessonId) {
+      setActiveLessonId(matchingLesson.id);
+      setCurrentSentenceIdx(0);
+      setElapsedSeconds(0);
+      setPlaying(true);
+    } else {
+      setLoadingExplanation(true);
+      api.explainCoursePage(course.id, targetPageNum, selectedLanguageCode)
+        .then(res => {
+          setTutorGuidance({
+            keyPoints: res.key_points || [],
+            safetyWarnings: res.safety_warnings || [],
+            transition: res.suggested_next_transition || ''
+          });
+          const exp = res.spoken_explanation || res.explanation || '';
+          setExplanation(exp);
+          setLoadingExplanation(false);
+          if (exp) {
+            setPlaying(true);
+            setCurrentSentenceIdx(0);
+          }
+        })
+        .catch(err => {
+          console.warn('Page explain notice:', err.message);
+          setLoadingExplanation(false);
+        });
+    }
+  };
 
   const getRealLessonDurationStr = (lesson, activeExp = null, idx = 0) => {
     // Check active loaded explanation, or the lesson's stored explanation
@@ -1743,9 +1988,10 @@ const CoursePlayer = ({
       let isCancelled = false;
 
       const speak = (idx) => {
-        if (isCancelled) return;
+        if (isCancelled || !playingRef.current) return;
         if (idx >= sentences.length) {
           setPlaying(false);
+          currentSentenceIdxRef.current = 0;
           setCurrentSentenceIdx(0);
           if (activeLesson?.id) {
             markLessonCompleted(activeLesson.id);
@@ -1771,8 +2017,10 @@ const CoursePlayer = ({
             setVoiceStatusText(`✅ Lesson completed! Advancing to: ${nextLesson.title}...`);
             setTimeout(() => {
               setActiveLessonId(nextLesson.id);
+              currentSentenceIdxRef.current = 0;
               setCurrentSentenceIdx(0);
               setElapsedSeconds(0);
+              elapsedSecondsRef.current = 0;
               setPlaying(true);
             }, 800);
           }
@@ -1782,8 +2030,11 @@ const CoursePlayer = ({
         const spokenText = cleanForSpeech(sentences[idx]);
         if (!spokenText) {
           if (idx + 1 < sentences.length) {
+            currentSentenceIdxRef.current = idx + 1;
             setCurrentSentenceIdx(idx + 1);
             speak(idx + 1);
+          } else {
+            speak(sentences.length);
           }
           return;
         }
@@ -1814,23 +2065,21 @@ const CoursePlayer = ({
           utteranceRef.current = utterance; // Prevent GC cancellation bug
 
           utterance.onstart = () => {
-            if (isCancelled) return;
+            if (isCancelled || !playingRef.current) return;
             voiceManagerRef.current?.noteSpokenText?.(spokenText);
+            voiceManagerRef.current?.setTutorSpeaking?.(true, spokenText);
             const ttsDuration = Math.round(performance.now() - ttsStartTime);
             console.log(`[PERF:TTS_END] TTS audio synthesis started in ${ttsDuration}ms`);
             const startupLatency = lessonOpenTimestampRef.current ? Math.round(performance.now() - lessonOpenTimestampRef.current) : 0;
             console.log(`[PERF:PLAYBACK_START] Playback active (Concept ${idx + 1}/${sentences.length}, Total Startup Latency: ${startupLatency}ms)`);
             setIsAriaSpeaking(true);
             isAriaSpeakingRef.current = true;
-            voiceManagerRef.current?.noteSpokenText?.(spokenText);
             setPipelineState('PLAYING');
 
             // Background pre-warming of next concept without blocking current playback
             if (idx + 1 < sentences.length) {
               const nextSpoken = cleanForSpeech(sentences[idx + 1]);
               if (nextSpoken) {
-                const preStartTime = performance.now();
-                console.log(`[PERF:AUDIO_LOAD_START] Pre-warming upcoming Concept ${idx + 2}/${sentences.length} audio in background`);
                 const nextUtterance = new SpeechSynthesisUtterance(nextSpoken);
                 const voices = window.speechSynthesis.getVoices();
                 const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
@@ -1843,42 +2092,36 @@ const CoursePlayer = ({
                 nextUtterance.rate = aiVoiceConfig?.rate || 0.95;
                 nextUtterance.pitch = aiVoiceConfig?.pitch || 1.0;
                 ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx + 1}`, nextUtterance);
-                const preDuration = Math.round(performance.now() - preStartTime);
-                console.log(`[PERF:AUDIO_LOAD_END] Concept ${idx + 2} pre-warmed in ${preDuration}ms`);
               }
             }
           };
 
           utterance.onend = () => {
             if (isCancelled || !playingRef.current) return;
+            voiceManagerRef.current?.setTutorSpeaking?.(false, spokenText);
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
             lastAriaSpokenTimeRef.current = Date.now();
-            setCurrentSentenceIdx((prev) => {
-              const next = prev + 1;
-              if (playingRef.current && !isCancelled) {
-                speak(next);
-              }
-              return next;
-            });
+            const nextIdx = idx + 1;
+            currentSentenceIdxRef.current = nextIdx;
+            setCurrentSentenceIdx(nextIdx);
+            speak(nextIdx);
           };
 
           utterance.onerror = (e) => {
             if (e?.error === 'canceled' || e?.error === 'interrupted') return;
             console.warn('Speech synthesis error:', e);
             if (isCancelled || !playingRef.current) return;
+            voiceManagerRef.current?.setTutorSpeaking?.(false, spokenText);
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
             setTimeout(() => {
               if (isCancelled || !playingRef.current) return;
-              setCurrentSentenceIdx((prev) => {
-                const next = prev + 1;
-                if (playingRef.current && !isCancelled) {
-                  speak(next);
-                }
-                return next;
-              });
-            }, 400);
+              const nextIdx = idx + 1;
+              currentSentenceIdxRef.current = nextIdx;
+              setCurrentSentenceIdx(nextIdx);
+              speak(nextIdx);
+            }, 300);
           };
 
           window.speechSynthesis.speak(utterance);
@@ -1887,18 +2130,28 @@ const CoursePlayer = ({
         }
       };
 
-      speak(currentSentenceIdx);
+      // Keep Chrome TTS alive during lecture playback
+      const resumeInterval = setInterval(() => {
+        if (playingRef.current && isAriaSpeakingRef.current) {
+          try { window.speechSynthesis.resume?.(); } catch (e) { }
+        }
+      }, 2000);
+
+      speak(currentSentenceIdxRef.current || 0);
 
       return () => {
         isCancelled = true;
+        clearInterval(resumeInterval);
+        voiceManagerRef.current?.setTutorSpeaking?.(false);
         setIsAriaSpeaking(false);
         isAriaSpeakingRef.current = false;
         try { window.speechSynthesis.cancel(); } catch (e) { }
       };
     } else {
+      voiceManagerRef.current?.setTutorSpeaking?.(false);
       try { window.speechSynthesis.cancel(); } catch (e) { }
     }
-  }, [playing, muted, sentences, currentSentenceIdx, loadingExplanation, selectedLanguageCode]);
+  }, [playing, muted, sentences, loadingExplanation, activeLesson?.id, selectedLanguageCode]);
 
   useEffect(() => {
     activeLessonRef.current = activeLesson
@@ -2085,12 +2338,21 @@ const CoursePlayer = ({
 
   // Unified module grouping for course curriculum
   const moduleGroups = useMemo(() => {
-    if (!course.lessons || !course.lessons.length) return []
+    const rawLessons = (course.lessons && course.lessons.length > 0)
+      ? course.lessons
+      : (course.curriculum && Array.isArray(course.curriculum) && course.curriculum.length > 0 && course.curriculum[0].lessons)
+        ? course.curriculum.flatMap(m => m.lessons || [])
+        : [];
+    if (!rawLessons || !rawLessons.length) return []
     const groups = []
     let currentGroup = null
 
-    course.lessons.forEach((lesson, index) => {
-      const rawModule = lesson.moduleTitle || lesson.chapterTitle || 'Module 1'
+    rawLessons.forEach((rawLesson, index) => {
+      const lesson = {
+        ...rawLesson,
+        title: cleanUnsupportedWords(rawLesson.title, `Lesson ${index + 1}`)
+      }
+      const rawModule = cleanUnsupportedWords(lesson.moduleTitle || lesson.chapterTitle || 'Module 1', 'Module 1')
       if (!currentGroup || currentGroup.moduleTitle !== rawModule) {
         currentGroup = {
           moduleTitle: rawModule,
@@ -2102,7 +2364,7 @@ const CoursePlayer = ({
     })
 
     return groups
-  }, [course.lessons])
+  }, [course.lessons, course.curriculum])
 
   return (
     <div className="min-h-screen lg:h-screen lg:max-h-screen overflow-y-auto lg:overflow-hidden bg-[#f4f7fc] text-[#0f172a] select-none flex flex-col font-sans">
@@ -2151,24 +2413,11 @@ const CoursePlayer = ({
                 <CourseBookIcon className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1">
-                <h1 className="text-xs font-bold text-slate-900 leading-snug truncate">{course.title}</h1>
+                <h1 className="text-xs font-bold text-slate-900 leading-snug truncate">{cleanUnsupportedWords(course.title)}</h1>
                 <p className="text-[11px] text-slate-400 font-medium">
-                  {course.chapters?.length
-                    ? `${course.chapters.length} Chapters • ${course.lessons?.length || 0} Lessons`
-                    : `${course.lessons?.length || 0} Lessons`}
+                  {moduleGroups.reduce((acc, g) => acc + g.lessons.length, 0) || course.lessons?.length || 0} Lessons
                 </p>
               </div>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="flex items-center gap-2 pt-0.5">
-              <div className="h-1.5 flex-1 rounded-full bg-slate-100 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-[#ff8c21] transition-all duration-300"
-                  style={{ width: `${overallProgressPercentage}%` }}
-                />
-              </div>
-              <span className="text-[11px] font-semibold text-slate-500">{overallProgressPercentage}%</span>
             </div>
           </div>
 
@@ -2179,7 +2428,7 @@ const CoursePlayer = ({
             <div className="shrink-0 flex items-center justify-between mb-2">
               <h2 className="text-xs font-bold text-slate-900">Curriculum Lessons</h2>
               <span className="text-[10px] text-slate-400 font-semibold">
-                {course.lessons?.length || 0} Total
+                {moduleGroups.reduce((acc, g) => acc + g.lessons.length, 0) || course.lessons?.length || 0} Total
               </span>
             </div>
 
@@ -2189,7 +2438,7 @@ const CoursePlayer = ({
                   {/* Unified Module Group Header */}
                   <div className="flex items-center justify-between px-1 pt-1 pb-0.5">
                     <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wide truncate max-w-[80%]" title={group.moduleTitle}>
-                      {group.moduleTitle.replace(/^Module\s*/i, 'Mod ')}
+                      {cleanUnsupportedWords(group.moduleTitle)}
                     </span>
                     <span className="text-[9px] font-semibold text-slate-400">
                       {group.lessons.length} {group.lessons.length === 1 ? 'lesson' : 'lessons'}
@@ -2246,7 +2495,7 @@ const CoursePlayer = ({
                             {/* Clean Numbered Lesson Title & Duration */}
                             <div className="min-w-0 flex-1">
                               <p className={`text-[11px] leading-snug truncate ${isActive ? 'font-bold text-slate-900' : 'font-medium text-slate-800'}`}>
-                                {index + 1}. {lesson.title}
+                                {index + 1}. {cleanUnsupportedWords(lesson.title)}
                               </p>
                               <p className="text-[10px] text-slate-400 font-normal mt-0.5">
                                 {getRealLessonDurationStr(lesson, lesson.id === activeLesson?.id ? explanation : null, index)}
@@ -2269,11 +2518,11 @@ const CoursePlayer = ({
           <div className="shrink-0 flex flex-col gap-0.5">
             {(activeLesson?.chapterTitle || activeLesson?.moduleTitle) && (
               <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider truncate">
-                {activeLesson.chapterTitle || activeLesson.moduleTitle}
+                {cleanUnsupportedWords(activeLesson.chapterTitle || activeLesson.moduleTitle)}
               </span>
             )}
             <h2 className="text-base font-bold text-slate-900 leading-snug truncate">
-              {activeLesson?.title || 'Introduction to Lesson Topics'}
+              {cleanUnsupportedWords(activeLesson?.title || 'Introduction to Lesson Topics')}
             </h2>
           </div>
 
@@ -2333,111 +2582,140 @@ const CoursePlayer = ({
             <div className="p-3 sm:p-4 lg:p-5 flex flex-col flex-1 min-h-0 justify-between">
               {/* Split Content: Presentation Slide (Left) & ARIA Tutor Avatar (Right) */}
               <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 lg:gap-5 items-center my-0.5 sm:my-1">
-                {/* Left Presentation Chalkboard Container */}
-                <div className="md:col-span-7 lg:col-span-8 bg-[#0b1329] rounded-2xl border-2 border-slate-700/80 p-3 sm:p-4 lg:p-5 h-full flex flex-col justify-between overflow-hidden shadow-2xl relative min-h-[160px]">
-                  {/* Blackboard Top Header */}
-                  <div className="shrink-0 flex items-center justify-between border-b border-slate-700/80 pb-1.5 sm:pb-2 mb-1.5 sm:mb-2">
-                    <span className="text-[10px] sm:text-[11px] font-bold text-[#ff8c21] tracking-wider uppercase flex items-center gap-2 truncate max-w-[70%]">
-                      <span className="h-2 w-2 rounded-full bg-[#ff8c21] shrink-0 animate-pulse" />
-                      <span className="truncate">{activeLesson?.title || 'Lecture Concepts'}</span>
-                    </span>
-                    <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700">
-                      NOTE {currentSentenceIdx + 1} / {sentences.length}
-                    </span>
-                  </div>
+                {/* Left Universal Document Viewer Canvas Container */}
+                <div className="md:col-span-7 lg:col-span-8 bg-[#0b1329] rounded-2xl border-2 border-slate-700/80 p-2.5 sm:p-3 h-full flex flex-col justify-between overflow-hidden shadow-2xl relative min-h-[180px]">
+                  {/* Main Display Canvas: Slide Screen Only */}
+                  <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden relative">
+                    {/* Non-intrusive floating explanation badge while ARIA pre-warms explanation */}
+                    {loadingExplanation && (
+                      <div className="absolute top-2 left-2 right-2 z-30 bg-slate-900/90 border border-[#ff8c21]/40 backdrop-blur-md rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs text-[#ff8c21] shadow-lg animate-fadeIn">
+                        <div className="h-3 w-3 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
+                        <span className="font-semibold text-[11px]">ARIA & Qwen are preparing explanation for this slide...</span>
+                      </div>
+                    )}
 
-                  {/* Interactive Board Notes List & PPT Visual Display */}
-                  {loadingExplanation ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-4 sm:p-6 space-y-2.5 sm:space-y-3 select-none">
-                      <div className="h-7 w-7 sm:h-8 sm:w-8 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                      <p className="text-xs font-semibold text-slate-300">
-                        ARIA is preparing lesson notes & speech...
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
-                      {/* PPT Slide Visual Display Card (When concept visual exists) */}
-                      {activeVisual && (activeVisual.dataUrl || activeVisual.url) ? (
-                        <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
-                          <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-slate-700/80 bg-slate-950/80 shadow-lg relative group flex flex-col">
-                            <div className="relative flex-1 min-h-0 flex items-center justify-center p-2 bg-black/40 overflow-hidden">
-                              <img
-                                src={activeVisual.dataUrl || activeVisual.url}
-                                alt={activeVisual.descr || activeVisual.name || 'Presentation Slide'}
-                                className="max-h-full max-w-full w-auto h-auto object-contain rounded-lg shadow-xl cursor-zoom-in hover:scale-[1.01] transition-transform duration-200"
-                                onClick={() => setEnlargedVisual(activeVisual)}
-                                title="Click to view full-resolution slide"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => setEnlargedVisual(activeVisual)}
-                                className="absolute bottom-2 right-2 px-2.5 py-1 rounded-lg bg-slate-950/85 hover:bg-[#ff8c21] text-white text-[10px] font-bold flex items-center gap-1.5 backdrop-blur-md border border-white/20 transition cursor-pointer shadow-md"
-                                title="Click to enlarge diagram"
-                              >
-                                <span>🔍</span>
-                                <span className="hidden sm:inline">Enlarge Slide</span>
-                              </button>
-                            </div>
-                            <div className="shrink-0 px-3 py-1 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between gap-2 text-[10px]">
-                              <span className="font-bold text-[#ff8c21] flex items-center gap-1.5 truncate">
-                                <span>Slide {activeVisual.sourceSlide || (activeLessonIndex + 1)}</span>
-                                <span className="text-slate-300 font-medium truncate">• {activeLesson?.title || activeVisual.name}</span>
-                              </span>
-                              <span className="text-[9px] text-emerald-400 font-extrabold shrink-0 uppercase tracking-wider bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                                PRESENTATION SLIDE
-                              </span>
-                            </div>
+                    {/* Faithful PowerPoint Presentation Slide Screen */}
+                    {(currentDocPage?.image && !slideImageLoadError) || (activeVisual && (activeVisual.dataUrl || activeVisual.url) && !slideImageLoadError) ? (
+                      <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
+                        <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-slate-700/80 bg-slate-950/80 shadow-lg relative group flex flex-col">
+                          <div className={`relative flex-1 min-h-0 flex bg-black/60 overflow-auto no-scrollbar ${fitToWidth ? 'items-start justify-center p-1 sm:p-2' : 'items-center justify-center p-2'}`}>
+                            <img
+                              src={currentDocPage?.image || activeVisual.dataUrl || activeVisual.url}
+                              alt={currentDocPage?.title || activeVisual?.descr || 'Presentation Slide'}
+                              onError={() => setSlideImageLoadError(true)}
+                              style={{
+                                transform: zoomLevel !== 1 ? `scale(${zoomLevel})` : undefined,
+                                transformOrigin: 'center top',
+                                transition: 'transform 0.15s ease-out'
+                              }}
+                              className={`rounded-lg shadow-2xl cursor-zoom-in transition-all duration-200 ${
+                                fitToWidth
+                                  ? 'w-full h-auto object-contain max-h-none'
+                                  : 'max-h-full max-w-full w-auto h-auto object-contain'
+                              }`}
+                              onClick={() => setEnlargedVisual({ dataUrl: currentDocPage?.image || activeVisual?.dataUrl || activeVisual?.url, name: currentDocPage?.title || activeVisual?.name })}
+                              title="Click to view full-resolution presentation slide"
+                            />
+                          </div>
+                          <div className="shrink-0 px-3 py-1.5 bg-slate-900/95 border-t border-slate-800 flex items-center justify-between gap-2 text-[10px]">
+                            <span className="font-bold text-[#ff8c21] flex items-center gap-1.5 truncate">
+                              <span>Slide {currentPageNum} of {totalPages}</span>
+                              <span className="text-slate-300 font-medium truncate">• {cleanUnsupportedWords(currentDocPage?.title || activeLesson?.title)}</span>
+                            </span>
                           </div>
                         </div>
-                      ) : (
-                        /* Fallback interactive board notes list when no slide image */
-                        <div
-                          ref={notesScrollRef}
-                          className="flex-1 min-h-0 space-y-1.5 sm:space-y-2 overflow-y-auto pr-1 text-left my-0.5 scroll-smooth no-scrollbar"
-                        >
-                          {sentences.map((sentenceText, sIdx) => {
-                            const isCurrent = sIdx === currentSentenceIdx
-                            const isPast = sIdx < currentSentenceIdx
-                            const cleanedText = cleanForBoard(sentenceText)
+                      </div>
+                    ) : (
+                      /* Interactive PowerPoint Presentation Slide Canvas (when image is rendering or text-structured) */
+                      <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
+                        <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-slate-700/80 bg-linear-to-br from-[#0c142c] via-[#101b3d] to-[#070d1e] shadow-xl relative flex flex-col p-4 sm:p-6 text-white justify-between">
+                          {/* Slide Stage Header */}
+                          <div className="shrink-0 pb-3 border-b border-slate-700/60 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="h-6 w-6 rounded-lg bg-[#ff8c21]/20 text-[#ff8c21] border border-[#ff8c21]/40 flex items-center justify-center text-xs font-bold">
+                                📊
+                              </span>
+                              <div>
+                                <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider block">
+                                  {fileTypeBadge.includes('SLIDE') ? 'PowerPoint Presentation' : 'Training Document'} • {currentPageNum} / {totalPages}
+                                </span>
+                                <h3 className="text-sm sm:text-base lg:text-lg font-bold text-white leading-tight">
+                                  {cleanUnsupportedWords(currentDocPage?.title || activeLesson?.title || `Slide ${currentPageNum}`)}
+                                </h3>
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-slate-400 font-semibold px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
+                              {cleanUnsupportedWords(course.title)}
+                            </span>
+                          </div>
 
-                            return (
-                              <div
-                                key={sIdx}
-                                ref={isCurrent ? activeSentenceRef : null}
-                                onClick={() => {
-                                  window.speechSynthesis?.cancel?.();
-                                  setCurrentSentenceIdx(sIdx);
-                                  currentSentenceIdxRef.current = sIdx;
-                                  if (totalSeconds > 0 && sentences.length > 0) {
-                                    const newSec = Math.min(totalSeconds, Math.round((sIdx / Math.max(1, sentences.length)) * totalSeconds));
-                                    setElapsedSeconds(newSec);
-                                    elapsedSecondsRef.current = newSec;
-                                    if (activeLesson?.id && !isLessonDone(activeLesson.id)) {
-                                      saveLessonPlayback(activeLesson.id, sIdx, newSec);
-                                    }
-                                  }
-                                }}
-                                className={`p-2 sm:p-2.5 rounded-xl transition-all duration-300 cursor-pointer ${isCurrent
-                                  ? 'bg-[#ff8c21]/20 border-l-4 border-[#ff8c21] shadow-xs text-white scale-[1.01]'
-                                  : isPast
-                                    ? 'bg-slate-800/50 border-l-2 border-slate-600/60 text-slate-300 hover:bg-slate-800/70'
-                                    : 'bg-slate-800/20 border-l-2 border-slate-700/30 text-slate-400 opacity-60 hover:opacity-90'
-                                  }`}
-                                title="Click to jump to this concept"
-                              >
-                                <p className="text-xs sm:text-[13px] lg:text-sm leading-relaxed font-medium flex items-start gap-2 sm:gap-2.5">
-                                  <span className={`text-[9px] sm:text-[10px] mt-1 shrink-0 ${isCurrent ? 'text-[#ff8c21] font-bold' : 'text-slate-500'}`}>
-                                    {isCurrent ? '●' : '○'}
-                                  </span>
-                                  <span className="flex-1">{cleanedText}</span>
+                          {/* Slide Body Content */}
+                          <div className="flex-1 min-h-0 my-3 overflow-y-auto pr-1 space-y-3 no-scrollbar text-left">
+                            {/* Headings */}
+                            {currentDocPage?.headings && currentDocPage.headings.length > 0 && (
+                              <div className="space-y-1">
+                                {currentDocPage.headings.map((h, hIdx) => (
+                                  <h4 key={hIdx} className="text-xs sm:text-sm font-semibold text-orange-200">
+                                    {h}
+                                  </h4>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Bullet points */}
+                            {currentDocPage?.bulletPoints && currentDocPage.bulletPoints.length > 0 ? (
+                              <ul className="space-y-2 text-xs sm:text-[13px] text-slate-200">
+                                {currentDocPage.bulletPoints.map((bp, bpIdx) => (
+                                  <li key={bpIdx} className="flex items-start gap-2.5 leading-relaxed bg-slate-800/40 p-2 rounded-lg border border-slate-700/40">
+                                    <span className="text-[#ff8c21] font-bold text-sm leading-none mt-0.5">▸</span>
+                                    <span className="flex-1">{bp.replace(/^[-*•]\s*/, '')}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : currentDocPage?.text ? (
+                              <div className="text-xs sm:text-[13px] text-slate-300 leading-relaxed whitespace-pre-line bg-slate-800/30 p-3 rounded-xl border border-slate-700/40">
+                                {currentDocPage.text.slice(0, 800)}
+                              </div>
+                            ) : (
+                              <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-400">
+                                <span className="text-3xl mb-2">📊</span>
+                                <p className="text-xs font-semibold text-slate-300">
+                                  PowerPoint Slide {currentPageNum}: {currentDocPage?.title}
                                 </p>
                               </div>
-                            )
-                          })}
+                            )}
+                          </div>
+
+                          {/* Slide Stage Footer */}
+                          <div className="shrink-0 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400">
+                            <span className="flex items-center gap-1.5 font-medium">
+                              <span className="text-[#ff8c21]">●</span> SkillBridge Interactive Slide Player
+                            </span>
+                            <span className="font-mono text-slate-400 font-bold">
+                              Slide {currentPageNum} of {totalPages}
+                            </span>
+                          </div>
                         </div>
-                      )}
-                    </div>
-                  )}
+                      </div>
+                    )}
+
+                    {/* Safety Warnings Banner (when Qwen identifies safety caveats) */}
+                    {tutorGuidance.safetyWarnings && tutorGuidance.safetyWarnings.length > 0 && (
+                      <div className="mt-1.5 p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs flex items-start gap-2 shrink-0 animate-fadeIn">
+                        <span className="text-base shrink-0 leading-none">⚠️</span>
+                        <div className="min-w-0 flex-1">
+                          <span className="font-bold uppercase tracking-wider text-[10px] text-amber-400 block">
+                            Operational Safety Notice:
+                          </span>
+                          <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-[11px] text-amber-100">
+                            {tutorGuidance.safetyWarnings.map((warning, wIdx) => (
+                              <li key={wIdx} className="truncate">{warning}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Right ARIA Tutor Circle Avatar with Robot AI Emoji */}

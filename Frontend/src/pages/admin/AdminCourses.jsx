@@ -452,7 +452,7 @@ const AdminCourses = () => {
                   }`}>
                     <input
                       type="file"
-                      accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4"
+                      accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4"
                       onChange={handleFileChange}
                       className="hidden"
                     />
@@ -462,12 +462,12 @@ const AdminCourses = () => {
                       </svg>
                     </div>
                     <span className="mt-2 text-xs font-bold text-fg break-all max-w-full px-2">
-                      {selectedFile ? selectedFile.name : 'Upload Document or Audio'}
+                      {selectedFile ? selectedFile.name : 'Upload Training Document, Slide, or Image'}
                     </span>
                     <span className="text-[11px] text-muted mt-0.5">
                       {selectedFile
                         ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
-                        : 'PPTX, PPT, PDF, Word (DOCX/DOC), Audio (MP3/WAV/M4A), Text (TXT/MD) • Whisper & LLM Powered'}
+                        : 'PDF, PPTX, PPT, Word (DOCX/DOC), Images (PNG/JPG/WEBP), Audio • Qwen AI Tutor Powered'}
                     </span>
                   </label>
                 </div>
@@ -577,7 +577,7 @@ const AdminCourses = () => {
                 }`}>
                   <input
                     type="file"
-                    accept=".pdf,.doc,.docx,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4"
+                    accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.bmp,.tiff,.txt,.text,.md,.markdown,.rtf,.html,.htm,.csv,.pptx,.ppt,.json,.mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,.mp4"
                     onChange={handleEditFileChange}
                     className="hidden"
                   />
@@ -592,7 +592,7 @@ const AdminCourses = () => {
                   <span className="text-[10px] text-muted mt-0.5">
                     {editFile
                       ? `${(editFile.size / (1024 * 1024)).toFixed(2)} MB • Click to change document`
-                      : 'PPTX, PPT, PDF, Word (DOCX/DOC), Audio (MP3/WAV/M4A), Text • Whisper & LLM Powered'}
+                      : 'PDF, PPTX, PPT, Word (DOCX/DOC), Images (PNG/JPG/WEBP), Audio • Qwen AI Tutor Powered'}
                   </span>
                   {editFile && (
                     <button
@@ -678,6 +678,25 @@ const AdminCourses = () => {
                 const lessons = curriculumData.lessons || []
                 const modules = curriculumData.curriculum || []
 
+                const formatLessonDuration = (lesson, idx) => {
+                  if (lesson.duration && lesson.duration !== '08:00' && lesson.duration !== '8m' && lesson.duration !== '10 mins') {
+                    return lesson.duration;
+                  }
+                  const exp = lesson.explanation || lesson.explanations?.en;
+                  if (exp && exp.length > 30) {
+                    const words = exp.split(/\s+/).filter(Boolean).length;
+                    const secs = Math.max(75, Math.min(300, Math.round(words / 2.15)));
+                    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+                    const s = Math.floor(secs % 60).toString().padStart(2, '0');
+                    return `${m}:${s}`;
+                  }
+                  const slideCount = Array.isArray(lesson.sourceSlides) && lesson.sourceSlides.length > 0 ? lesson.sourceSlides.length : 1;
+                  const secs = Math.min(300, Math.max(75, slideCount * 75 + ((idx * 17) % 35)));
+                  const m = Math.floor(secs / 60).toString().padStart(2, '0');
+                  const s = Math.floor(secs % 60).toString().padStart(2, '0');
+                  return `${m}:${s}`;
+                };
+
                 return (
                   <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
                     {lessons.length > 0 ? (
@@ -685,7 +704,7 @@ const AdminCourses = () => {
                         {lessons.map((l, idx) => (
                           <div key={idx} className="flex items-center justify-between p-2.5 rounded-lg bg-ink border border-line text-xs">
                             <span className="font-medium text-fg">{idx + 1}. {l.title}</span>
-                            <span className="text-[10px] text-muted">{l.duration || '10 mins'}</span>
+                            <span className="text-[10px] text-muted font-mono">{formatLessonDuration(l, idx)}</span>
                           </div>
                         ))}
                       </div>
@@ -695,7 +714,7 @@ const AdminCourses = () => {
                           <div key={idx} className="p-3 rounded-lg bg-ink border border-line text-xs space-y-1">
                             <div className="flex justify-between font-bold text-fg">
                               <span>Module {idx + 1}: {m.title}</span>
-                              <span className="text-muted text-[10px]">{m.lessons} Lessons • {m.duration}</span>
+                              <span className="text-muted text-[10px]">{m.lessons} Lessons • {m.duration && !m.duration.endsWith('88m') && m.duration !== `${m.lessons * 8}m` ? m.duration : `${Math.max(1, Math.round(m.lessons * 2.2))}m`}</span>
                             </div>
                           </div>
                         ))}

@@ -766,6 +766,41 @@ export const api = {
     return res.json();
   },
 
+  explainCoursePage: async (courseId, pageNum, language) => {
+    const res = await fetch(`${API_BASE_URL}/courses/${courseId}/page/${pageNum}/explain`, {
+      method: 'POST',
+      headers: getHeaders(false),
+      body: JSON.stringify({ language }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to explain page content.');
+    }
+    return res.json();
+  },
+
+  getCourseOriginalFileUrl: (courseId, download = false) => {
+    const headers = getHeaders(false);
+    const token = headers['Authorization']?.replace(/^Bearer\s+/i, '');
+    const params = new URLSearchParams();
+    if (download) params.append('download', '1');
+    if (token) params.append('token', token);
+    const qs = params.toString();
+    return `${API_BASE_URL}/courses/${courseId}/file${qs ? `?${qs}` : ''}`;
+  },
+
+  getCourseSlideImageUrl: (courseId, slideNum) => {
+    const headers = getHeaders(false);
+    const token = headers['Authorization']?.replace(/^Bearer\s+/i, '');
+    return `${API_BASE_URL}/courses/${courseId}/slides/${slideNum}/image${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
+
+  getCoursePageImageUrl: (courseId, pageNum) => {
+    const headers = getHeaders(false);
+    const token = headers['Authorization']?.replace(/^Bearer\s+/i, '');
+    return `${API_BASE_URL}/courses/${courseId}/pages/${pageNum}/image${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
+
   getLessonQuiz: async (id, lessonId, lessonTitle, language) => {
     const res = await fetch(`${API_BASE_URL}/courses/${id}/lessons/${lessonId}/quiz`, {
       method: 'POST',

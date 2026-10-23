@@ -145,64 +145,52 @@ export const getSpeechLanguageCode = (language) => {
    WAKE WORDS
 ============================================================ */
 
+/**
+ * Greeting-only utterances must NEVER wake the tutor.
+ * ASR often returns "hey" alone, or mishears "hey" as heria/haria.
+ */
+const GREETING_ONLY_SET = new Set([
+  'hey', 'hi', 'hello', 'ok', 'okay', 'yo', 'hai', 'helo', 'halo',
+  'hay', 'heya', 'hiya', 'he', 'ha', 'ah', 'oh', 'um', 'uh',
+  'excuse me', 'tolong', 'boleh',
+  '嘿', '嗨', '你好', '喂',
+  'ஹே', 'ஹாய்', 'ஹலோ', 'வணக்கம்', 'ஏய்',
+  'হে', 'হেই', 'হাই', 'হ্যালো', 'নমস্কার', 'ওহে',
+  'హే', 'హాయ్', 'హలో', 'నమస్కారం', 'ఏయ్'
+]);
+
 const WAKE_WORD_PATTERNS = [
 
-  // ----------------------------------------------------------
-  // ENGLISH
-  // ----------------------------------------------------------
+  // ENGLISH — greeting + name (greeting alone is NOT enough)
+  // "area" is a common browser-ASR mishear of "ARIA"
+  /\b(?:hey|hi|hello|ok|okay|ask|yo|hay|heya|hiya)\s+(?:aria|arya|aarya|ariya|auria|oria|arria|area)\b/i,
 
-  /\b(?:hey|hi|hello|ok|okay|ask|yo)?\s*(?:aria|arya|aarya|ariya|auria|area|heria|hearia|haria|oria|arria)\b/i,
+  // ENGLISH — name alone (Siri-style), never greeting alone
+  /\b(?:aria|arya|aarya|ariya|auria|oria|arria|area)\b/i,
 
-  /\b(?:aria|arya|aarya|ariya|area|heria|hearia|haria|oria|arria)\b/i,
+  // CHINESE — name required
+  /(?:嘿|嗨|你好|喂|请问|问一下)?\s*(?:阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu,
+  /(?:嘿|嗨|你好)\s+(?:aria|arya|ariya)\b/iu,
 
-
-  // ----------------------------------------------------------
-  // CHINESE
-  // ----------------------------------------------------------
-
-  /(?:嘿|嗨|你好|喂|请问|问一下|小)?\s*(?:阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu,
-
-  /(?:嘿|嗨|你好)\s*(?:aria|arya|ariya)/iu,
-
-
-  // ----------------------------------------------------------
-  // MALAY
-  // ----------------------------------------------------------
-
+  // MALAY — greeting + name
   /\b(?:hai|helo|hello|hey)\s+(?:aria|arya|ariya)\b/i,
 
+  // TAMIL — name required
+  /(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)\s*(?:ஆரியா|ஆர்யா|அரியா)/iu,
+  /(?:ஆரியா|ஆர்யா|அரியா)/iu,
+  /(?:ஹே|ஹாய்|ஹலோ)\s+(?:aria|arya|ariya)\b/iu,
 
-  // ----------------------------------------------------------
-  // TAMIL
-  // ----------------------------------------------------------
+  // BANGLA — name required
+  /(?:হে|হেই|হাই|হ্যালো|নমস্কার|ওহে)\s*(?:আরিয়া|আরিয়া|আর্য)/iu,
+  /(?:আরিয়া|আরিয়া|আর্য)/iu,
+  /(?:হে|হাই|হ্যালো)\s+(?:aria|arya|ariya)\b/iu,
 
-  /(?:ஹே|ஹாய்|ஹலோ|வணக்கம்|ஏய்)?\s*(?:ஆரியா|ஆர்யா|அரியா)/iu,
+  // TELUGU — name required
+  /(?:హే|హాయ్|హలో|నమస్కారం|ఏయ్)\s*(?:ఆరియా|ఆర్యా|అరియా)/iu,
+  /(?:ఆరియా|ఆర్యా|అరియా)/iu,
+  /(?:హే|హాయ్|హలో)\s+(?:aria|arya|ariya)\b/iu,
 
-  /(?:ஹே|ஹாய்|ஹலோ)\s*(?:aria|arya|ariya)/iu,
-
-
-  // ----------------------------------------------------------
-  // BANGLA
-  // ----------------------------------------------------------
-
-  /(?:হে|হেই|হাই|হ্যালো|নমস্কার|ওহে)?\s*(?:আরিয়া|আরিয়া|আর্য)/iu,
-
-  /(?:হে|হাই|হ্যালো)\s*(?:aria|arya|ariya)/iu,
-
-
-  // ----------------------------------------------------------
-  // TELUGU
-  // ----------------------------------------------------------
-
-  /(?:హే|హాయ్|హలో|నమస్కారం|ఏయ్)?\s*(?:ఆరియా|ఆర్యా|అరియా)/iu,
-
-  /(?:హే|హాయ్|హలో)\s*(?:aria|arya|ariya)/iu,
-
-
-  // ----------------------------------------------------------
-  // GENERIC NATIVE SCRIPT
-  // ----------------------------------------------------------
-
+  // GENERIC native-script name alone
   /(?:आरिया|आर्या|ஆரியா|ஆர்யா|அரியா|আরিয়া|আরিয়া|আর্য|ఆరియా|ఆర్యా|అరియా|阿莉娅|阿丽娅|阿里亚|艾莉亚|艾丽娅)/iu
 ];
 
@@ -249,19 +237,16 @@ export const KNOWN_SELF_ECHO_PATTERNS = [
 
 
 const ARIA_VARIANTS_SET = new Set([
-
-  // English
+  // English — exclude heria/hearia/haria (ASR confuses these with "hey")
+  // Include "area" — Chrome ASR often hears ARIA as "area"
   'aria',
   'arya',
   'aarya',
   'ariya',
   'auria',
-  'area',
-  'heria',
-  'hearia',
-  'haria',
   'oria',
   'arria',
+  'area',
 
   // Chinese
   '阿莉娅',
@@ -326,6 +311,15 @@ export const containsWakeWord = (text, customWakeWord = null, aiName = null) => 
     return false;
   }
 
+  // Never wake on greeting-only speech ("hey", "hi", "hello", …)
+  if (GREETING_ONLY_SET.has(normalized)) {
+    return false;
+  }
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  if (tokens.length > 0 && tokens.every((t) => GREETING_ONLY_SET.has(t))) {
+    return false;
+  }
+
   // Never wake from self-echo speech
   if (
     KNOWN_SELF_ECHO_PATTERNS.some(
@@ -339,25 +333,35 @@ export const containsWakeWord = (text, customWakeWord = null, aiName = null) => 
   // Check custom AI Name and Wake Word if configured by Company Admin
   const cleanAiName = (aiName || '').trim();
   const cleanWakeWord = (customWakeWord || '').trim();
+  const nameLower = cleanAiName.toLowerCase();
 
-  if (cleanAiName && cleanAiName.toLowerCase() !== 'aria') {
+  if (cleanAiName && nameLower !== 'aria') {
     const escapedName = cleanAiName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Greeting is optional ONLY when the AI name is present afterward.
     const customPatterns = [
-      new RegExp(`\\b(?:hey|hi|hello|ok|okay|ask|yo)?\\s*${escapedName}\\b`, 'i'),
+      new RegExp(`(?:^|\\b)(?:hey|hi|hello|ok|okay|ask|yo|hay|heya|hiya)\\s+${escapedName}\\b`, 'i'),
       new RegExp(`\\b${escapedName}\\b`, 'i'),
     ];
 
     if (cleanWakeWord) {
       const escapedWake = cleanWakeWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      customPatterns.push(new RegExp(`\\b${escapedWake}\\b`, 'i'));
+      customPatterns.push(new RegExp(`(?:^|\\b)${escapedWake}\\b`, 'i'));
     }
 
     if (customPatterns.some((pattern) => pattern.test(normalized))) {
       return true;
     }
 
-    const tokens = normalized.split(/\s+/);
-    if (tokens.some((token) => token.toLowerCase() === cleanAiName.toLowerCase())) {
+    if (tokens.some((token) => token.toLowerCase() === nameLower)) {
+      return true;
+    }
+    return false;
+  }
+
+  // Full configured wake phrase (e.g. "Hey ARIA")
+  if (cleanWakeWord) {
+    const wakeNorm = normalizeTranscript(cleanWakeWord);
+    if (wakeNorm && !GREETING_ONLY_SET.has(wakeNorm) && normalized.includes(wakeNorm)) {
       return true;
     }
   }
@@ -372,13 +376,10 @@ export const containsWakeWord = (text, customWakeWord = null, aiName = null) => 
     return true;
   }
 
-  // Individual token matching
-  const tokens =
-    normalized.split(/\s+/);
-
+  // Name-token matching only (never greeting tokens)
   return tokens.some(
     (token) =>
-      ARIA_VARIANTS_SET.has(token)
+      ARIA_VARIANTS_SET.has(token) && !GREETING_ONLY_SET.has(token)
   );
 };
 
@@ -411,9 +412,9 @@ export const extractQuestionFromWakeWord = (
     );
   }
 
-  // English / Malay ARIA variants
+  // English / Malay ARIA variants (include "area" ASR mishear; exclude heria/haria)
   clean = clean.replace(
-    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria|heria|hearia|haria)\s*[,.:!?-]*/iu,
+    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria)\s*[,.:!?-]*/iu,
     ''
   );
 
@@ -501,7 +502,7 @@ export const isNoiseOrHallucination = (text) => {
     return true;
   }
 
-  // 5. 2-word phrase repetition loops (e.g. "hello dear hello dear")
+  // 5. 2-word / sentence repetition loops (Whisper ambient hallucinations)
   if (words.length >= 4 && words.length % 2 === 0) {
     const half = words.length / 2;
     const firstHalf = words.slice(0, half).join(' ');
@@ -511,33 +512,57 @@ export const isNoiseOrHallucination = (text) => {
     }
   }
 
+  // Detect repeated phrase loops after punctuation was stripped
+  // e.g. "im going to put it on the back im going to put it on the back"
+  if (words.length >= 8) {
+    for (let len = 4; len <= Math.floor(words.length / 2); len++) {
+      const phraseWords = words.slice(0, len);
+      let repeats = 1;
+      for (let i = len; i + len <= words.length; i += len) {
+        const chunk = words.slice(i, i + len);
+        if (chunk.every((w, idx) => w === phraseWords[idx])) repeats += 1;
+        else break;
+      }
+      if (repeats >= 2) return true;
+    }
+  }
+
   // 6. Common noise, hallucination, and echo prompts
-  // Single words that are only noise if uttered completely by themselves
   const singleWordNoise = new Set([
     'you', 'so', 'bye', 'goodbye', 'okay bye', 'yes', 'yeah', 'ok', 'okay',
-    'tell me', 'listening', 'im listening', 'i am listening', 'check', 'testing'
+    'hey', 'hi', 'hello', 'hai', 'helo', 'yo', 'hay', 'heya', 'hiya',
+    'tell me', 'listening', 'im listening', 'i am listening', 'check', 'testing',
+    'indian', 'close', 'thank you', 'thanks'
   ]);
 
   if (singleWordNoise.has(t)) {
     return true;
   }
 
-  // Exact hallucination phrases
   const exactHallucinations = new Set([
     'blank audio', 'blank_audio', 'silence', 'music', 'applause',
     'thank you', 'thank you for watching', 'thanks for watching', 'thanks',
+    'thank you very much', 'you are very welcome', 'youre very welcome',
     'see you in the next video', 'see you in the next one', 'see you next time', 'see you later',
     'i will see you', 'i will see you in the next', 'subtitles by', 'subscribe to',
     'subscribe', 'like and subscribe', 'translated by',
     'check check', 'check check check', 'testing testing', 'testing 1 2 3',
-    'one two three', 'hello dear hello dear', 'hello hello'
+    'one two three', 'hello dear hello dear', 'hello hello',
+    'i hope you have a nice day', 'i hope you have a nice days good good job'
   ]);
 
   if (exactHallucinations.has(t)) {
     return true;
   }
 
-  // Long exact phrases
+  // Ambient Whisper fluff that is not a course question
+  if (
+    /^(?:you are very welcome|i'?m going to put it on the (?:back|table)|i hope you have a nice day)/i.test(t) &&
+    !/\b(?:what|why|how|when|where|who|explain|mean|ppe|safety|driver|course|lesson)\b/i.test(t)
+  ) {
+    return true;
+  }
+
   return false;
 };
 
@@ -554,15 +579,15 @@ export class VoiceTutorManager {
 
       debug: true,
 
-      followUpTimeoutMs: 7000,
+      followUpTimeoutMs: 12000,
 
-      speechRmsThreshold: 14,
+      speechRmsThreshold: 20,
 
-      silenceRmsThreshold: 8,
+      silenceRmsThreshold: 12,
 
-      silenceDurationMs: 1200,
+      silenceDurationMs: 900,
 
-      maxRecordingMs: 15000,
+      maxRecordingMs: 8000,
 
       ...options
     };
@@ -605,6 +630,8 @@ export class VoiceTutorManager {
     this.isMounted = false;
 
     this.isTutorSpeaking = false;
+
+    this._tutorSpeechSessionActive = false;
 
     this.isLecturePlaying = false;
 
@@ -723,18 +750,18 @@ export class VoiceTutorManager {
     this.state =
       newState;
 
-    // Watchdog timer: If stuck in PROCESSING for more than 6 seconds, auto-recover to SLEEPING
+    // Watchdog: LLM + Whisper can take well over 6s. Only recover if truly stuck.
     if (this._processingWatchdog) {
       clearTimeout(this._processingWatchdog);
       this._processingWatchdog = null;
     }
     if (newState === TutorState.PROCESSING) {
       this._processingWatchdog = setTimeout(() => {
-        if (this.state === TutorState.PROCESSING) {
-          console.warn('[VOICE] Processing state watchdog timeout (6s). Auto-recovering to SLEEPING.');
+        if (this.state === TutorState.PROCESSING && !this.isTutorSpeaking) {
+          console.warn('[VOICE] Processing state watchdog timeout (45s). Auto-recovering to SLEEPING.');
           this.returnToSleep();
         }
-      }, 6000);
+      }, 45000);
     }
 
     this.log(
@@ -1227,52 +1254,35 @@ export class VoiceTutorManager {
           if (
             this.isRecording
           ) {
+            if (!this._recordPeakRms) this._recordPeakRms = rms;
+            if (rms > this._recordPeakRms) this._recordPeakRms = rms;
 
-            if (
-              rms >=
-              this.options.silenceRmsThreshold
-            ) {
+            // Treat as speech if above absolute floor OR above 40% of peak (cuts ambient hang)
+            const speechFloor = Math.max(
+              this.options.silenceRmsThreshold,
+              (this._recordPeakRms || 0) * 0.4
+            );
 
-              this.lastSpeechTime =
-                now;
-
+            if (rms >= speechFloor) {
+              this.lastSpeechTime = now;
             }
 
-
-            const silenceDuration =
-              now -
-              this.lastSpeechTime;
-
-
-            const totalDuration =
-              now -
-              this.recordingStartTime;
-
+            const silenceDuration = now - this.lastSpeechTime;
+            const totalDuration = now - this.recordingStartTime;
+            const maxMs = (this.recordingStateAtStart === TutorState.SLEEPING)
+              ? this.options.maxRecordingMs
+              : Math.min(this.options.maxRecordingMs, 6000);
 
             if (
-
-              (
-                silenceDuration >=
-                this.options.silenceDurationMs &&
-
-                totalDuration >= 800
-              ) ||
-
-              totalDuration >=
-              this.options.maxRecordingMs
-
+              (silenceDuration >= this.options.silenceDurationMs && totalDuration >= 700) ||
+              totalDuration >= maxMs
             ) {
-
               this.log(
                 LogCategory.VAD_END,
                 `User speech ended (${totalDuration}ms)`
               );
-
-
               this.stopMediaRecording();
-
             }
-
 
             return;
           }
@@ -1299,8 +1309,10 @@ export class VoiceTutorManager {
             }
             if (rms >= this.options.speechRmsThreshold) {
               this.speechFramesCount += 1;
+              // Sleeping (wake) needs stronger sustained speech to avoid ambient triggers
+              const framesNeeded = this.state === TutorState.SLEEPING ? 5 : 3;
 
-              if (this.speechFramesCount >= 2) {
+              if (this.speechFramesCount >= framesNeeded) {
                 this.speechFramesCount = 0;
                 this.log(
                   LogCategory.VAD_START,
@@ -1340,7 +1352,7 @@ export class VoiceTutorManager {
     }
 
     this.recordingStateAtStart = this.state;
-
+    this._recordPeakRms = 0;
 
     try {
 
@@ -1414,31 +1426,25 @@ export class VoiceTutorManager {
           this.isRecording =
             false;
 
+          if (this._skipNextAudioCapture) {
+            this._skipNextAudioCapture = false;
+            this.audioChunks = [];
+            return;
+          }
 
           /*
            * Never submit audio recorded
            * during ARIA speech.
            */
 
-          if (
-
-            this.isTutorSpeaking ||
-
-            Date.now() <
-            this.ttsMutedUntil
-
-          ) {
-
+          // Only discard if tutor is still speaking. Do NOT use ttsMutedUntil here —
+          // that gate was dropping the user's first question right after "Yes, I'm listening."
+          if (this.isTutorSpeaking) {
             this.log(
               LogCategory.ECHO_REJECTED,
               'Discarding recording because ARIA is speaking'
             );
-
-
-            this.audioChunks =
-              [];
-
-
+            this.audioChunks = [];
             return;
           }
 
@@ -1573,24 +1579,22 @@ export class VoiceTutorManager {
      STOP RECORDING
   ========================================================== */
 
-  stopMediaRecording() {
+  stopMediaRecording(options = {}) {
+    if (options.skipCapture) {
+      this._skipNextAudioCapture = true;
+      this.audioChunks = [];
+    }
 
-    this.isRecording =
-      false;
-
+    this.isRecording = false;
 
     if (
       this.mediaRecorder &&
       this.mediaRecorder.state ===
       'recording'
     ) {
-
       try {
-
         this.mediaRecorder.stop();
-
       } catch (error) {
-
         console.warn(
           '[VOICE] Error stopping recorder:',
           error
@@ -2104,6 +2108,14 @@ export class VoiceTutorManager {
       this.state === TutorState.SLEEPING
     ) {
       if (containsWakeWord(text, this.wakeWord, this.aiName)) {
+        if (this.isEchoOfRecentAria(text)) {
+          this.log(
+            LogCategory.ECHO_REJECT,
+            `Suppressed wake from lecture echo: "${text}"`
+          );
+          return;
+        }
+
         this.log(
           LogCategory.WAKE_MATCH,
           `🔥 COURSE INTERRUPTION WAKE (${this.langCode}): "${text}"`
@@ -2580,6 +2592,13 @@ export class VoiceTutorManager {
 
     this.clearFollowUpTimeout();
 
+    // Browser ASR got the question — stop Whisper recording so empty
+    // whisper results cannot force us back to sleep.
+    if (this.isRecording) {
+      try {
+        this.stopMediaRecording({ skipCapture: true });
+      } catch (e) { }
+    }
 
     this.setState(
       TutorState.PROCESSING
@@ -2629,6 +2648,8 @@ export class VoiceTutorManager {
 
 
     if (speaking) {
+      // Mark a real tutor speech session so TTS_END can open follow-up safely
+      this._tutorSpeechSessionActive = true;
 
       if (
         this.cooldownTimeoutId
@@ -2647,17 +2668,16 @@ export class VoiceTutorManager {
 
       this.clearBuffers();
 
+      if (
+        this.state !== TutorState.ARIA_GREETING &&
+        this.state !== TutorState.ARIA_SPEAKING
+      ) {
+        this.setState(TutorState.ARIA_SPEAKING);
+      }
 
       /*
        * STOP wake recognition while ARIA is answering.
-       *
-       * This protects against ARIA echo.
-       *
-       * IMPORTANT:
-       *
-       * Course lecture should use setLecturePlaying()
-       * and should NOT use setTutorSpeaking() as its
-       * wake-listener gate.
+       * Course lecture should use setLecturePlaying() instead.
        */
 
       if (
@@ -2674,10 +2694,6 @@ export class VoiceTutorManager {
         } catch (e) { }
       }
 
-
-      /*
-       * Store ARIA speech for echo protection.
-       */
 
       if (
         spokenText
@@ -2712,15 +2728,13 @@ export class VoiceTutorManager {
 
     } else {
 
-      /*
-       * TTS finished.
-       */
-
       this.log(
         LogCategory.TTS_END,
         'ARIA speaking ended'
       );
 
+      const hadSpeechSession = Boolean(this._tutorSpeechSessionActive);
+      this._tutorSpeechSessionActive = false;
 
       this.ttsMutedUntil =
         Date.now() +
@@ -2739,59 +2753,44 @@ export class VoiceTutorManager {
         );
       }
 
+      // Stray TTS_END without a matching speak() must NOT open follow-up
+      // (that was the SLEEPING -> FOLLOW_UP ambient-noise bug).
+      if (!hadSpeechSession) {
+        return;
+      }
+
 
       this.cooldownTimeoutId =
         setTimeout(() => {
 
           this.clearBuffers();
 
-
-          /*
-           * Greeting finished.
-           */
-
           if (
-            this.state ===
-            TutorState.ARIA_GREETING
+            this.state === TutorState.SLEEPING ||
+            this.state === TutorState.RETURN_TO_SLEEP ||
+            this.state === TutorState.ERROR
           ) {
-
-            this.setState(
-              TutorState.ACTIVE_LISTENING
-            );
-
+            return;
           }
 
-          /*
-           * Answer finished.
-           */
+          // Clear post-TTS mute so the first question is not discarded
+          this.ttsMutedUntil = 0;
 
-          else {
-
-            this.setState(
-              TutorState.FOLLOW_UP_LISTENING
-            );
+          if (this.state === TutorState.ARIA_GREETING) {
+            this.setState(TutorState.ACTIVE_LISTENING);
+          } else {
+            this.setState(TutorState.FOLLOW_UP_LISTENING);
           }
-
-
           this.resetFollowUpTimeout();
-
-
-          /*
-           * Recreate recognition after ARIA speech.
-           */
 
           if (
             this.isMounted &&
             !this.isTutorSpeaking
           ) {
-
-            this.restartSpeechRecognition(
-              true
-            );
-
+            this.restartSpeechRecognition(true);
           }
 
-        }, 1800);
+        }, 600);
     }
   }
 
