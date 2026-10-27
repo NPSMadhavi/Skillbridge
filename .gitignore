@@ -36,6 +36,8 @@ Backend/uploads/
 dist/
 dist-ssr/
 build/
+prisma/generated/
+Backend/prisma/generated/
 
 # Logs
 logs/

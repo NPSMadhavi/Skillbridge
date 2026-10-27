@@ -1543,9 +1543,38 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Message is required.' });
     }
 
+    // Resolve dynamic assistant name for the current tenant or request
+    let aiTutorName = (req.body.aiName || req.body.assistantName || '').trim();
+    if (!aiTutorName) {
+      try {
+        const rows = await masterPrisma.$queryRawUnsafe(
+          `SELECT "aiName" FROM "Company" WHERE "code" = $1 LIMIT 1`,
+          req.tenantCode || 'default'
+        ).catch(() => []);
+        aiTutorName = (rows[0]?.aiName || 'ARIA').trim();
+      } catch (_) {
+        aiTutorName = 'ARIA';
+      }
+    }
+    if (!aiTutorName) aiTutorName = 'ARIA';
+
     const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
     const targetLanguage = targetLangInfo.name;
-    console.log(`[RAG Chat Query] Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
+    console.log(`[RAG Chat Query] Assistant: "${aiTutorName}", Target Language: "${targetLanguage}" (${targetLangInfo.code}), Query: "${message}" (Course ID: ${course.id}${currentConcept ? `, Concept: "${currentConcept.slice(0, 40)}..."` : ''})`);
+
+    // Handle direct assistant identity / name query
+    const isIdentityQuestion = /^(what('?s| is) your name|who are you|what should i call you|tell me your name|introduce yourself|who are u)/i.test(
+      message.replace(/[?!.]/g, '').trim()
+    );
+    if (isIdentityQuestion) {
+      const intro = `I am ${aiTutorName}, your AI voice tutor for this course. How can I help you understand this lesson?`;
+      return res.json({
+        reply: intro,
+        text: intro,
+        assistantName: aiTutorName,
+        language: targetLangInfo
+      });
+    }
 
     const normalizeForEcho = (value) => String(value || '')
       .toLowerCase()
@@ -1605,23 +1634,24 @@ router.post('/:id/chat', authenticateToken, async (req, res) => {
     }
     const hasCourseContext = !!(contextText && contextText.trim());
 
-    const systemPrompt = `You are ARIA, a patient and accurate AI Tutor for SkillBridge.
+    const systemPrompt = `You are ${aiTutorName}, a patient and accurate AI Tutor for SkillBridge.
 You explain concepts clearly, use appropriate examples, and adapt explanations to the learner's level.
 You are actively teaching the course: "${course.title}" (Current Lesson: "${lessonTitle || 'Overview'}").
 ${currentConcept ? `The student is currently viewing / listening to this lesson concept: "${currentConcept}".` : ''}
 Selected Teaching Language: ${targetLanguage}.
+Your name is strictly ${aiTutorName}. If asked who you are or what your name is, state that you are ${aiTutorName}.
 
 CRITICAL CONCISE & UNDERSTANDABLE TUTORING RULES:
-0. ANSWER THE STUDENT QUESTION ONLY: Reply to the text after "Student Question:". Do not repeat, continue, or narrate the Active Lesson Concept or retrieved course context unless the student asked for that. If the student question is missing, is the same as the lesson script, or is not a real question, say you did not catch the question and ask them to ask again in one short sentence.
+0. ANSWER THE STUDENT QUESTION DIRECTLY: Address the user's question with helpful, accurate information. Speech-to-text or typed inputs may contain minor typos, informal phrasing, or grammatical slips (e.g., "is prime mover dialy" means daily inspection; "What is speed limits?" means asking about speed limits). Intelligently interpret their intent and explain the answer clearly. Never dismiss or reject the question as invalid; always provide a helpful explanation.
 1. SHORT & DIRECT (MAX 2-3 SENTENCES): Keep your answer SHORT, CONCISE, and TO THE POINT. Deliver at most 2 to 3 clear, conversational sentences (around 35-60 words). Never output long essays, large lists of bullet points, or multiple paragraphs.
 2. SIMPLE & INTUITIVE: Explain the concept in plain, simple, easily digestible words that any beginner can understand immediately.
 3. VOICE & AUDIO FRIENDLY: Your answer will be spoken aloud to the student in real-time via text-to-speech. Short and clear answers allow the student to quickly understand without lengthy interruptions to their lesson.
 4. TARGET TEACHING LANGUAGE: Generate your ENTIRE answer in ${targetLanguage} only (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা), Telugu (తెలుగు)). Do not mix languages.
 5. CROSS-LINGUAL UNDERSTANDING: If the student asks in English or another language, understand the intent and respond fluently in ${targetLanguage}. If course excerpts are in another language, translate the answer into ${targetLanguage}.
 6. TECHNICAL TERMS: Keep essential technical keywords (e.g. React, API, Database, State, Function, Loop, Component) in their standard form alongside the explanation in ${targetLanguage}.
-7. GROUNDING: When retrieved course material is provided, base your explanation on that context and the current lesson. Do not replace document-grounded answers with unrelated generic answers.
-8. SOURCE HONESTY: If the available course material does not contain enough information to answer accurately, say so clearly and give a brief general explanation without inventing source-specific facts, slide numbers, or document details.
-9. FRIENDLY TONE: Warm, natural, direct, and encouraging.
+7. GROUNDING & DOMAIN KNOWLEDGE: Use the provided course excerpts and active lesson concept when relevant. If the question asks about a general concept related to the field (e.g., speed limits, road rules, vehicle safety, maintenance), provide an accurate educational answer based on standard industry knowledge.
+8. SOURCE HONESTY: If the available course material does not contain specific details, give a clear, accurate explanation using standard domain knowledge without inventing fictional document slide numbers.
+9. FRIENDLY TONE: Warm, natural, supportive, and direct.
 ${hasCourseContext ? 'Relevant course excerpts are included in the student message. Use them when they apply.' : 'No matching course excerpts were retrieved for this question. Do not invent course-document facts.'}`;
 
     const userPrompt = `${hasCourseContext ? `Retrieved Course Context:\n${contextText}\n\n` : 'Retrieved Course Context: [none]\n\n'}${currentConcept ? `Active Lesson Concept:\n${currentConcept}\n\n` : ''}Student Question:\n${message}\n\nSelected Response Language:\n${targetLanguage}`;

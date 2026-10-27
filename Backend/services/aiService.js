@@ -67,7 +67,7 @@ class AIService {
    * single `message` string required by the Veda gateway (not an OpenAI messages array).
    */
   _buildGatewayMessage(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
-    const MAX_TOTAL_CHARS = 24000;
+    const MAX_TOTAL_CHARS = 18000;
     const MAX_HISTORY_ITEM_CHARS = 600;
     const sections = [];
 
@@ -163,11 +163,73 @@ class AIService {
   }
 
   /**
-   * Sends a single constructed tutor/curriculum prompt to the self-hosted Veda gateway.
-   * POST ${SKILLBRIDGE_LLM_GATEWAY_URL}/chat  { "message": "..." }
-   * Seamlessly falls back to OpenAI if the local gateway is slow, timed out, or unavailable.
+   * Calls local Ollama running Qwen (e.g. qwen2.5, qwen, or custom model).
+   * POST ${OLLAMA_BASE_URL}/api/chat
+   */
+  async _callOllama(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+    const ollamaBaseUrl = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/+$/, '');
+    const model = (process.env.OLLAMA_MODEL || 'qwen2.5:latest').trim();
+
+    const messages = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    if (Array.isArray(conversationHistory)) {
+      for (const item of conversationHistory.slice(-8)) {
+        const isUser = item.role === 'user' || item.sender === 'user';
+        const content = item.content || item.text || '';
+        if (content && typeof content === 'string') {
+          messages.push({ role: isUser ? 'user' : 'assistant', content: content.trim() });
+        }
+      }
+    }
+    if (userPrompt) {
+      messages.push({ role: 'user', content: userPrompt.trim() });
+    }
+
+    const payload = {
+      model,
+      messages,
+      stream: false,
+      options: {
+        temperature: 0.3
+      }
+    };
+    if (jsonMode) {
+      payload.format = 'json';
+    }
+
+    const resp = await axios.post(`${ollamaBaseUrl}/api/chat`, payload, {
+      timeout: jsonMode ? 60000 : 25000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    const reply = resp.data?.message?.content;
+    if (typeof reply === 'string' && reply.trim()) {
+      console.log(`[AIService] Successfully generated response via Ollama Qwen (${model}).`);
+      return reply.trim();
+    }
+    return null;
+  }
+
+  /**
+   * Sends a prompt to the LLM backend with a robust tiered priority:
+   * 1. Local Ollama (Qwen) if running
+   * 2. Self-hosted Veda / Qwen LLM Gateway (SKILLBRIDGE_LLM_GATEWAY_URL)
+   * 3. Cloud OpenAI API fallback (OPENAI_API_KEY)
    */
   async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+    // 1. Try local Ollama (Qwen) if available
+    try {
+      const ollamaResult = await this._callOllama(systemPrompt, userPrompt, jsonMode, conversationHistory);
+      if (ollamaResult) {
+        return ollamaResult;
+      }
+    } catch (_) {
+      // Ollama not reachable; gracefully proceed to next provider
+    }
+
+    // 2. Try Self-hosted LLM Gateway
     let gatewayUrl;
     try {
       gatewayUrl = this.getGatewayBaseUrl();
@@ -193,7 +255,7 @@ class AIService {
       }
     }
 
-    // Automatic fallback to OpenAI if configured
+    // 3. Automatic fallback to OpenAI if configured
     try {
       const fallbackResult = await this._callOpenAIFallback(systemPrompt, userPrompt, jsonMode, conversationHistory);
       if (fallbackResult) {
@@ -204,6 +266,60 @@ class AIService {
     }
 
     throw this._gatewayUnavailableError(503);
+  }
+
+  /**
+   * Generates a voice-optimized assistant response for arbitrary questions,
+   * dynamically adopting the configured assistant name.
+   */
+  async askAssistant({ question, assistantName = 'ARIA', language = 'en', context = '', conversationHistory = [] }) {
+    const cleanQuestion = String(question || '').trim();
+    const cleanName = String(assistantName || 'ARIA').trim();
+
+    if (!cleanQuestion) {
+      return {
+        answer: `I'm listening. Please ask your question.`,
+        text: `I'm listening. Please ask your question.`,
+        assistantName: cleanName
+      };
+    }
+
+    // Check for direct identity questions (e.g. "What is your name?", "Who are you?")
+    const isIdentityQuestion = /^(what('?s| is) your name|who are you|what do i call you|what should i call you|tell me your name|introduce yourself|who are u)/i.test(
+      cleanQuestion.replace(/[?!.]/g, '').trim()
+    );
+
+    if (isIdentityQuestion) {
+      const intro = `I am ${cleanName}, your personal AI voice assistant. How can I help you today?`;
+      return {
+        answer: intro,
+        text: intro,
+        assistantName: cleanName
+      };
+    }
+
+    const systemPrompt = `You are ${cleanName}, a knowledgeable, patient, and friendly AI voice assistant.
+CRITICAL VOICE INTERACTION RULES:
+1. Speak concisely in 2 to 3 natural, clear sentences (around 30 to 55 words).
+2. Answer the question directly and accurately. Avoid fluff, filler, markdown formatting, or lengthy lists.
+3. Your answer will be spoken aloud via text-to-speech, so make it audio-friendly and conversational.
+4. Your name is strictly ${cleanName}. If the user asks about your identity or name, state that you are ${cleanName}. Do not claim to be any other AI.
+5. Do not repeat your name in every sentence. Only mention your name if explicitly asked.
+${context ? `Relevant context: ${context.slice(0, 3000)}` : ''}`;
+
+    const userPrompt = `User Question: ${cleanQuestion}`;
+
+    const rawReply = await this._callLLM(systemPrompt, userPrompt, false, conversationHistory);
+    const cleanReply = String(rawReply || '')
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/[*#_~`]/g, '')
+      .trim();
+
+    return {
+      answer: cleanReply,
+      text: cleanReply,
+      assistantName: cleanName
+    };
   }
 
   /**

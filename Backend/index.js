@@ -10,6 +10,8 @@ import adminRoutes from './routes/admin.js';
 import coursesRoutes from './routes/courses.js';
 import ttsRoutes from './routes/tts.js';
 import superAdminRoutes from './routes/superAdmin.js';
+import assistantRoutes from './routes/assistantRoutes.js';
+import voiceRoutes from './routes/voiceRoutes.js';
 import { resolveTenant } from './middleware/tenantMiddleware.js';
 import prisma from './config/prisma.js';
 import masterPrisma from './config/masterPrisma.js';
@@ -93,6 +95,12 @@ app.use('/api/v1/auth', resolveTenant, authRoutes);
 app.use('/api/v1/admin', resolveTenant, adminRoutes);
 app.use('/api/v1/courses', resolveTenant, coursesRoutes);
 app.use('/api/v1/tts', ttsRoutes);
+
+// Dynamic Voice Assistant & Dynamic Wake-Word APIs
+app.use('/api/v1/assistant', resolveTenant, assistantRoutes);
+app.use('/api/assistant', resolveTenant, assistantRoutes);
+app.use('/api/v1/voice', resolveTenant, voiceRoutes);
+app.use('/api/voice', resolveTenant, voiceRoutes);
 
 // ============================================================
 // HEALTH CHECK

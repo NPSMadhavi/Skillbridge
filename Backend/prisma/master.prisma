@@ -5,7 +5,7 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../node_modules/@prisma/master-client"
+  output   = "./generated/master-client"
 }
 
 model SuperAdmin {

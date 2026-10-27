@@ -898,4 +898,80 @@ export const api = {
     if (voice) params.append('voice', voice);
     return `${API_BASE_URL}/tts/synthesize?${params.toString()}`;
   },
+
+  // Dynamic Assistant Name & Voice Settings
+  getAssistantSettings: async () => {
+    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch assistant settings.');
+    }
+    return res.json();
+  },
+
+  getAiSettings: async () => {
+    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch assistant settings.');
+    }
+    return res.json();
+  },
+
+  getCompanyAiSettings: async () => {
+    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
+      method: 'GET',
+      headers: getHeaders(false),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch assistant settings.');
+    }
+    return res.json();
+  },
+
+  updateAssistantSettings: async (settings) => {
+    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
+      method: 'PUT',
+      headers: getHeaders(false),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update assistant settings.');
+    }
+    return res.json();
+  },
+
+  updateAiSettings: async (settings) => {
+    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
+      method: 'PUT',
+      headers: getHeaders(false),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to update assistant settings.');
+    }
+    return res.json();
+  },
+
+  askVoiceAssistant: async (payload) => {
+    const res = await fetch(`${API_BASE_URL}/voice/ask`, {
+      method: 'POST',
+      headers: getHeaders(false),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to get answer from voice assistant.');
+    }
+    return res.json();
+  },
 };

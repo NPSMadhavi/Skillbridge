@@ -3,18 +3,24 @@ dotenv.config();
 
 let PrismaClient;
 try {
-  // 1. Direct path within Backend node_modules (most reliable in ESM)
-  const masterModule = await import('../node_modules/@prisma/master-client/index.js');
+  // 1. Direct path to custom generated master client
+  const masterModule = await import('../prisma/generated/master-client/index.js');
   PrismaClient = masterModule.PrismaClient;
-} catch (e1) {
+} catch (e0) {
   try {
-    // 2. Package-specifier fallback
-    const masterModule = await import('@prisma/master-client');
+    // 2. Direct path within Backend node_modules (fallback)
+    const masterModule = await import('../node_modules/@prisma/master-client/index.js');
     PrismaClient = masterModule.PrismaClient;
-  } catch (e2) {
-    console.warn('[MasterPrisma] Warning: @prisma/master-client not found, falling back to default PrismaClient:', e2.message);
-    const defaultModule = await import('@prisma/client');
-    PrismaClient = defaultModule.PrismaClient;
+  } catch (e1) {
+    try {
+      // 3. Package-specifier fallback
+      const masterModule = await import('@prisma/master-client');
+      PrismaClient = masterModule.PrismaClient;
+    } catch (e2) {
+      console.warn('[MasterPrisma] Warning: master-client not found, falling back to default PrismaClient:', e2.message);
+      const defaultModule = await import('@prisma/client');
+      PrismaClient = defaultModule.PrismaClient;
+    }
   }
 }
 

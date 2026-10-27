@@ -398,6 +398,24 @@ export default function AdminAiSettings() {
                 onChange={(e) => handleAiNameChange(e.target.value)}
                 className="w-full rounded-lg border border-line bg-ink/50 px-3 py-2 text-xs font-medium text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel focus:border-navy focus:shadow-[0_0_0_2px_rgba(14,47,92,0.08)]"
               />
+              {/* Supported AI Tutor Name */}
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[10px] text-muted">Supported:</span>
+                {['ARIA'].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => handleSelectSuggested(preset)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                      aiName.toLowerCase() === preset.toLowerCase()
+                        ? 'bg-navy text-white shadow-2xs'
+                        : 'bg-ink border border-line text-fg hover:bg-slate-200'
+                    }`}
+                  >
+                    {preset} (Official Tutor)
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Wake Word Input & Live Mic Action */}

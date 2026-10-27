@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { api } from '../services/api'
-import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWakeWord, isNoiseOrHallucination } from '../services/voiceTutorService'
+import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWakeWord, isNoiseOrHallucination, isDanglingFragment } from '../services/voiceTutorService'
 import logo from '../assets/SkillBridge_AI.png'
 import { persistLanguageSelection, readStoredLanguageCode, textMatchesLanguage } from '../utils/language'
 import { cleanUnsupportedWords, cleanForSpeech as cleanSpeechUtil } from '../utils/textCleaner'
@@ -503,6 +503,51 @@ const CoursePlayer = ({
     rate: 0.95,
     pitch: 1.0
   })
+
+  // Dynamic Assistant Name & Wake-Word Configuration Modal State
+  const [showAiConfigModal, setShowAiConfigModal] = useState(false)
+  const [tempAiName, setTempAiName] = useState('')
+  const [tempWakeWord, setTempWakeWord] = useState('')
+  const [isSavingAiConfig, setIsSavingAiConfig] = useState(false)
+
+  const openAiConfigModal = () => {
+    setTempAiName(aiTutorName)
+    setTempWakeWord(aiWakeWord)
+    setShowAiConfigModal(true)
+  }
+
+  const handleSaveAiConfig = async (e) => {
+    e?.preventDefault?.()
+    const cleanName = (tempAiName || '').trim() || 'ARIA'
+    const cleanWake = (tempWakeWord || '').trim() || `Hey ${cleanName}`
+    setIsSavingAiConfig(true)
+    try {
+      await api.updateAssistantSettings({
+        assistantName: cleanName,
+        aiName: cleanName,
+        wakeWord: cleanWake
+      })
+      setAiTutorName(cleanName)
+      setAiWakeWord(cleanWake)
+      if (voiceManagerRef.current) {
+        voiceManagerRef.current.aiName = cleanName
+        voiceManagerRef.current.wakeWord = cleanWake
+        voiceManagerRef.current.options = {
+          ...voiceManagerRef.current.options,
+          aiName: cleanName,
+          wakeWord: cleanWake
+        }
+      }
+      setShowAiConfigModal(false)
+      setVoiceStatusText(`✨ Assistant renamed to "${cleanName}". Say "${cleanWake}" to activate!`)
+      speakAriaAnswer(`Hello! I am now ${cleanName}. You can call me anytime by saying "${cleanWake}".`)
+    } catch (err) {
+      console.error('Failed to update assistant name:', err)
+      alert('Failed to update assistant name: ' + (err.message || 'Unknown error'))
+    } finally {
+      setIsSavingAiConfig(false)
+    }
+  }
 
   // Fetch company AI Tutor and custom wake word configuration
   useEffect(() => {
@@ -1048,6 +1093,24 @@ const CoursePlayer = ({
       }
     );
   };
+
+  const handleAvatarCall = () => {
+    console.log(`[VOICE] AI Avatar clicked to call ${aiTutorName}`);
+    // If audioContext was suspended due to browser autoplay policy, resume it with this user gesture
+    try {
+      if (voiceManagerRef.current?.audioContext?.state === 'suspended') {
+        voiceManagerRef.current.audioContext.resume().catch(() => {});
+      }
+    } catch (e) { }
+
+    // Ensure handsFreeVoice is active
+    if (!handsFreeVoice) {
+      setHandsFreeVoice(true);
+    }
+
+    interruptLectureAndWake();
+  };
+
   const isLectureEcho = (text) => {
     if (!text) return false
     if (voiceManagerRef.current?.isTranscriptSelfEcho?.(text)) return true
@@ -1095,14 +1158,16 @@ const CoursePlayer = ({
       return
     }
 
-    // Extra safeguard: discard any audio that is an echo of ARIA's greeting or self-utterance
+    // Extra safeguard: discard any audio that is an echo of the assistant's greeting or self-utterance
     const norm = rawSpeech.toLowerCase().replace(/[.,/#!$%^&*;:{}=\-_`~()?'"“”‘’]/g, ' ').replace(/\s+/g, ' ').trim()
+    const lowerName = (aiTutorName || 'aria').toLowerCase().trim()
     const selfEchoPhrases = [
       'yes tell me im listening', 'yes tell me i am listening', 'yes tell me',
       'im listening', 'i am listening', 'tell me', 'listening', 'yes', 'yeah',
       'yes im listening', 'yes i am listening',
       'continuing to the course', 'continuing to course', 'resuming course', 'resuming lecture',
-      'hello i am aria', 'i am aria', 'i am aria your personal ai tutor',
+      `hello i am ${lowerName}`, `i am ${lowerName}`, `i am ${lowerName} your personal ai tutor`,
+      `hello i am aria`, `i am aria`, `i am aria your personal ai tutor`,
       'i didnt catch your question can you ask again', 'i didnt catch your question',
       'didnt catch your question', 'can you ask again', 'please ask again',
       'i did not catch a question please ask me something about this lesson',
@@ -1158,6 +1223,14 @@ const CoursePlayer = ({
       return
     }
 
+    if (isDanglingFragment(cleanQuestion)) {
+      console.log(`[VOICE:REJECT] Incomplete dangling fragment rejected in handleVoiceQuestion: "${cleanQuestion}"`)
+      voiceManagerRef.current?.setState(TutorState.ACTIVE_LISTENING)
+      voiceManagerRef.current?.resetFollowUpTimeout()
+      setVoiceStatusText('👂 Still listening… please finish your question')
+      return
+    }
+
     // Require substance: questions must have at least 2 distinct words or a direct inquiry word
     const cleanWords = cleanQuestion.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean)
     const cleanUnique = new Set(cleanWords)
@@ -1198,7 +1271,7 @@ const CoursePlayer = ({
     setVoiceStatusText(`✨ Question: "${cleanQuestion}"`)
     setChatMessages((prev) => [...prev, { sender: 'user', text: cleanQuestion }])
     setChatLoading(true)
-    console.log(`[VOICE:LLM_REQUEST] Sending question to ARIA AI Tutor: "${cleanQuestion}" (Concept: "${currentConceptText.slice(0, 40)}...", Lang: ${preferredLanguage})`)
+    console.log(`[VOICE:LLM_REQUEST] Sending question to ${aiTutorName} AI Tutor: "${cleanQuestion}" (Concept: "${currentConceptText.slice(0, 40)}...", Lang: ${preferredLanguage})`)
 
     try {
       const historyToSend = (chatMessagesRef.current || []).slice(-8)
@@ -1207,11 +1280,12 @@ const CoursePlayer = ({
         lessonTitle: activeLessonRef.current?.title,
         currentConcept: currentConceptText,
         language: selectedLanguageCode,
-        conversationHistory: historyToSend
+        conversationHistory: historyToSend,
+        aiName: aiTutorName
       })
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
       setChatMessages((prev) => [...prev, { sender: 'aria', text: ariaAnswer }])
-      setVoiceStatusText('🤖 ARIA is explaining...')
+      setVoiceStatusText(`🤖 ${aiTutorName} is explaining...`)
       console.log(`[VOICE] AI response received: "${ariaAnswer.substring(0, 60)}..."`)
 
       voiceManagerRef.current?.setState(TutorState.ARIA_SPEAKING)
@@ -1274,6 +1348,20 @@ const CoursePlayer = ({
       onWakeWordDetected: (wakePhrase) => {
         console.log(`[VOICE:WAKE_MATCH] Wake phrase received: "${wakePhrase}". Transitioning to greeting...`)
         interruptLectureAndWake()
+        const cleanQuestion = extractQuestionFromWakeWord(wakePhrase, aiWakeWord, aiTutorName)
+        const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
+        if (
+          cleanQuestion &&
+          wordCount >= 3 &&
+          !isDanglingFragment(cleanQuestion) &&
+          !isNoiseOrHallucination(cleanQuestion) &&
+          !isLectureEcho(cleanQuestion)
+        ) {
+          console.log(`[VOICE] Web Speech wake phrase included complete question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
+          setTimeout(() => {
+            handleVoiceQuestion(cleanQuestion)
+          }, 1600)
+        }
       },
       onAudioCaptured: async (audioBlob, context = {}) => {
         if (isTranscribingRef.current) return
@@ -1313,7 +1401,14 @@ const CoursePlayer = ({
             if (containsWakeWord(transcription, aiWakeWord, aiTutorName) && playingRef.current) {
               interruptLectureAndWake()
               const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
-              if (cleanQuestion && cleanQuestion.length >= 2 && !isNoiseOrHallucination(cleanQuestion) && !isLectureEcho(cleanQuestion)) {
+              const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
+              if (
+                cleanQuestion &&
+                wordCount >= 3 &&
+                !isDanglingFragment(cleanQuestion) &&
+                !isNoiseOrHallucination(cleanQuestion) &&
+                !isLectureEcho(cleanQuestion)
+              ) {
                 setTimeout(() => handleVoiceQuestion(cleanQuestion), 1600)
               }
             } else {
@@ -1331,8 +1426,15 @@ const CoursePlayer = ({
               interruptLectureAndWake()
 
               const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
-              if (cleanQuestion && cleanQuestion.length >= 3 && !isNoiseOrHallucination(cleanQuestion) && !isLectureEcho(cleanQuestion)) {
-                console.log(`[VOICE] Wake phrase included question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
+              const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
+              if (
+                cleanQuestion &&
+                wordCount >= 3 &&
+                !isDanglingFragment(cleanQuestion) &&
+                !isNoiseOrHallucination(cleanQuestion) &&
+                !isLectureEcho(cleanQuestion)
+              ) {
+                console.log(`[VOICE] Wake phrase included complete question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
                 setTimeout(() => {
                   handleVoiceQuestion(cleanQuestion)
                 }, 1600)
@@ -1346,10 +1448,24 @@ const CoursePlayer = ({
             return
           }
 
-          // Final noise gate before LLM — reject ambient Whisper loops
+          // Final noise gate before LLM — reject ambient Whisper loops or dangling fragments
           if (isNoiseOrHallucination(transcription)) {
             console.log(`[VOICE:REJECT] Hallucination/noise rejected before LLM: "${transcription.slice(0, 80)}"`)
             if (manager.state === TutorState.PROCESSING) manager.returnToSleep()
+            return
+          }
+
+          if (isDanglingFragment(transcription)) {
+            console.log(`[VOICE:INCOMPLETE] Audio transcription is a dangling fragment: "${transcription}". Re-listening for continuation...`)
+            if (
+              manager.state === TutorState.PROCESSING ||
+              manager.state === TutorState.ACTIVE_LISTENING ||
+              manager.state === TutorState.FOLLOW_UP_LISTENING
+            ) {
+              manager.setState(TutorState.ACTIVE_LISTENING)
+              manager.resetFollowUpTimeout()
+              setVoiceStatusText('👂 Still listening… please continue your question')
+            }
             return
           }
 
@@ -1459,7 +1575,7 @@ const CoursePlayer = ({
       setPlaying(false)
     }
 
-    setVoiceStatusText('🎙️ Listening... Speak your question to ARIA')
+    setVoiceStatusText(`🎙️ Listening... Speak your question to ${aiTutorName}`)
     manualRecordingRef.current = true
     vadStateRef.current = 'RECORDING'
 
@@ -2250,18 +2366,19 @@ const CoursePlayer = ({
       lessonTitle: activeLessonRef.current?.title,
       currentConcept: currentConceptText,
       language: selectedLanguageCode,
-      conversationHistory: chatMessages.slice(-8)
+      conversationHistory: chatMessages.slice(-8),
+      aiName: aiTutorName
     })
       .then(res => {
         const ariaAnswer = res.text || res.reply || "I'm ready to help with your course questions!"
         setChatMessages(prev => [...prev, { sender: 'aria', text: ariaAnswer }])
-        setVoiceStatusText('🤖 ARIA is answering...')
+        setVoiceStatusText(`🤖 ${aiTutorName} is answering...`)
         speakAriaAnswer(ariaAnswer, () => {
           if (handsFreeVoiceRef.current) {
             isAwakeRef.current = true
             inConversationModeRef.current = true
             voiceManagerRef.current?.setState?.(TutorState.FOLLOW_UP_LISTENING)
-            setVoiceStatusText('💬 ARIA is listening for follow-up (or say "Resume")...')
+            setVoiceStatusText(`💬 ${aiTutorName} is listening for follow-up (or say "Resume")...`)
             followUpTimerRef.current = setTimeout(() => {
               voiceManagerRef.current?.returnToSleep?.()
               resumeLectureFromExactPosition()
@@ -2378,8 +2495,22 @@ const CoursePlayer = ({
           <span className="text-base">←</span> Back
         </button>
 
-        {/* Multilingual Teaching Language Switcher */}
+        {/* Assistant Name Switcher & Multilingual Teaching Language Switcher */}
         <div className="flex items-center gap-2">
+          {/* Quick Assistant Name & Wake Word Pill Button */}
+          <button
+            type="button"
+            onClick={openAiConfigModal}
+            className="flex items-center gap-1.5 bg-white border border-slate-200/90 hover:border-[#ff8c21] rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 shadow-2xs transition cursor-pointer hover:bg-orange-50/40"
+            title="Configure Assistant Name and Wake Word"
+          >
+            <span className="text-sm">🤖</span>
+            <span className="font-bold text-[#ff8c21]">{aiTutorName}</span>
+            <span className="hidden sm:inline text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-medium">
+              "{aiWakeWord}"
+            </span>
+          </button>
+
           <label className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
             <span>🌐</span>
             <span className="hidden sm:inline">Teaching Language:</span>
@@ -2515,15 +2646,25 @@ const CoursePlayer = ({
         {/* CENTER COLUMN: ENLARGED Video/Slide Play Screen */}
         <section className="flex flex-col h-full min-h-0 overflow-hidden gap-2">
           {/* Active Lesson Header & Hands-Free Status Banner */}
-          <div className="shrink-0 flex flex-col gap-0.5">
-            {(activeLesson?.chapterTitle || activeLesson?.moduleTitle) && (
-              <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider truncate">
-                {cleanUnsupportedWords(activeLesson.chapterTitle || activeLesson.moduleTitle)}
-              </span>
+          <div className="shrink-0 flex items-center justify-between gap-2 flex-wrap">
+            <div className="min-w-0 flex-1">
+              {(activeLesson?.chapterTitle || activeLesson?.moduleTitle) && (
+                <span className="text-[10px] font-bold text-[#ff8c21] uppercase tracking-wider truncate block">
+                  {cleanUnsupportedWords(activeLesson.chapterTitle || activeLesson.moduleTitle)}
+                </span>
+              )}
+              <h2 className="text-base font-bold text-slate-900 leading-snug truncate">
+                {cleanUnsupportedWords(activeLesson?.title || 'Introduction to Lesson Topics')}
+              </h2>
+            </div>
+
+            {/* Live Hands-Free Status Indicator Banner */}
+            {voiceStatusText && (
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-medium border border-[#ff8c21]/40 shadow-sm shrink-0 animate-fadeIn">
+                <span className="h-2 w-2 rounded-full bg-[#ff8c21] animate-ping" />
+                <span className="truncate max-w-xs sm:max-w-md">{voiceStatusText}</span>
+              </div>
             )}
-            <h2 className="text-base font-bold text-slate-900 leading-snug truncate">
-              {cleanUnsupportedWords(activeLesson?.title || 'Introduction to Lesson Topics')}
-            </h2>
           </div>
 
           {/* ENLARGED CENTER LECTURE SLIDE VIDEO PLAYER UI WITH Sleek CONTROL BAR */}
@@ -2547,7 +2688,7 @@ const CoursePlayer = ({
                   Please Wait for Assessment
                 </h3>
                 <p className="text-xs sm:text-sm text-slate-300 max-w-md mb-5 leading-relaxed">
-                  Great job finishing this chapter! ARIA is preparing your personalized chapter assessment. The quiz will start automatically in a few seconds...
+                  Great job finishing this chapter! {aiTutorName} is preparing your personalized chapter assessment. The quiz will start automatically in a few seconds...
                 </p>
                 <div className="flex items-center gap-3 bg-slate-800/90 border border-slate-700/80 px-4 py-2 rounded-xl text-xs font-medium text-slate-300 shadow-inner">
                   <div className="h-4 w-4 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
@@ -2580,17 +2721,17 @@ const CoursePlayer = ({
             `}</style>
 
             <div className="p-3 sm:p-4 lg:p-5 flex flex-col flex-1 min-h-0 justify-between">
-              {/* Split Content: Presentation Slide (Left) & ARIA Tutor Avatar (Right) */}
+              {/* Split Content: Presentation Slide (Left) & Tutor Avatar (Right) */}
               <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-12 gap-3 sm:gap-4 lg:gap-5 items-center my-0.5 sm:my-1">
                 {/* Left Universal Document Viewer Canvas Container */}
                 <div className="md:col-span-7 lg:col-span-8 bg-[#0b1329] rounded-2xl border-2 border-slate-700/80 p-2.5 sm:p-3 h-full flex flex-col justify-between overflow-hidden shadow-2xl relative min-h-[180px]">
                   {/* Main Display Canvas: Slide Screen Only */}
                   <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden relative">
-                    {/* Non-intrusive floating explanation badge while ARIA pre-warms explanation */}
+                    {/* Non-intrusive floating explanation badge while assistant pre-warms explanation */}
                     {loadingExplanation && (
                       <div className="absolute top-2 left-2 right-2 z-30 bg-slate-900/90 border border-[#ff8c21]/40 backdrop-blur-md rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs text-[#ff8c21] shadow-lg animate-fadeIn">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                        <span className="font-semibold text-[11px]">ARIA & Qwen are preparing explanation for this slide...</span>
+                        <span className="font-semibold text-[11px]">{aiTutorName} & Qwen are preparing explanation for this slide...</span>
                       </div>
                     )}
 
@@ -2720,20 +2861,48 @@ const CoursePlayer = ({
 
                 {/* Right ARIA Tutor Circle Avatar with Robot AI Emoji */}
                 <div className="md:col-span-5 lg:col-span-4 h-full flex flex-col items-center justify-center text-center border-t md:border-t-0 md:border-l border-white/10 pt-3 md:pt-0 px-2 sm:px-4">
-                  {/* Circular Avatar Frame with Robot Emoji */}
-                  <div className={`relative flex items-center justify-center h-28 w-28 sm:h-36 sm:w-36 md:h-40 md:w-40 lg:h-44 lg:w-44 rounded-full bg-[#182337] border-2 sm:border-[2.5px] ${isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING
-                    ? 'border-[#ff8c21]/90 shadow-[0_0_30px_rgba(245,130,32,0.3)] avatar-active'
-                    : 'border-[#293c5d] shadow-2xl'
-                    } transition-all duration-300 select-none`}>
-                    <span className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl select-none filter drop-shadow-md">
+                  {/* Circular Avatar Frame with Robot Emoji (Clickable to call) */}
+                  <button
+                    type="button"
+                    onClick={handleAvatarCall}
+                    title={`Click to call ${aiTutorName} (or say "${aiWakeWord}")`}
+                    className={`relative flex items-center justify-center h-28 w-28 sm:h-36 sm:w-36 md:h-40 md:w-40 lg:h-44 lg:w-44 rounded-full bg-[#182337] border-2 sm:border-[2.5px] cursor-pointer transition-all duration-300 hover:scale-105 active:scale-95 group focus:outline-none focus:ring-2 focus:ring-[#ff8c21]/50 ${
+                      isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING
+                        ? 'border-[#ff8c21]/90 shadow-[0_0_30px_rgba(245,130,32,0.4)] avatar-active ring-4 ring-[#ff8c21]/20'
+                        : tutorVoiceState === TutorState.ACTIVE_LISTENING || tutorVoiceState === TutorState.FOLLOW_UP_LISTENING
+                          ? 'border-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.35)] ring-4 ring-emerald-500/20 animate-pulse'
+                          : 'border-[#293c5d] hover:border-[#ff8c21]/70 shadow-2xl hover:shadow-[0_0_25px_rgba(245,130,32,0.25)]'
+                    }`}
+                  >
+                    <span className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl select-none filter drop-shadow-md group-hover:scale-110 transition-transform">
                       🤖
                     </span>
-                  </div>
 
-                  {/* ARIA AI TUTOR Pill Badge */}
-                  <div className="mt-4 sm:mt-5 px-5 py-1.5 rounded-full bg-[#131d2e] border border-[#2a3952] shadow-sm select-none">
-                    <span className="text-xs sm:text-[13px] font-extrabold text-[#ff8c21] tracking-wider uppercase">
-                      {aiTutorName} AI TUTOR
+                    {/* Calling / Listening ripple ring when awake */}
+                    {(tutorVoiceState === TutorState.ACTIVE_LISTENING || tutorVoiceState === TutorState.FOLLOW_UP_LISTENING) && (
+                      <span className="absolute -inset-2 rounded-full border-2 border-emerald-400 animate-ping opacity-60 pointer-events-none" />
+                    )}
+
+                    {/* Quick Call icon overlay badge */}
+                    <span className="absolute bottom-1 right-1 h-7 w-7 rounded-full bg-[#ff8c21] text-white flex items-center justify-center text-xs shadow-md border-2 border-[#182337] group-hover:scale-110 transition-transform" title="Call AI Avatar">
+                      🎙️
+                    </span>
+                  </button>
+
+                  {/* ARIA AI TUTOR Pill Badge & Call Hint */}
+                  <div className="mt-3 sm:mt-4 flex flex-col items-center gap-1.5 select-none">
+                    <button
+                      type="button"
+                      onClick={handleAvatarCall}
+                      className="px-4 py-1 rounded-full bg-[#131d2e] border border-[#2a3952] hover:border-[#ff8c21]/60 shadow-sm cursor-pointer transition flex items-center gap-1.5"
+                    >
+                      <span className="h-2 w-2 rounded-full bg-[#ff8c21] animate-pulse" />
+                      <span className="text-xs sm:text-[13px] font-extrabold text-[#ff8c21] tracking-wider uppercase">
+                        {aiTutorName} AI TUTOR
+                      </span>
+                    </button>
+                    <span className="text-[10px] sm:text-[11px] text-slate-400 font-medium">
+                      Click avatar or say <strong className="text-slate-200">"{aiWakeWord}"</strong>
                     </span>
                   </div>
                 </div>
@@ -2988,6 +3157,133 @@ const CoursePlayer = ({
             <div className="mt-3 px-4 py-1.5 rounded-full bg-slate-900/90 border border-slate-700 text-xs text-white font-medium text-center shadow-lg max-w-2xl truncate">
               <span className="font-bold text-[#ff8c21]">Slide {enlargedVisual.sourceSlide}:</span> {enlargedVisual.purpose || enlargedVisual.descr || enlargedVisual.name || 'Visual Reference'}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dynamic Assistant Name & Wake-Word Configuration Modal */}
+      {showAiConfigModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setShowAiConfigModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-scaleUp"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-gradient-to-r from-slate-900 to-[#182337] px-5 py-4 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-lg bg-[#ff8c21] flex items-center justify-center text-base shadow-sm">
+                  🤖
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold leading-tight">AI Assistant Configuration</h3>
+                  <p className="text-[11px] text-slate-300">Set dynamic name and voice wake-word</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAiConfigModal(false)}
+                className="text-slate-400 hover:text-white text-sm p-1 rounded-md transition cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveAiConfig} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Assistant Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={tempAiName}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setTempAiName(val)
+                    const clean = val.trim()
+                    setTempWakeWord(clean ? `Hey ${clean}` : 'Hey ARIA')
+                  }}
+                  placeholder="e.g. ARIA"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
+                />
+
+                {/* Supported AI Tutor Name */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                  <span className="text-[10px] text-slate-400 font-medium">Supported:</span>
+                  {['ARIA'].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => {
+                        setTempAiName(preset)
+                        setTempWakeWord(`Hey ${preset}`)
+                      }}
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
+                        tempAiName.toLowerCase() === preset.toLowerCase()
+                          ? 'bg-[#ff8c21] text-white shadow-2xs'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {preset} (Official Avatar)
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Wake-Word Phrase
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={tempWakeWord}
+                  onChange={(e) => setTempWakeWord(e.target.value)}
+                  placeholder="e.g. Hey ARIA"
+                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
+                />
+                <p className="text-[10px] text-slate-500 mt-1 leading-normal">
+                  Saying either <span className="font-semibold text-slate-700">"{tempAiName || 'name'}"</span> or <span className="font-semibold text-slate-700">"{tempWakeWord || 'Hey name'}"</span> will instantly activate the assistant.
+                </p>
+              </div>
+
+              <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-3 text-[11px] text-blue-900 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-blue-800">
+                  <span>💡</span>
+                  <span>Instant Hot-Reload</span>
+                </div>
+                <p className="text-[10px] text-blue-700 leading-relaxed">
+                  Saving updates your assistant identity and wake detector immediately across the entire system without requiring any server restarts.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowAiConfigModal(false)}
+                  disabled={isSavingAiConfig}
+                  className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingAiConfig || !tempAiName.trim()}
+                  className="px-4 py-1.5 rounded-xl bg-[#ff8c21] hover:bg-[#e87a15] text-white text-xs font-bold shadow-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isSavingAiConfig ? (
+                    <>
+                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>Save & Activate</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
