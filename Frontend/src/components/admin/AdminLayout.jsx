@@ -7,7 +7,27 @@ import { api } from '../../services/api'
 
 const getAdminSession = () => {
   try {
-    return JSON.parse(sessionStorage.getItem('skillbridge_admin') || 'null')
+    const raw = sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin')
+    if (!raw) return null
+    const session = JSON.parse(raw)
+    if (!session || typeof session !== 'object' || !session.token) return null
+    try {
+      const parts = session.token.split('.')
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1]))
+        if (payload.exp && Date.now() >= payload.exp * 1000) {
+          sessionStorage.removeItem('skillbridge_admin')
+          localStorage.removeItem('skillbridge_admin')
+          return null
+        }
+        if (payload.role !== 'ADMIN') {
+          return null
+        }
+      }
+    } catch {
+      return null
+    }
+    return session
   } catch {
     return null
   }

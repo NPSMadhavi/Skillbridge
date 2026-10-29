@@ -48,7 +48,7 @@ const EyeIcon = ({ open }) => (
 )
 
 const getFieldClass = (hasError) =>
-  `w-full rounded-xl border bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel ${
+  `w-full rounded-xl border bg-ink/50 px-3.5 py-2 text-[0.875rem] text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel ${
     hasError
       ? 'border-rose-400 focus:border-rose-500 focus:shadow-[0_0_0_3px_rgba(244,63,94,0.18)]'
       : 'border-line hover:border-sky/40 focus:border-sky focus:shadow-[0_0_0_3px_rgba(2,132,199,0.14)]'
@@ -300,20 +300,21 @@ const RegisterUser = () => {
 
 
   return (
-    <div className="animate-rise-in w-full space-y-6">
+    <div className="animate-rise-in w-full space-y-3.5">
       <div>
-        <h1 className="font-display text-2xl font-semibold tracking-tight text-fg sm:text-3xl">
+        <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight text-fg">
           Register user
         </h1>
-        <p className="mt-1 text-sm text-muted">
+        <p className="mt-0.5 text-xs text-muted">
           Add a learner with FIN, region, contact details, and Face ID enrollment.
         </p>
       </div>
 
-      <section className="rounded-2xl border border-line bg-panel p-5 shadow-[0_10px_30px_rgba(15,27,45,0.04)] sm:p-7">
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit} noValidate autoComplete="off">
-          <div className="flex flex-col gap-1.5 sm:col-span-2">
-            <label htmlFor="fullName" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+      <section className="rounded-2xl border border-line bg-panel p-4 sm:p-5 shadow-sm">
+        <form className="grid gap-3 sm:grid-cols-2" onSubmit={handleSubmit} noValidate autoComplete="off">
+          {/* Row 1: Full Name & FIN Number */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="fullName" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Full name <span className="text-rose-500">*</span>
             </label>
             <input
@@ -337,8 +338,8 @@ const RegisterUser = () => {
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="finNumber" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="finNumber" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               FIN number <span className="text-rose-500">*</span>
             </label>
             <input
@@ -363,35 +364,9 @@ const RegisterUser = () => {
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="preferLanguage" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-              Prefer language <span className="text-rose-500">*</span>
-            </label>
-            <select
-              id="preferLanguage"
-              value={form.preferLanguage}
-              onChange={(e) => updateField('preferLanguage', e.target.value)}
-              onBlur={() => handleBlur('preferLanguage')}
-              aria-invalid={!!errors.preferLanguage}
-              aria-describedby={errors.preferLanguage ? 'preferLanguage-error' : undefined}
-              className={getFieldClass(!!errors.preferLanguage)}
-            >
-              {LANGUAGES.map((lang) => (
-                <option key={lang.value} value={lang.value}>
-                  {lang.label}
-                </option>
-              ))}
-            </select>
-            {errors.preferLanguage && (
-              <p id="preferLanguage-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
-                <ExclamationCircleIcon />
-                <span>{errors.preferLanguage}</span>
-              </p>
-            )}
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="email" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+          {/* Row 2: Email & Password */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="email" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Email <span className="text-rose-500">*</span>
             </label>
             <input
@@ -416,8 +391,8 @@ const RegisterUser = () => {
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="password" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="password" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Password <span className="text-rose-500">*</span>
             </label>
             <div className="relative">
@@ -452,8 +427,9 @@ const RegisterUser = () => {
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5 sm:col-span-2">
-            <label htmlFor="country" className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+          {/* Row 3: Country & Prefer Language */}
+          <div className="flex flex-col gap-1">
+            <label htmlFor="country" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Country <span className="text-rose-500">*</span>
             </label>
             <CountrySelect
@@ -473,68 +449,77 @@ const RegisterUser = () => {
             )}
           </div>
 
+          <div className="flex flex-col gap-1">
+            <label htmlFor="preferLanguage" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
+              Prefer language <span className="text-rose-500">*</span>
+            </label>
+            <select
+              id="preferLanguage"
+              value={form.preferLanguage}
+              onChange={(e) => updateField('preferLanguage', e.target.value)}
+              onBlur={() => handleBlur('preferLanguage')}
+              aria-invalid={!!errors.preferLanguage}
+              aria-describedby={errors.preferLanguage ? 'preferLanguage-error' : undefined}
+              className={getFieldClass(!!errors.preferLanguage)}
+            >
+              {LANGUAGES.map((lang) => (
+                <option key={lang.value} value={lang.value}>
+                  {lang.label}
+                </option>
+              ))}
+            </select>
+            {errors.preferLanguage && (
+              <p id="preferLanguage-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.preferLanguage}</span>
+              </p>
+            )}
+          </div>
+
+          {/* Face ID Section */}
           <div className="sm:col-span-2">
-            <p className="mb-2 text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+            <p className="mb-1 text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Face ID data <span className="text-rose-500">*</span>
             </p>
 
             {form.faceIdData ? (
               existingFaceUser ? (
-                <div className="flex flex-col gap-3.5 rounded-2xl border-2 border-rose-500/50 bg-rose-500/10 p-4.5 animate-fade-in shadow-sm">
-                  <div className="flex items-center gap-2 text-rose-500 font-semibold text-sm">
-                    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-white font-bold text-xs">
+                <div className="flex flex-col gap-2 rounded-xl border-2 border-rose-500/50 bg-rose-500/10 p-3 animate-fade-in shadow-sm">
+                  <div className="flex items-center gap-2 text-rose-500 font-semibold text-xs">
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-white font-bold text-[10px]">
                       !
                     </span>
                     <span>Face already registered in system</span>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+                  <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
                     <div className="relative shrink-0">
                       <img
                         src={form.faceIdData}
                         alt="Captured Face ID"
-                        className="h-24 w-24 rounded-xl object-cover border-2 border-rose-500/50 shadow-sm"
+                        className="h-12 w-12 rounded-lg object-cover border-2 border-rose-500/50 shadow-sm"
                       />
-                      <span className="absolute bottom-1 right-1 rounded-md bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
-                        Captured
+                      <span className="absolute bottom-0.5 right-0.5 rounded bg-rose-600 px-1 py-0.2 text-[9px] font-bold text-white uppercase">
+                        New
                       </span>
                     </div>
 
-                    {existingFaceUser.faceImage && (
-                      <div className="relative shrink-0 hidden sm:block">
-                        <img
-                          src={existingFaceUser.faceImage}
-                          alt={existingFaceUser.fullName || 'Existing User'}
-                          className="h-24 w-24 rounded-xl object-cover border-2 border-rose-500/50 opacity-90 shadow-sm"
-                        />
-                        <span className="absolute bottom-1 right-1 rounded-md bg-navy/90 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
-                          Enrolled
-                        </span>
-                      </div>
-                    )}
-
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-semibold text-rose-500 text-base">
+                      <h4 className="font-semibold text-rose-500 text-xs truncate">
                         Matched: {existingFaceUser.fullName || 'Registered User'}
                       </h4>
-                      <p className="mt-0.5 text-xs text-muted">
+                      <p className="text-[11px] text-muted">
                         FIN: <span className="font-mono font-medium text-fg">{existingFaceUser.finNumber || 'N/A'}</span>
-                        {existingFaceUser.email && (
-                          <> • Email: <span className="text-fg">{existingFaceUser.email}</span></>
-                        )}
                       </p>
-                      <p className="mt-1.5 text-xs text-rose-400 font-medium leading-relaxed">
-                        ⚠️ This face is already enrolled. A new account cannot be registered with an existing user's face.
-                      </p>
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      <div className="mt-1.5 flex flex-wrap gap-1.5">
                         <button
                           type="button"
                           onClick={() => {
                             setExistingFaceUser(null)
                             setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-                            openCamera()
+                            setEnrollmentModalOpen(true)
                           }}
-                          className="cursor-pointer rounded-lg border border-rose-500/40 bg-rose-500/20 px-3 py-1.5 text-sm font-semibold text-rose-300 hover:bg-rose-500/30 transition"
+                          className="cursor-pointer rounded-md border border-rose-500/40 bg-rose-500/20 px-2.5 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-500/30 transition"
                         >
                           Recapture Face
                         </button>
@@ -545,7 +530,7 @@ const RegisterUser = () => {
                             setExistingFaceUser(null)
                             setErrors((prev) => ({ ...prev, faceIdData: undefined }))
                           }}
-                          className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40 transition"
+                          className="cursor-pointer rounded-md border border-line bg-panel px-2.5 py-1 text-xs font-semibold text-fg hover:border-sky/40 transition"
                         >
                           Remove
                         </button>
@@ -554,52 +539,49 @@ const RegisterUser = () => {
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col gap-3 rounded-2xl border border-ok/25 bg-ok/5 p-4 sm:flex-row sm:items-center">
-                  <div className="relative">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-ok/25 bg-ok/5 px-3.5 py-2">
+                  <div className="flex items-center gap-3 min-w-0">
                     <img
                       src={form.faceIdData}
                       alt="Enrolled Face ID"
-                      className="h-24 w-24 rounded-xl object-cover shadow-sm border border-ok/30"
+                      className="h-11 w-11 shrink-0 rounded-lg object-cover border border-ok/30 shadow-sm"
                     />
-                    <span className="absolute -bottom-1 -right-1 bg-ok text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow">
-                      ✓ LIVE
-                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs font-semibold text-ok truncate">Face ID Enrolled</p>
+                        <span className="rounded bg-ok/15 px-1.5 py-0.2 text-[10px] font-bold text-ok">
+                          ✓ Ready
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted truncate">
+                        Biometric face capture saved successfully.
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className="font-semibold text-ok">Face ID Enrolled</p>
-                      <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
-                        3D Liveness Verified
-                      </span>
-                    </div>
-                    <p className="mt-1 text-sm text-muted">
-                      5-point pose challenge completed and biometrics cryptographically signed.
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExistingFaceUser(null)
-                          setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-                          setEnrollmentModalOpen(true)
-                        }}
-                        className="cursor-pointer rounded-lg border border-line bg-panel px-3 py-1.5 text-sm font-semibold text-fg hover:border-sky/40 transition"
-                      >
-                        Recapture
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          updateField('faceIdData', '')
-                          setFaceEnrollment(null)
-                          setExistingFaceUser(null)
-                          setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-                        }}
-                        className="cursor-pointer rounded-lg border border-danger/25 bg-danger/5 px-3 py-1.5 text-sm font-semibold text-danger transition"
-                      >
-                        Remove
-                      </button>
-                    </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExistingFaceUser(null)
+                        setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                        setEnrollmentModalOpen(true)
+                      }}
+                      className="cursor-pointer rounded-lg border border-line bg-panel px-2.5 py-1 text-xs font-semibold text-fg hover:border-sky/40 transition"
+                    >
+                      Recapture
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateField('faceIdData', '')
+                        setFaceEnrollment(null)
+                        setExistingFaceUser(null)
+                        setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                      }}
+                      className="cursor-pointer rounded-lg border border-danger/25 bg-danger/5 px-2.5 py-1 text-xs font-semibold text-danger transition"
+                    >
+                      Remove
+                    </button>
                   </div>
                 </div>
               )
@@ -611,52 +593,55 @@ const RegisterUser = () => {
                   setErrors((prev) => ({ ...prev, faceIdData: undefined }))
                   setEnrollmentModalOpen(true)
                 }}
-                className={`flex w-full cursor-pointer flex-col items-center justify-center gap-2.5 rounded-2xl border border-dashed px-4 py-8 text-center transition ${
+                className={`flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border border-dashed px-3.5 py-2.5 text-left transition ${
                   errors.faceIdData
                     ? 'border-rose-400 bg-rose-500/5 hover:bg-rose-500/10'
                     : 'border-sky/40 bg-sky/5 hover:bg-sky/10'
                 }`}
               >
-                <span
-                  className={`grid h-12 w-12 place-items-center rounded-full ${
-                    errors.faceIdData ? 'bg-rose-500/15 text-rose-500' : 'bg-sky/15 text-sky'
-                  }`}
-                >
-                  <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path
-                      d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M8 21H6a3 3 0 0 1-3-3v-2M16 21h2a3 3 0 0 0 3-3v-2"
-                      stroke="currentColor"
-                      strokeWidth="1.8"
-                      strokeLinecap="round"
-                    />
-                    <circle cx="9" cy="10.5" r="1.1" fill="currentColor" />
-                    <circle cx="15" cy="10.5" r="1.1" fill="currentColor" />
-                    <path d="M10 15.2c.8.9 3.2.9 4 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                  </svg>
-                </span>
-                <div>
-                  <span className="font-display font-semibold text-fg block">
-                    Start Guided Face Enrollment
+                <div className="flex items-center gap-3 min-w-0">
+                  <span
+                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${
+                      errors.faceIdData ? 'bg-rose-500/15 text-rose-500' : 'bg-sky/15 text-sky'
+                    }`}
+                  >
+                    <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path
+                        d="M8 3H6a3 3 0 0 0-3 3v2M16 3h2a3 3 0 0 1 3 3v2M8 21H6a3 3 0 0 1-3-3v-2M16 21h2a3 3 0 0 0 3-3v-2"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                      />
+                      <circle cx="9" cy="10.5" r="1.1" fill="currentColor" />
+                      <circle cx="15" cy="10.5" r="1.1" fill="currentColor" />
+                      <path d="M10 15.2c.8.9 3.2.9 4 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+                    </svg>
                   </span>
-                  <span className="text-xs text-muted block mt-0.5">
-                    Real-time webcam 5-pose liveness challenge (MediaPipe Face Landmarker)
-                  </span>
+                  <div className="min-w-0">
+                    <span className="font-display text-xs sm:text-sm font-semibold text-fg block truncate">
+                      Enroll Face ID
+                    </span>
+                    <span className="text-[11px] text-muted block truncate">
+                      Quick 5-step face capture via webcam
+                    </span>
+                  </div>
                 </div>
+                <span className="shrink-0 rounded-lg bg-sky px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:brightness-105">
+                  Start Scan
+                </span>
               </button>
             )}
             {errors.faceIdData && !existingFaceUser && (
-              <p role="alert" className="mt-2 flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+              <p role="alert" className="mt-1 flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
                 <ExclamationCircleIcon />
                 <span>{errors.faceIdData}</span>
               </p>
             )}
           </div>
 
-
-
           {statusBanner && (
             <p
-              className={`sm:col-span-2 rounded-[10px] px-3.5 py-2.5 text-center text-sm ${
+              className={`sm:col-span-2 rounded-[10px] px-3 py-2 text-center text-xs ${
                 statusBanner.type === 'ok'
                   ? 'border border-ok/25 bg-ok/10 text-ok'
                   : 'border border-danger/25 bg-danger/10 text-danger'
@@ -667,18 +652,18 @@ const RegisterUser = () => {
             </p>
           )}
 
-          <div className="sm:col-span-2 flex flex-col gap-3 sm:flex-row">
+          <div className="sm:col-span-2 flex flex-col gap-2.5 sm:flex-row mt-1">
             <button
               type="submit"
               disabled={saving}
-              className="flex-1 cursor-pointer rounded-xl border-0 bg-orange px-4 py-3.5 font-display text-base font-semibold text-white shadow-[0_10px_28px_rgba(240,106,0,0.25)] transition hover:brightness-105 disabled:cursor-wait disabled:opacity-70"
+              className="flex-1 cursor-pointer rounded-xl border-0 bg-orange px-4 py-2.5 font-display text-sm font-semibold text-white shadow-[0_6px_20px_rgba(240,106,0,0.22)] transition hover:brightness-105 disabled:cursor-wait disabled:opacity-70"
             >
               {saving ? 'Registering…' : 'Register user'}
             </button>
             <button
               type="button"
               onClick={() => navigate('/admin/users')}
-              className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-3.5 font-semibold text-fg transition hover:border-sky/40"
+              className="cursor-pointer rounded-xl border border-line bg-ink px-4 py-2.5 text-sm font-semibold text-fg transition hover:border-sky/40"
             >
               View users
             </button>

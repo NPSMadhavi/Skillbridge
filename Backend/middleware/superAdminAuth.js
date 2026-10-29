@@ -1,10 +1,13 @@
 import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-prod';
+import { JWT_SECRET } from '../config/jwtConfig.js';
 
 export const requireSuperAdmin = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  }
 
   if (!token) {
     return res.status(401).json({ error: 'Super Admin access token required.' });

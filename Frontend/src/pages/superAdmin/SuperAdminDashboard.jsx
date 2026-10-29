@@ -73,8 +73,33 @@ export default function SuperAdminDashboard() {
 
   const [copiedKey, setCopiedKey] = useState(null);
 
-  // Read current Super Admin session
-  const session = JSON.parse(sessionStorage.getItem('skillbridge_super_admin') || 'null');
+  // Read current Super Admin session with role & expiration validation
+  const getSuperAdminSession = () => {
+    try {
+      const raw = sessionStorage.getItem('skillbridge_super_admin') || localStorage.getItem('skillbridge_super_admin');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.token) return null;
+      try {
+        const parts = parsed.token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1]));
+          if (payload.exp && Date.now() >= payload.exp * 1000) {
+            sessionStorage.removeItem('skillbridge_super_admin');
+            return null;
+          }
+          if (payload.role !== 'SUPER_ADMIN') {
+            return null;
+          }
+        }
+      } catch (_) {}
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  const session = getSuperAdminSession();
 
   useEffect(() => {
     if (!session?.token) {

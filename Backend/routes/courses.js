@@ -439,7 +439,7 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
 });
 
 // Helper to collect all potential user identification aliases (UUID, email, FIN)
-const resolveUserIdentifiers = async (user) => {
+const resolveUserIdentifiers = async (user, targetPrisma = prisma) => {
   if (!user) return [];
   const directId = user.id || user.userId;
   const email = user.email ? String(user.email).trim().toLowerCase() : null;
@@ -458,7 +458,7 @@ const resolveUserIdentifiers = async (user) => {
     if (fin) conditions.push({ finNumber: fin });
 
     if (conditions.length > 0) {
-      const dbUser = await prisma.user.findFirst({
+      const dbUser = await targetPrisma.user.findFirst({
         where: { OR: conditions },
         select: { id: true, email: true, finNumber: true }
       });
@@ -478,10 +478,11 @@ const resolveUserIdentifiers = async (user) => {
 // Helper to verify student course assignment access
 const checkCourseAccess = async (req, courseId) => {
   if (req.user?.role === 'ADMIN') return true;
-  const userIds = await resolveUserIdentifiers(req.user);
+  const targetPrisma = req.prisma || prisma;
+  const userIds = await resolveUserIdentifiers(req.user, targetPrisma);
   if (userIds.length === 0) return false;
 
-  const assignment = await prisma.userCourseAssignment.findFirst({
+  const assignment = await targetPrisma.userCourseAssignment.findFirst({
     where: {
       userId: { in: userIds },
       courseId,
@@ -666,8 +667,8 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.json(formatted);
     }
 
-    // For STUDENT role: return ONLY assigned courses
-    const userIds = await resolveUserIdentifiers(req.user);
+    // For STUDENT role: return ONLY assigned courses with user progress in 1 query
+    const userIds = await resolveUserIdentifiers(req.user, targetPrisma);
     if (userIds.length === 0) {
       return res.json([]);
     }
@@ -684,25 +685,58 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.json([]);
     }
 
-    const courses = await targetPrisma.$queryRaw`
-      SELECT
-        c.id,
-        c.title,
-        c.description,
-        c."fileName",
-        c."createdAt",
-        c."updatedAt",
-        (
-          SELECT COUNT(*)::int
-          FROM "UserCourseAssignment" uca
-          WHERE uca."courseId" = c.id
-        ) AS "assignedUsersCount",
-        c.curriculum AS curriculum
-      FROM "Course" c
-      WHERE c.id = ANY(${assignedIds}::text[])
-      ORDER BY c."createdAt" DESC;
-    `;
-    return res.json(courses.map(formatCourseForCatalog));
+    const [courses, progressRecords] = await Promise.all([
+      targetPrisma.$queryRaw`
+        SELECT
+          c.id,
+          c.title,
+          c.description,
+          c."fileName",
+          c."createdAt",
+          c."updatedAt",
+          (
+            SELECT COUNT(*)::int
+            FROM "UserCourseAssignment" uca
+            WHERE uca."courseId" = c.id
+          ) AS "assignedUsersCount",
+          c.curriculum AS curriculum
+        FROM "Course" c
+        WHERE c.id = ANY(${assignedIds}::text[])
+        ORDER BY c."createdAt" DESC;
+      `,
+      targetPrisma.courseProgress.findMany({
+        where: {
+          userId: { in: userIds },
+          courseId: { in: assignedIds }
+        }
+      })
+    ]);
+
+    const progressByCourse = {};
+    for (const pr of progressRecords) {
+      let lessonIds = pr.completedLessonIds;
+      if (typeof lessonIds === 'string') {
+        try { lessonIds = JSON.parse(lessonIds); } catch (_) { lessonIds = []; }
+      }
+      if (!Array.isArray(lessonIds)) lessonIds = [];
+      progressByCourse[pr.courseId] = {
+        progress: Math.min(100, Math.max(0, pr.progress || 0)),
+        completed: Boolean(pr.completed),
+        completedLessonIds: Array.from(new Set(lessonIds.filter(id => id !== null && id !== undefined).map(String)))
+      };
+    }
+
+    const formatted = courses.map(c => {
+      const formattedCourse = formatCourseForCatalog(c);
+      formattedCourse.userProgress = progressByCourse[c.id] || {
+        progress: 0,
+        completed: false,
+        completedLessonIds: []
+      };
+      return formattedCourse;
+    });
+
+    return res.json(formatted);
   } catch (error) {
     console.error('Failed to retrieve RAG courses:', error);
     res.status(500).json({ error: 'Failed to retrieve courses catalog.' });
@@ -1391,7 +1425,8 @@ router.get('/:id/progress', authenticateToken, async (req, res) => {
       return res.status(403).json({ error: 'Access denied. You are not assigned to this course.' });
     }
 
-    const progressRecord = await prisma.courseProgress.findFirst({
+    const targetPrisma = req.prisma || prisma;
+    const progressRecord = await targetPrisma.courseProgress.findFirst({
       where: { userId, courseId }
     });
 
@@ -1438,7 +1473,8 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
 
     const { completedLessonId, completedLessonIds, progress, completed } = req.body;
 
-    const existing = await prisma.courseProgress.findFirst({
+    const targetPrisma = req.prisma || prisma;
+    const existing = await targetPrisma.courseProgress.findFirst({
       where: { userId, courseId }
     });
 
@@ -1490,7 +1526,7 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
 
     let record;
     if (existing) {
-      record = await prisma.courseProgress.update({
+      record = await targetPrisma.courseProgress.update({
         where: { id: existing.id },
         data: {
           progress: calcProgress,
@@ -1499,7 +1535,7 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
         }
       });
     } else {
-      record = await prisma.courseProgress.create({
+      record = await targetPrisma.courseProgress.create({
         data: {
           userId,
           courseId,

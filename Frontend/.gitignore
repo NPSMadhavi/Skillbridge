@@ -1,3 +1,9 @@
+# Environment & Secret files
+.env
+.env.*
+*.env
+!.env.example
+
 # Logs
 logs
 *.log
@@ -7,6 +13,7 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies
 node_modules
 dist
 dist-ssr

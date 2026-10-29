@@ -133,7 +133,27 @@ const mapRagCourse = (dbCourse) => {
 
 const getAdminSession = () => {
   try {
-    return JSON.parse(sessionStorage.getItem('skillbridge_admin') || 'null')
+    const raw = sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin')
+    if (!raw) return null
+    const session = JSON.parse(raw)
+    if (!session || typeof session !== 'object' || !session.token) return null
+    try {
+      const parts = session.token.split('.')
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1]))
+        if (payload.exp && Date.now() >= payload.exp * 1000) {
+          sessionStorage.removeItem('skillbridge_admin')
+          localStorage.removeItem('skillbridge_admin')
+          return null
+        }
+        if (payload.role !== 'ADMIN') {
+          return null
+        }
+      }
+    } catch {
+      return null
+    }
+    return session
   } catch {
     return null
   }
@@ -282,12 +302,36 @@ const CoursePlayerRoute = () => {
           if (document.fullscreenElement) {
             document.exitFullscreen?.().catch(() => { });
           }
+          if (window._skillbridgeCurrentAudio) {
+            window._skillbridgeCurrentAudio.onended = null;
+            window._skillbridgeCurrentAudio.onerror = null;
+            window._skillbridgeCurrentAudio.pause();
+            window._skillbridgeCurrentAudio.currentTime = 0;
+            window._skillbridgeCurrentAudio = null;
+          }
+          if (window._skillbridgeResumeInterval) {
+            clearInterval(window._skillbridgeResumeInterval);
+            window._skillbridgeResumeInterval = null;
+          }
           window.speechSynthesis?.cancel?.();
         } catch (e) { }
         navigate('/')
       }}
       onAssessment={(courseObj, activeLesson, quizQuestions, nextLessonId) => {
-        try { window.speechSynthesis?.cancel?.(); } catch (e) { }
+        try {
+          if (window._skillbridgeCurrentAudio) {
+            window._skillbridgeCurrentAudio.onended = null;
+            window._skillbridgeCurrentAudio.onerror = null;
+            window._skillbridgeCurrentAudio.pause();
+            window._skillbridgeCurrentAudio.currentTime = 0;
+            window._skillbridgeCurrentAudio = null;
+          }
+          if (window._skillbridgeResumeInterval) {
+            clearInterval(window._skillbridgeResumeInterval);
+            window._skillbridgeResumeInterval = null;
+          }
+          window.speechSynthesis?.cancel?.();
+        } catch (e) { }
         navigate(`/assessment/${id}`, {
           state: { course: courseObj || course, activeLesson, quizQuestions, nextLessonId }
         })

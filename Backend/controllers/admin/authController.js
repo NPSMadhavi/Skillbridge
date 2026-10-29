@@ -4,8 +4,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { tenantService } from '../../services/tenantService.js';
 import { sendCompanyAdminPasswordReset } from '../../services/emailService.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-prod';
+import { JWT_SECRET } from '../../config/jwtConfig.js';
 
 // In-memory store for active password reset requests
 // Key: `${cleanEmail}::${tenantCode}`
@@ -64,7 +63,6 @@ export const login = async (req, res) => {
       return res.status(401).json({ error: 'Invalid admin credentials.' });
     }
 
-
     // Check if the admin is still using a system-generated password
     if (admin.mustChangePassword) {
       const tempToken = jwt.sign(
@@ -116,8 +114,7 @@ export const login = async (req, res) => {
     });
   } catch (error) {
     console.error('Admin login error:', error);
-
-    res.status(500).json({ error: error.message || 'An error occurred during admin login.' });
+    res.status(500).json({ error: 'An error occurred during admin login.' });
   }
 };
 
@@ -152,7 +149,7 @@ export const me = async (req, res) => {
     });
   } catch (error) {
     console.error('Admin me error:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch admin profile.' });
+    res.status(500).json({ error: 'Failed to fetch admin profile.' });
   }
 };
 
@@ -236,7 +233,7 @@ export const forgotPassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Forgot password error:', error);
-    res.status(500).json({ error: error.message || 'Failed to process password reset request.' });
+    res.status(500).json({ error: 'Failed to process password reset request.' });
   }
 };
 
@@ -252,8 +249,8 @@ export const resetPassword = async (req, res) => {
   if (!code || !code.trim()) {
     return res.status(400).json({ error: '6-digit verification code is required.' });
   }
-  if (!newPassword || newPassword.length < 6) {
-    return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
   }
 
   const cleanEmail = email.trim().toLowerCase();
@@ -306,9 +303,9 @@ export const resetPassword = async (req, res) => {
       });
     }
 
-    // Code is valid! Update password in tenant DB
+    // Code is valid! Update password in tenant DB with bcrypt salt 12
     const targetClient = await tenantService.getTenantClient(storeEntry.tenantCode);
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(newPassword, salt);
 
     await targetClient.admin.update({
@@ -328,7 +325,7 @@ export const resetPassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Reset password error:', error);
-    res.status(500).json({ error: error.message || 'Failed to update password.' });
+    res.status(500).json({ error: 'Failed to update password.' });
   }
 };
 
@@ -341,8 +338,11 @@ export const setInitialPassword = async (req, res) => {
   if (!email || !email.trim()) {
     return res.status(400).json({ error: 'Email address is required.' });
   }
-  if (!newPassword || newPassword.length < 6) {
-    return res.status(400).json({ error: 'New password must be at least 6 characters long.' });
+  if (!tempToken) {
+    return res.status(401).json({ error: 'Temporary setup authorization token is required.' });
+  }
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ error: 'New password must be at least 8 characters long.' });
   }
 
   const cleanEmail = email.trim().toLowerCase();
@@ -350,19 +350,20 @@ export const setInitialPassword = async (req, res) => {
   try {
     let targetTenantCode = companyCode ? companyCode.trim().toLowerCase() : null;
 
-    // Verify tempToken if supplied
-    if (tempToken) {
-      try {
-        const decoded = jwt.verify(tempToken, JWT_SECRET);
-        if (decoded.email && decoded.email.toLowerCase() !== cleanEmail) {
-          return res.status(401).json({ error: 'Verification token does not match this admin email.' });
-        }
-        if (decoded.tenantCode && !targetTenantCode) {
-          targetTenantCode = decoded.tenantCode;
-        }
-      } catch (tokenErr) {
-        return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+    let decoded;
+    try {
+      decoded = jwt.verify(tempToken, JWT_SECRET);
+      if (!decoded || (decoded.role !== 'ADMIN_PENDING_PASSWORD' && decoded.role !== 'ADMIN')) {
+        return res.status(403).json({ error: 'Forbidden: Invalid token role for password setup.' });
       }
+      if (decoded.email && decoded.email.toLowerCase() !== cleanEmail) {
+        return res.status(401).json({ error: 'Verification token does not match this admin email.' });
+      }
+      if (decoded.tenantCode && !targetTenantCode) {
+        targetTenantCode = decoded.tenantCode;
+      }
+    } catch (tokenErr) {
+      return res.status(401).json({ error: 'Your setup session has expired. Please sign in again.' });
     }
 
     let targetClient = null;
@@ -391,9 +392,12 @@ export const setInitialPassword = async (req, res) => {
     if (!admin) {
       return res.status(404).json({ error: 'Admin account not found.' });
     }
+    if (!admin.mustChangePassword && decoded.role !== 'ADMIN') {
+      return res.status(400).json({ error: 'Password setup has already been completed.' });
+    }
 
-    // Hash the new permanent password
-    const salt = await bcrypt.genSalt(10);
+    // Hash the new permanent password with 12 salt rounds
+    const salt = await bcrypt.genSalt(12);
     const passwordHash = await bcrypt.hash(newPassword, salt);
 
     // Update password and clear mustChangePassword flag
@@ -431,8 +435,6 @@ export const setInitialPassword = async (req, res) => {
     });
   } catch (error) {
     console.error('Set initial password error:', error);
-    res.status(500).json({ error: error.message || 'Failed to update permanent password.' });
+    res.status(500).json({ error: 'Failed to update permanent password.' });
   }
 };
-
-

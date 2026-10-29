@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import masterPrisma from '../../config/masterPrisma.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-prod';
+import { JWT_SECRET } from '../../config/jwtConfig.js';
 
 export const login = async (req, res) => {
   const { email, password } = req.body;
@@ -143,3 +143,4 @@ export const deleteSuperAdmin = async (req, res) => {
     res.status(500).json({ error: error.message || 'Failed to delete super admin.' });
   }
 };
+

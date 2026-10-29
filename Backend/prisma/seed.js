@@ -1,11 +1,13 @@
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const prisma = new PrismaClient();
 
 async function main() {
-  const adminEmail = 'admin@skillbridge.com';
-  const adminPassword = 'AdminPassword123';
+  const adminEmail = (process.env.ADMIN_EMAIL || 'admin@skillbridge.com').toLowerCase().trim();
+  const adminPassword = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPassword123!';
 
   // Check if admin already exists
   const existingAdmin = await prisma.admin.findUnique({
@@ -13,7 +15,7 @@ async function main() {
   });
 
   if (!existingAdmin) {
-    const passwordHash = await bcrypt.hash(adminPassword, 10);
+    const passwordHash = await bcrypt.hash(adminPassword, 12);
     const newAdmin = await prisma.admin.create({
       data: {
         email: adminEmail,

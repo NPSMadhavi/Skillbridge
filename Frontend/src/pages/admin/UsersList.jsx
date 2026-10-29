@@ -310,7 +310,7 @@ const UsersList = () => {
       }
       if (editForm.faceIdDataList) {
         payload.faceIdData = editForm.faceIdDataList
-      } else if (editForm.faceIdData && editForm.faceIdData.startsWith('data:image/')) {
+      } else if (editForm.faceIdData && editForm.faceIdData.startsWith('data:image/') && editForm.faceIdData !== editingUser?.faceIdData) {
         payload.faceIdData = editForm.faceIdData
       }
 

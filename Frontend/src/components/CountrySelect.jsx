@@ -151,7 +151,7 @@ const CountrySelect = forwardRef(function CountrySelect(
             if (isOpen) onBlur?.()
           }
         }}
-        className={`flex w-full items-center justify-between gap-2 rounded-xl border bg-ink/50 px-4 py-3 text-[0.95rem] text-fg transition cursor-pointer outline-none ${
+        className={`flex w-full items-center justify-between gap-2 rounded-xl border bg-ink/50 px-3.5 py-2 text-[0.875rem] text-fg transition cursor-pointer outline-none ${
           hasError
             ? 'border-rose-400 focus:border-rose-500 focus:shadow-[0_0_0_3px_rgba(244,63,94,0.18)]'
             : isOpen

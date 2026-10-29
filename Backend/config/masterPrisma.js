@@ -35,7 +35,7 @@ function getMasterDbUrl() {
       return u.toString();
     } catch (_) {}
   }
-  return 'postgresql://postgres:Premsai%40123@localhost:5433/skillbridge_master?schema=public';
+  throw new Error('[MasterPrisma] Error: MASTER_DATABASE_URL or DATABASE_URL must be defined in environment.');
 }
 
 const masterDatabaseUrl = getMasterDbUrl();

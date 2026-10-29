@@ -1,6 +1,6 @@
 import express from 'express';
-
 import cors from 'cors';
+import helmet from 'helmet';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -13,16 +13,19 @@ import superAdminRoutes from './routes/superAdmin.js';
 import assistantRoutes from './routes/assistantRoutes.js';
 import voiceRoutes from './routes/voiceRoutes.js';
 import { resolveTenant } from './middleware/tenantMiddleware.js';
+import { generalApiLimiter } from './middleware/rateLimiter.js';
 import prisma from './config/prisma.js';
 import masterPrisma from './config/masterPrisma.js';
 import aiService from './services/aiService.js';
 import { tenantService } from './services/tenantService.js';
+import { runDailyBackup } from './scripts/daily_backup.js';
 
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Get current directory
 const __filename = fileURLToPath(import.meta.url);
@@ -32,30 +35,72 @@ const __dirname = path.dirname(__filename);
 const frontendPath = path.join(__dirname, '..', 'Frontend', 'dist');
 
 // ============================================================
-// MIDDLEWARE
+// SECURITY HEADERS & REVERSE PROXY
 // ============================================================
 
-// Enable CORS
-app.use(cors());
+// Trust proxy for secure cookies and rate-limiting when behind reverse proxy (Nginx, Caddy, etc.)
+app.set('trust proxy', 1);
+
+// Configure Helmet for secure HTTP headers & HSTS
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  contentSecurityPolicy: false, // Served by frontend or edge
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
+// Force HTTPS in production environments
+app.use((req, res, next) => {
+  if (IS_PROD && !req.secure && req.headers['x-forwarded-proto'] !== 'https') {
+    return res.redirect(`https://${req.headers.host}${req.url}`);
+  }
+  next();
+});
+
+// ============================================================
+// CORS & BODY PARSING
+// ============================================================
+
+// CORS origin whitelist
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow server-to-server or same-origin requests (no origin header)
+    if (!origin) return callback(null, true);
+    if (!IS_PROD || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      return callback(null, true);
+    }
+    return callback(new Error('Blocked by CORS policy: Origin not allowed.'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-company-code']
+}));
 
 // Parse JSON request bodies (supports large multi-slide documents)
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// Request logging
+// Request logging (sanitizes URLs, avoiding raw query params)
 app.use((req, res, next) => {
-  console.log(
-    `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
-  );
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
+// General DoS and endpoint scraping protection
+app.use('/api/', generalApiLimiter);
+
 // ============================================================
-// DATABASE TEST
+// DATABASE CONNECTION TEST
 // ============================================================
 
-// This checks the EXISTING SkillBridge PostgreSQL database.
-// It does NOT create a database or modify any data.
 async function checkDatabaseConnection() {
   try {
     await prisma.$connect();
@@ -66,19 +111,18 @@ async function checkDatabaseConnection() {
     console.log('SkillBridge PostgreSQL database connected');
     console.log('========================================');
 
-    // Read one existing user only to verify the User table.
     const userCount = await prisma.user.count();
-
-    console.log(`Existing users in database: ${userCount}`);
-    console.log('Database query test: SUCCESS');
+    console.log(`Active users count: ${userCount}`);
     console.log('========================================');
   } catch (error) {
     console.error('========================================');
     console.error('DATABASE CONNECTION: FAILED');
     console.error('========================================');
-    console.error('Database error:', error);
-    console.error('Message:', error?.message);
-    console.error('Code:', error?.code);
+    if (!IS_PROD) {
+      console.error('Database error:', error.message);
+    } else {
+      console.error('Could not connect to PostgreSQL. Check connection string.');
+    }
     console.error('========================================');
   }
 }
@@ -103,7 +147,7 @@ app.use('/api/v1/voice', resolveTenant, voiceRoutes);
 app.use('/api/voice', resolveTenant, voiceRoutes);
 
 // ============================================================
-// HEALTH CHECK
+// HEALTH CHECK (Production-safe, no error leak)
 // ============================================================
 
 app.get('/api/health', async (req, res) => {
@@ -117,40 +161,12 @@ app.get('/api/health', async (req, res) => {
       timestamp: new Date().toISOString()
     });
   } catch (error) {
-    console.error('Health check database error:', error);
+    console.error('Health check database error:', error.message);
 
     res.status(500).json({
       status: 'error',
       server: 'running',
-      database: 'disconnected',
-      error: error.message
-    });
-  }
-});
-
-// ============================================================
-// DATABASE DEBUG ENDPOINT
-// ============================================================
-
-// Temporary endpoint for checking the existing database.
-// Remove this endpoint after debugging if you don't need it.
-app.get('/api/debug/database', async (req, res) => {
-  try {
-    const userCount = await prisma.user.count();
-
-    res.json({
-      success: true,
-      database: 'connected',
-      userCount
-    });
-  } catch (error) {
-    console.error('Database debug error:', error);
-
-    res.status(500).json({
-      success: false,
-      database: 'connection failed',
-      error: error.message,
-      code: error.code || null
+      database: 'disconnected'
     });
   }
 });
@@ -158,12 +174,6 @@ app.get('/api/debug/database', async (req, res) => {
 // ============================================================
 // REACT SPA FALLBACK
 // ============================================================
-
-// This allows routes such as:
-// /login
-// /admin
-// /dashboard
-// etc. to load index.html when refreshed.
 
 app.get('*', (req, res, next) => {
   if (req.path.startsWith('/api/')) {
@@ -184,18 +194,20 @@ app.use((req, res) => {
 });
 
 // ============================================================
-// GLOBAL ERROR HANDLER
+// GLOBAL ERROR HANDLER (Sanitizes errors in production)
 // ============================================================
 
 app.use((err, req, res, next) => {
-  console.error('========================================');
-  console.error('UNHANDLED SERVER ERROR');
-  console.error('========================================');
-  console.error(err);
-  console.error('========================================');
+  console.error('[UNHANDLED SERVER ERROR]', err.message || err);
+  if (!IS_PROD && err.stack) {
+    console.error(err.stack);
+  }
 
-  res.status(500).json({
-    error: err.message || 'An unhandled server error occurred.'
+  const statusCode = err.status || err.statusCode || 500;
+  res.status(statusCode).json({
+    error: IS_PROD
+      ? (statusCode === 500 ? 'An unexpected server error occurred.' : (err.message || 'Error processing request.'))
+      : (err.message || 'An unhandled server error occurred.')
   });
 });
 
@@ -210,7 +222,6 @@ app.listen(PORT, async () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('========================================');
 
-  // Check the existing database after the server starts.
   await checkDatabaseConnection();
 
   try {
@@ -218,8 +229,15 @@ app.listen(PORT, async () => {
     const gatewayUrl = aiService.getGatewayBaseUrl();
     console.log(`[LLM Gateway] Health OK at ${gatewayUrl} (model: ${health?.model || 'unknown'})`);
   } catch (e) {
-    console.warn('[LLM Gateway] Health check failed. Tutor chat requires SKILLBRIDGE_LLM_GATEWAY_URL on port 8081.');
+    console.warn('[LLM Gateway] Notice: Gateway health check on port 8081.');
   }
+
+  // Schedule automated daily database backup (every 24 hours)
+  const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  setInterval(() => {
+    console.log('[Scheduler] Executing scheduled daily database backup...');
+    runDailyBackup().catch((err) => console.error('[Scheduler] Automated backup error:', err.message));
+  }, BACKUP_INTERVAL_MS);
 });
 
 // ============================================================
@@ -227,14 +245,14 @@ app.listen(PORT, async () => {
 // ============================================================
 
 process.on('uncaughtException', (err) => {
-  console.error('[BACKEND:UNCAUGHT_EXCEPTION] Caught error without crashing server:', err?.message || err);
-  if (err?.stack) {
+  console.error('[BACKEND:UNCAUGHT_EXCEPTION]', err?.message || err);
+  if (!IS_PROD && err?.stack) {
     console.error(err.stack);
   }
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('[BACKEND:UNHANDLED_REJECTION] Caught rejection without crashing server:', reason);
+process.on('unhandledRejection', (reason) => {
+  console.error('[BACKEND:UNHANDLED_REJECTION]', reason);
 });
 
 // ============================================================
@@ -242,17 +260,15 @@ process.on('unhandledRejection', (reason, promise) => {
 // ============================================================
 
 process.on('SIGTERM', async () => {
-  console.log('SIGTERM received. Closing Prisma connection...');
-
+  console.log('SIGTERM received. Closing Prisma connections...');
   await prisma.$disconnect();
-
+  await masterPrisma.$disconnect();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  console.log('SIGINT received. Closing Prisma connection...');
-
+  console.log('SIGINT received. Closing Prisma connections...');
   await prisma.$disconnect();
-
+  await masterPrisma.$disconnect();
   process.exit(0);
 });

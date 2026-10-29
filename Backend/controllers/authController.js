@@ -2,8 +2,7 @@ import prisma from '../config/prisma.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pythonService from '../services/pythonService.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-prod';
+import { JWT_SECRET } from '../config/jwtConfig.js';
 
 export const passwordLogin = async (req, res) => {
   const { email, password } = req.body;
@@ -12,8 +11,11 @@ export const passwordLogin = async (req, res) => {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
 
+  const cleanEmail = String(email).trim().toLowerCase();
+
   try {
-    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    const targetPrisma = req.prisma || prisma;
+    const user = await targetPrisma.user.findUnique({ where: { email: cleanEmail } });
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
@@ -25,17 +27,25 @@ export const passwordLogin = async (req, res) => {
     let isMatch = false;
     if (user.passwordHash) {
       isMatch = await bcrypt.compare(password, user.passwordHash);
-    } else {
-      // Fallback: If no password is set, the student's password is their FIN number
-      isMatch = (password === user.finNumber);
+    } else if (user.finNumber) {
+      // Legacy fallback: If no password hash was set, compare with FIN and immediately upgrade to secure hash
+      isMatch = (password.trim() === user.finNumber.trim());
+      if (isMatch) {
+        const upgradedHash = await bcrypt.hash(password.trim(), 12);
+        await targetPrisma.user.update({
+          where: { id: user.id },
+          data: { passwordHash: upgradedHash },
+        }).catch((err) => console.warn('[Auth] Upgrading legacy plain password notice:', err.message));
+      }
     }
 
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
 
+    const userRole = user.role || 'STUDENT';
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: 'STUDENT', tenantCode: req.tenantCode || 'default' },
+      { id: user.id, email: user.email, role: userRole, tenantCode: req.tenantCode || 'default' },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -50,7 +60,7 @@ export const passwordLogin = async (req, res) => {
         finNumber: user.finNumber,
         preferredLanguage: user.preferredLanguage,
         country: user.country,
-        role: user.role,
+        role: userRole,
       },
     });
   } catch (error) {
@@ -67,8 +77,9 @@ export const faceLogin = async (req, res) => {
   }
 
   try {
+    const targetPrisma = req.prisma || prisma;
     // Get all users who have face embeddings registered in PostgreSQL
-    const candidates = await prisma.user.findMany({
+    const candidates = await targetPrisma.user.findMany({
       where: {
         faceEmbedding: { not: null },
       },
@@ -90,7 +101,7 @@ export const faceLogin = async (req, res) => {
     }
 
     // Fetch the matched user profile from PostgreSQL
-    const user = await prisma.user.findUnique({
+    const user = await targetPrisma.user.findUnique({
       where: { id: result.id },
     });
 
@@ -102,8 +113,9 @@ export const faceLogin = async (req, res) => {
       return res.status(403).json({ error: 'Your account has been deactivated. Contact admin.' });
     }
 
+    const userRole = user.role || 'STUDENT';
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: 'STUDENT', tenantCode: req.tenantCode || 'default' },
+      { id: user.id, email: user.email, role: userRole, tenantCode: req.tenantCode || 'default' },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
@@ -118,7 +130,7 @@ export const faceLogin = async (req, res) => {
         finNumber: user.finNumber,
         preferredLanguage: user.preferredLanguage,
         country: user.country,
-        role: user.role,
+        role: userRole,
       },
     });
   } catch (error) {

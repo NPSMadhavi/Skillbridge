@@ -10,7 +10,7 @@ venv/
 __pycache__/
 *.pyc
 
-# Environment files
+# Environment & Secret files
 .env
 .env.*
 *.env
@@ -19,6 +19,33 @@ __pycache__/
 Backend/.env
 ai-service/.env
 Frontend/.env
+!.env.example
+!Backend/.env.example
+!Frontend/.env.example
+!ai-service/.env.example
+
+# Credentials & Key files
+*.pem
+*.key
+*.cert
+*.crt
+*.pfx
+*.p12
+id_rsa*
+*.pub
+credentials.json
+service-account*.json
+*token*.json
+
+# Backups & Database Dumps
+backups/
+Backend/backups/
+*.dump
+*.tar
+*.bak
+*.sql.gz
+*.sqlite
+*.sqlite3
 
 # OCR traineddata & test artifacts
 *.traineddata

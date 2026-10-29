@@ -194,37 +194,36 @@ class LivenessService:
         pitch = pose_data["pitch_ratio"]
         roll = abs(pose_data["roll_deg"])
 
-        if roll > 18.0:
+        if roll > 24.0:
             return False, f"Head tilted too much sideways ({roll:.1f}°). Keep your head level."
 
         if expected_step == "look_straight":
-            if 0.38 <= yaw <= 0.62 and 0.46 <= pitch <= 0.72:
+            if 0.35 <= yaw <= 0.65 and 0.44 <= pitch <= 0.74:
                 return True, "Valid straight pose."
             return False, f"Not looking straight (yaw={yaw:.2f}, pitch={pitch:.2f})."
 
         elif expected_step == "look_up":
             # Pitch ratio drops when looking up because nose moves closer to eye line
-            if pitch < 0.50:
+            if pitch <= 0.55:
                 return True, "Valid look-up pose."
-            return False, f"Head not tilted up enough (pitch={pitch:.2f}, expected < 0.50)."
+            return False, f"Head not tilted up enough (pitch={pitch:.2f}, expected <= 0.55)."
 
         elif expected_step == "turn_left":
             # Nose shifts to viewer's right or left depending on turn
-            # When user turns head to their left, in mirrored view nose moves towards viewer's left (< 0.38) or (> 0.62)
-            if yaw < 0.38 or yaw > 0.62:
+            if yaw < 0.43 or yaw > 0.57:
                 return True, "Valid left turn pose."
             return False, f"Head not turned left enough (yaw={yaw:.2f})."
 
         elif expected_step == "turn_right":
-            if yaw < 0.38 or yaw > 0.62:
+            if yaw < 0.43 or yaw > 0.57:
                 return True, "Valid right turn pose."
             return False, f"Head not turned right enough (yaw={yaw:.2f})."
 
         elif expected_step == "look_down":
             # Pitch ratio increases when looking down because nose moves closer to mouth
-            if pitch > 0.68:
+            if pitch >= 0.63:
                 return True, "Valid look-down pose."
-            return False, f"Head not tilted down enough (pitch={pitch:.2f}, expected > 0.68)."
+            return False, f"Head not tilted down enough (pitch={pitch:.2f}, expected >= 0.63)."
 
         return False, f"Unknown step: {expected_step}"
 
@@ -306,14 +305,14 @@ class LivenessService:
         yaw_left = poses["turn_left"]["yaw_ratio"]
         yaw_right = poses["turn_right"]["yaw_ratio"]
         yaw_delta = abs(yaw_left - yaw_right)
-        if yaw_delta < 0.15:
+        if yaw_delta < 0.07:
             raise ValueError(f"Insufficient horizontal head rotation between left and right poses (delta={yaw_delta:.2f}). A static photo cannot be accepted.")
 
         # Ensure up and down pitch differ significantly
         pitch_up = poses["look_up"]["pitch_ratio"]
         pitch_down = poses["look_down"]["pitch_ratio"]
         pitch_delta = abs(pitch_down - pitch_up)
-        if pitch_delta < 0.16:
+        if pitch_delta < 0.07:
             raise ValueError(f"Insufficient vertical head tilt between up and down poses (delta={pitch_delta:.2f}). A static photo cannot be accepted.")
 
         # 3. Multi-frame Identity Consistency Check

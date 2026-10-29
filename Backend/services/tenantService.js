@@ -23,7 +23,7 @@ const tenantSyncTimestamps = new Map();
  * Extract base connection URL from DATABASE_URL or DB_BASE_URL
  */
 function getDbBaseConfig() {
-  const dbUrl = process.env.DATABASE_URL || 'postgresql://postgres:praveen@localhost:5432/skillbridge?schema=public';
+  const dbUrl = (process.env.DATABASE_URL || (() => { throw new Error('[TenantService] Error: DATABASE_URL must be defined in environment.'); })());
   // Parse postgresql://user:pass@host:port/dbname...
   const urlObj = new URL(dbUrl);
   const baseUrl = `${urlObj.protocol}//${urlObj.username ? `${urlObj.username}:${urlObj.password}@` : ''}${urlObj.host}`;
@@ -138,11 +138,12 @@ export const tenantService = {
 
     // Ensure backwards-compatible schema columns exist in tenant DB
     client.$executeRawUnsafe(`
-      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
-      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "fullName" TEXT;
-      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "nricFin" TEXT;
-      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
-      ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;
+      ALTER TABLE IF EXISTS "Admin"
+        ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS "fullName" TEXT,
+        ADD COLUMN IF NOT EXISTS "nricFin" TEXT,
+        ADD COLUMN IF NOT EXISTS "phone" TEXT,
+        ADD COLUMN IF NOT EXISTS "department" TEXT;
     `).catch(() => {});
 
     tenantClients.set(normalizedCode, client);
@@ -559,6 +560,40 @@ export const tenantService = {
    */
   async ensureDefaultCompany() {
     try {
+      const { baseUrl, rootUrl, defaultDbName } = getDbBaseConfig();
+      const defaultDbUrl = (process.env.DATABASE_URL || (() => { throw new Error('[TenantService] Error: DATABASE_URL must be defined in environment.'); })());
+
+      // 1. Ensure the default database exists on PostgreSQL server
+      const rootClient = new Client({ connectionString: rootUrl });
+      try {
+        await rootClient.connect();
+        const checkRes = await rootClient.query(
+          'SELECT 1 FROM pg_database WHERE datname = $1',
+          [defaultDbName]
+        );
+        if (checkRes.rowCount === 0) {
+          console.log(`[Multi-Tenant] Creating default database "${defaultDbName}"...`);
+          await rootClient.query(`CREATE DATABASE "${defaultDbName}"`);
+          console.log(`[Multi-Tenant] Database "${defaultDbName}" created successfully.`);
+        }
+      } catch (dbCreateErr) {
+        console.warn(`[Multi-Tenant] Notice checking/creating default database "${defaultDbName}":`, dbCreateErr.message);
+      } finally {
+        await rootClient.end().catch(() => {});
+      }
+
+      // 2. Ensure schema is applied to the default database
+      const defaultPgClient = new Client({ connectionString: `${baseUrl}/${defaultDbName}` });
+      try {
+        await defaultPgClient.connect();
+        await defaultPgClient.query(tenantSchemaSql);
+      } catch (schemaErr) {
+        console.warn('[Multi-Tenant] Notice applying schema to default DB:', schemaErr.message);
+      } finally {
+        await defaultPgClient.end().catch(() => {});
+      }
+
+      // 3. Ensure master company record exists and points to default database
       const existing = await masterPrisma.company.findFirst({
         where: {
           OR: [{ code: 'default' }, { code: 'main' }]
@@ -566,9 +601,6 @@ export const tenantService = {
       });
 
       if (!existing) {
-        const { defaultDbName } = getDbBaseConfig();
-        const defaultDbUrl = process.env.DATABASE_URL || 'postgresql://postgres:praveen@localhost:5432/skillbridge?schema=public';
-
         await masterPrisma.company.create({
           data: {
             name: 'SkillBridge Main Organization',
@@ -580,18 +612,46 @@ export const tenantService = {
           }
         });
         console.log('[Multi-Tenant] Seeded default company pointing to primary database.');
+      } else if (existing.dbUrl !== defaultDbUrl || existing.dbName !== defaultDbName) {
+        await masterPrisma.company.update({
+          where: { id: existing.id },
+          data: {
+            dbName: defaultDbName,
+            dbUrl: defaultDbUrl
+          }
+        });
+        console.log(`[Multi-Tenant] Updated default company database to "${defaultDbName}".`);
       }
 
-      // Ensure required schema columns exist in default database
+      // 4. Ensure required schema columns exist in default database
       await defaultPrisma.$executeRawUnsafe(`
-        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
-        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "fullName" TEXT;
-        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "nricFin" TEXT;
-        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
-        ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;
+        ALTER TABLE IF EXISTS "Admin"
+          ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
+          ADD COLUMN IF NOT EXISTS "fullName" TEXT,
+          ADD COLUMN IF NOT EXISTS "nricFin" TEXT,
+          ADD COLUMN IF NOT EXISTS "phone" TEXT,
+          ADD COLUMN IF NOT EXISTS "department" TEXT;
       `).catch(err => {
         console.warn('[Multi-Tenant] Auto-migration on default DB skipped/failed:', err.message);
       });
+
+      // 5. Ensure default admin user exists
+      const adminCount = await defaultPrisma.admin.count().catch(() => 0);
+      if (adminCount === 0) {
+        const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPassword123!';
+        const defaultAdminEmail = (process.env.ADMIN_EMAIL || 'admin@skillbridge.com').toLowerCase().trim();
+        const passwordHash = await bcrypt.hash(defaultAdminPassword, 12);
+        await defaultPrisma.admin.create({
+          data: {
+            email: defaultAdminEmail,
+            passwordHash,
+            mustChangePassword: false
+          }
+        }).catch(err => {
+          console.warn('[Multi-Tenant] Notice creating default admin:', err.message);
+        });
+        console.log(`[Multi-Tenant] Default admin created: ${defaultAdminEmail}`);
+      }
     } catch (err) {
       console.warn('[Multi-Tenant] Could not ensure default company:', err.message);
     }
@@ -717,3 +777,4 @@ export const tenantService = {
 };
 
 export default tenantService;
+

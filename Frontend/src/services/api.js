@@ -1,4 +1,17 @@
-const API_BASE_URL = 'http://localhost:5000/api/v1';
+const getApiBaseUrl = () => {
+  if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE_URL) {
+    return import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location) {
+    const { protocol, hostname, port } = window.location;
+    if (protocol === 'https:') {
+      return `${protocol}//${hostname}${port ? `:${port}` : ''}/api/v1`;
+    }
+  }
+  return 'http://localhost:5000/api/v1';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 const getHeaders = (role = false) => {
   const headers = {
@@ -17,15 +30,16 @@ const getHeaders = (role = false) => {
     let token = null;
     let tenantId = 'default';
 
+    // Strict role segregation when explicitly on admin/super routes, with safe fallback for shared learner routes
     if (role === 'super' || isSuperAdminPath) {
-      token = superAdminSession?.token || adminSession?.token;
+      token = superAdminSession?.token || null;
       tenantId = 'master';
     } else if (role === true || isAdminPath) {
-      token = adminSession?.token || userSession?.token;
+      token = adminSession?.token || superAdminSession?.token || null;
       tenantId = adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
     } else {
-      token = userSession?.token || adminSession?.token;
-      tenantId = userSession?.tenant?.code || userSession?.user?.tenantCode || sessionStorage.getItem('skillbridge_tenant') || 'default';
+      token = userSession?.token || adminSession?.token || superAdminSession?.token || null;
+      tenantId = userSession?.tenant?.code || userSession?.user?.tenantCode || adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
     }
 
     if (token) {
@@ -596,14 +610,20 @@ export const api = {
         currentConcept: chatData.currentConcept,
         language: chatData.language,
         conversationHistory: chatData.conversationHistory || [],
+        aiName: chatData.aiName || chatData.assistantName,
       }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to send message to AI Tutor.');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to chat with AI Tutor.');
     }
     const data = await res.json();
-    return { text: data.reply || data.text, reply: data.reply || data.text, language: data.language };
+    return {
+      text: data.reply || data.text || "I'm ready to help with your course questions!",
+      reply: data.reply || data.text || "I'm ready to help with your course questions!",
+      language: data.language,
+      assistantName: data.assistantName
+    };
   },
 
   updateCourseProgressDetails: async (courseId, details) => {
@@ -874,19 +894,6 @@ export const api = {
     return res.json();
   },
 
-  chatWithTutor: async (courseId, chatData) => {
-    const res = await fetch(`${API_BASE_URL}/courses/${courseId}/chat`, {
-      method: 'POST',
-      headers: getHeaders(false),
-      body: JSON.stringify(chatData),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to chat with AI Tutor.');
-    }
-    return res.json();
-  },
-
   getTtsAudioUrl: (text, options = {}) => {
     const { voice, gender = 'FEMALE', rate = 1.0, pitch = 1.0 } = options;
     const params = new URLSearchParams({
@@ -896,6 +903,9 @@ export const api = {
       pitch: String(pitch),
     });
     if (voice) params.append('voice', voice);
+    const headers = getHeaders(false);
+    const token = headers['Authorization']?.replace('Bearer ', '');
+    if (token) params.append('token', token);
     return `${API_BASE_URL}/tts/synthesize?${params.toString()}`;
   },
 
@@ -912,47 +922,10 @@ export const api = {
     return res.json();
   },
 
-  getAiSettings: async () => {
-    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
-      method: 'GET',
-      headers: getHeaders(false),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to fetch assistant settings.');
-    }
-    return res.json();
-  },
-
-  getCompanyAiSettings: async () => {
-    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
-      method: 'GET',
-      headers: getHeaders(false),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to fetch assistant settings.');
-    }
-    return res.json();
-  },
-
   updateAssistantSettings: async (settings) => {
-    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
+    const res = await fetch(`${API_BASE_URL}/admin/ai-settings`, {
       method: 'PUT',
-      headers: getHeaders(false),
-      body: JSON.stringify(settings),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to update assistant settings.');
-    }
-    return res.json();
-  },
-
-  updateAiSettings: async (settings) => {
-    const res = await fetch(`${API_BASE_URL}/assistant/settings`, {
-      method: 'PUT',
-      headers: getHeaders(false),
+      headers: getHeaders(true),
       body: JSON.stringify(settings),
     });
     if (!res.ok) {

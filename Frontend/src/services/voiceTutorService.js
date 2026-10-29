@@ -221,9 +221,9 @@ const WAKE_WORD_PATTERNS = [
 export const KNOWN_SELF_ECHO_PATTERNS = [
 
   // English greetings & acknowledgments
-  /\b(?:yes|yeah|ya)?\s*(?:tell\s+me|im\s+listening|i\s+am\s+listening|listening|please\s+tell\s+me)\b/i,
+  /^(?:yes|yeah|ya)?\s*(?:tell\s+me|im\s+listening|i\s+am\s+listening|listening|please\s+tell\s+me)$/i,
 
-  /\b(?:yes\s+tell\s+me|tell\s+me\s+i'm\s+listening|tell\s+me\s+im\s+listening|yes\s+i'm\s+listening|yes\s+im\s+listening)\b/i,
+  /^(?:yes\s+tell\s+me|tell\s+me\s+i'm\s+listening|tell\s+me\s+im\s+listening|yes\s+i'm\s+listening|yes\s+im\s+listening)$/i,
 
   /\b(?:continuing\s+to\s+(?:the\s+)?course|resuming\s+(?:the\s+)?course|resuming\s+(?:the\s+)?lecture|back\s+to\s+(?:the\s+)?lecture)\b/i,
 
@@ -684,6 +684,7 @@ export class VoiceTutorManager {
     this._latestInterimText = '';
     this._interimDebounceTimer = null;
     this._finalDebounceTimer = null;
+    this._returnToSleepTimer = null;
 
 
     /* ----------------------------------------------------------
@@ -2358,152 +2359,67 @@ export class VoiceTutorManager {
      SELF ECHO
   ========================================================== */
 
-  isTranscriptSelfEcho(
-    transcript
-  ) {
-
+  isTranscriptSelfEcho(transcript) {
     if (!transcript) {
       return false;
     }
 
-
-    const normalized =
-      normalizeTranscript(
-        transcript
-      );
-
-
-    if (
-      !normalized ||
-      normalized.length < 2
-    ) {
-
+    const normalized = normalizeTranscript(transcript);
+    if (!normalized || normalized.length < 2) {
       return true;
     }
 
+    // 1. Verbatim exact replica of recent ARIA speech is an acoustic loudspeaker echo
+    for (const phrase of this.recentAriaUtterances) {
+      const normalizedPhrase = normalizeTranscript(phrase);
+      if (normalizedPhrase && normalized === normalizedPhrase) {
+        return true;
+      }
+    }
 
-    /*
-     * Known ARIA phrases.
-     */
-
-    if (
-      KNOWN_SELF_ECHO_PATTERNS.some(
-        (pattern) =>
-          pattern.test(
-            normalized
-          )
-      )
-    ) {
-
+    // 2. Generic short acknowledgements (exact full phrase only)
+    const exactGreetingAcks = [
+      "yes", "yeah", "ok", "okay", "listening", "im listening", "i am listening",
+      "tell me", "yes tell me", "yes im listening", "yes i am listening"
+    ];
+    if (exactGreetingAcks.includes(normalized)) {
       return true;
     }
 
+    // 3. User inquiries and questions with question words are NEVER acoustic echoes
+    const isExplicitQuestion = /\b(what|why|how|when|where|who|which|can|could|would|should|is|are|do|does|did|tell|explain|clarify|mean|help|define|elaborate|please)\b/i.test(transcript)
+      || transcript.includes("?")
+      || /(?:什么是|为什么|怎么|如何|请问|apa|mengapa|bagaimana|bila|என்ன|ஏன்|எப்படி|কী|কেন|কিভাবে|ఎందుకు|ఏమిటి|ఎలా)/iu.test(transcript);
+    if (isExplicitQuestion) {
+      return false;
+    }
 
-    /*
-     * Generic short acknowledgements.
-     */
-
-    if (
-
-      normalized === 'yes' ||
-
-      normalized === 'yeah' ||
-
-      normalized === 'ok' ||
-
-      normalized === 'okay' ||
-
-      normalized === 'listening' ||
-
-      normalized === 'im listening' ||
-
-      normalized === 'i am listening' ||
-
-      normalized === 'tell me' ||
-
-      normalized === 'yes tell me'
-
-    ) {
-
+    // 4. Known ARIA fixed greeting patterns (exact full matches)
+    if (KNOWN_SELF_ECHO_PATTERNS.some((pattern) => pattern.test(normalized))) {
       return true;
     }
 
-
-    /*
-     * Compare with recent ARIA speech.
-     */
-
-    for (
-      const phrase of
-      this.recentAriaUtterances
-    ) {
-
-      const normalizedPhrase =
-        normalizeTranscript(
-          phrase
-        );
-
-
-      if (
-        !normalizedPhrase
-      ) {
-
+    // 5. Heavy verbatim overlap check (88%+ identical words in sequence for longer phrases)
+    for (const phrase of this.recentAriaUtterances) {
+      const normalizedPhrase = normalizeTranscript(phrase);
+      if (!normalizedPhrase || normalizedPhrase.length < 10) {
         continue;
       }
 
-
-      if (
-
-        normalizedPhrase.includes(
-          normalized
-        ) ||
-
-        normalized.includes(
-          normalizedPhrase
-        )
-
-      ) {
-
-        return true;
-      }
-
-
-      const phraseWords =
-        normalizedPhrase
-          .split(/\s+/)
-          .filter(
-            (word) =>
-              word.length > 2
-          );
-
-
-      const transcriptWords =
-        normalized
-          .split(/\s+/)
-          .filter(
-            (word) =>
-              word.length > 2
-          );
-
-
-      if (
-        transcriptWords.length > 0 &&
-        transcriptWords.every(
-          (word) =>
-            phraseWords.includes(
-              word
-            )
-        )
-      ) {
-
-        return true;
+      const transcriptWords = normalized.split(/\s+/).filter((w) => w.length > 2);
+      const phraseWords = normalizedPhrase.split(/\s+/).filter((w) => w.length > 2);
+      if (transcriptWords.length >= 5 && phraseWords.length >= 5) {
+        const phraseWordSet = new Set(phraseWords);
+        const matchCount = transcriptWords.filter(w => phraseWordSet.has(w)).length;
+        const overlap = matchCount / transcriptWords.length;
+        if (overlap >= 0.88 && normalizedPhrase.includes(normalized)) {
+          return true;
+        }
       }
     }
 
-
     return false;
   }
-
 
   /* ==========================================================
      WAKE SEQUENCE
@@ -2602,7 +2518,7 @@ export class VoiceTutorManager {
     questionText
   ) {
 
-    if (!questionText) {
+    if (!this.isMounted || !questionText) {
       return;
     }
 
@@ -3019,7 +2935,13 @@ export class VoiceTutorManager {
     );
 
 
-    setTimeout(() => {
+    if (this._returnToSleepTimer) {
+      clearTimeout(this._returnToSleepTimer);
+    }
+
+    this._returnToSleepTimer = setTimeout(() => {
+      this._returnToSleepTimer = null;
+      if (!this.isMounted) return;
 
       if (
         this.state ===
@@ -3075,6 +2997,36 @@ export class VoiceTutorManager {
 
     this.clearFollowUpTimeout();
 
+    if (this._finalDebounceTimer) {
+      clearTimeout(this._finalDebounceTimer);
+      this._finalDebounceTimer = null;
+    }
+
+    if (this._interimDebounceTimer) {
+      clearTimeout(this._interimDebounceTimer);
+      this._interimDebounceTimer = null;
+    }
+
+    if (this._processingWatchdog) {
+      clearTimeout(this._processingWatchdog);
+      this._processingWatchdog = null;
+    }
+
+    if (this._returnToSleepTimer) {
+      clearTimeout(this._returnToSleepTimer);
+      this._returnToSleepTimer = null;
+    }
+
+    if (this.options) {
+      this.options.onQuestionReady = null;
+      this.options.onAudioCaptured = null;
+      this.options.onWakeWordDetected = null;
+      this.options.onReturnToSleep = null;
+      this.options.onStateChange = null;
+      this.options.onVolumeChange = null;
+      this.options.onTranscript = null;
+      this.options.onInterimTranscript = null;
+    }
 
     if (
       this.restartTimer

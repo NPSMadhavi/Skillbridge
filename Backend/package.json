@@ -10,7 +10,8 @@
     "prisma:generate": "prisma generate --schema=prisma/schema.prisma && prisma generate --schema=prisma/master.prisma",
     "postinstall": "prisma generate --schema=prisma/schema.prisma && prisma generate --schema=prisma/master.prisma",
     "seed:superadmin": "node prisma/seedSuperAdmin.js",
-    "seed": "node prisma/seed.js"
+    "seed": "node prisma/seed.js",
+    "backup": "node scripts/daily_backup.js"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",

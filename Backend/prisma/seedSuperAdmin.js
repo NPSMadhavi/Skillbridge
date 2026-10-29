@@ -23,7 +23,7 @@ async function main() {
       }
     });
     console.log(`[Success] Created Super Admin: ${created.email}`);
-    console.log(`[Credentials] Email: ${superAdminEmail} | Password: ${superAdminPassword}`);
+    console.log(`[Credentials] Super Admin account ready: ${superAdminEmail}`);
   } else {
     console.log(`[Info] Super Admin already exists: ${existing.email}`);
   }
@@ -41,3 +41,4 @@ main()
   .finally(async () => {
     await masterPrisma.$disconnect();
   });
+

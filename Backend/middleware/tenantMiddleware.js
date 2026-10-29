@@ -56,7 +56,8 @@ export const resolveTenant = async (req, res, next) => {
     }
 
     // Normalize tenant code (defaulting to 'default')
-    const tenantCode = (rawTenant ? String(rawTenant) : 'default').trim().toLowerCase();
+    let tenantCode = (rawTenant ? String(rawTenant) : 'default').trim().toLowerCase();
+    if (!/^[a-z0-9_-]{1,64}$/.test(tenantCode)) { tenantCode = 'default'; }
 
     // Resolve tenant client with safe fallback to default tenant
     let tenantClient;
@@ -83,3 +84,4 @@ export const resolveTenant = async (req, res, next) => {
     });
   }
 };
+

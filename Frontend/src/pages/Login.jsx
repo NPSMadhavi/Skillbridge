@@ -55,14 +55,6 @@ const EyeIcon = ({ open }) => (
   </svg>
 )
 
-const ScanBrackets = ({ active }) => (
-  <div className={`absolute inset-[18px] ${active ? 'animate-bracket-breathe' : ''}`} aria-hidden="true">
-    <span className="absolute top-0 left-0 h-3.5 w-3.5 rounded-tl-[3px] border-t-[2px] border-l-[2px] border-[#ff8c21]" />
-    <span className="absolute top-0 right-0 h-3.5 w-3.5 rounded-tr-[3px] border-t-[2px] border-r-[2px] border-[#ff8c21]" />
-    <span className="absolute bottom-0 left-0 h-3.5 w-3.5 rounded-bl-[3px] border-b-[2px] border-l-[2px] border-[#ff8c21]" />
-    <span className="absolute right-0 bottom-0 h-3.5 w-3.5 rounded-br-[3px] border-r-[2px] border-b-[2px] border-[#ff8c21]" />
-  </div>
-)
 
 
 
@@ -201,7 +193,8 @@ const Login = ({ onSuccess }) => {
     }
 
     try {
-      await wait(1800, signal)
+      // Quick frame stabilization delay for instant face scan
+      await wait(420, signal)
       if (signal.aborted) return
 
       setFaceCopy('Verifying identity…')
@@ -217,7 +210,7 @@ const Login = ({ onSuccess }) => {
       const sx = (video.videoWidth - size) / 2
       const sy = (video.videoHeight - size) / 2
       ctx.drawImage(video, sx, sy, size, size, 0, 0, 300, 300)
-      const base64Data = canvas.toDataURL('image/jpeg', 0.85)
+      const base64Data = canvas.toDataURL('image/jpeg', 0.88)
 
       const cleanCode = (companyCode || 'default').trim().toLowerCase()
       const res = await api.studentFaceLogin(base64Data, cleanCode)
@@ -232,7 +225,7 @@ const Login = ({ onSuccess }) => {
       setFaceState('success')
       setFaceCopy('Identity verified')
       stopCamera()
-      await wait(850, signal)
+      await wait(350, signal)
       if (signal.aborted) return
       onSuccess?.()
     } catch (error) {
@@ -381,9 +374,11 @@ const Login = ({ onSuccess }) => {
                     type="button"
                     onClick={runFaceId}
                     disabled={faceState === 'scanning'}
-                    className={`relative grid h-[104px] w-[104px] place-items-center rounded-full border-[1.5px] bg-white transition-all duration-200 ${faceState === 'error'
+                    className={`relative grid h-[108px] w-[108px] place-items-center rounded-full border-[1.5px] bg-white transition-all duration-200 overflow-hidden ${faceState === 'error'
                       ? 'border-rose-400 ring-4 ring-rose-500/10'
-                      : 'border-[#1d3a67] hover:border-slate-300 shadow-sm hover:scale-[1.01]'
+                      : faceState === 'scanning'
+                        ? 'border-[#0e2246] ring-4 ring-[#0e2246]/10 shadow-md'
+                        : 'border-[#556987] hover:border-slate-400 shadow-sm hover:scale-[1.01]'
                       } ${faceState === 'idle' || faceState === 'error'
                         ? 'cursor-pointer'
                         : 'cursor-default'
@@ -391,27 +386,22 @@ const Login = ({ onSuccess }) => {
                     aria-label="Authenticate with Face ID"
                   >
                     {faceState === 'scanning' ? (
-                      <>
-                        <video
-                          ref={videoRef}
-                          playsInline
-                          muted
-                          className="absolute inset-[3px] h-[96px] w-[96px] rounded-full object-cover scale-x-[-1]"
-                        />
-                        <span className="absolute inset-0 animate-ring-pulse rounded-full border border-[#ff8c21]/50" />
-                        <ScanBrackets active={true} />
-                        <span className="pointer-events-none absolute right-4 left-4 h-0.5 animate-scan-move rounded-full bg-linear-to-r from-transparent via-[#ff8c21] to-transparent" />
-                      </>
+                      <video
+                        ref={videoRef}
+                        playsInline
+                        muted
+                        className="h-full w-full rounded-full object-cover scale-x-[-1]"
+                      />
                     ) : (
-                      // Bracket scan icon
-                      <svg className="h-8 w-8 text-[#0e2246]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M20 16v2a2 2 0 0 1-2 2h-2" />
+                      // Face ID scan icon
+                      <svg className="h-7 w-7 text-[#0f213d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M5 8.5V7a2 2 0 0 1 2-2h1.5M15.5 5H17a2 2 0 0 1 2 2v1.5M5 15.5V17a2 2 0 0 0 2 2h1.5M19 15.5V17a2 2 0 0 1-2 2h-1.5" />
                       </svg>
                     )}
                   </button>
                 )}
 
-                <p className="mt-2.5 text-center text-[13.5px] font-semibold text-slate-700">
+                <p className="mt-3 text-center text-[14px] font-semibold text-slate-800">
                   {faceState === 'success'
                     ? 'Identity Verified!'
                     : faceState === 'error'
@@ -424,12 +414,12 @@ const Login = ({ onSuccess }) => {
                   </p>
                 )}
 
-                {/* Information footer alert card */}
-                <div className="mt-2.5 rounded-xl border border-orange-200/80 bg-[#fff9f4] px-3.5 py-2 text-center max-w-[310px] shadow-sm">
-                  <p className="text-[11px] leading-relaxed text-slate-600">
+                <div className="mt-4 w-full rounded-[16px] border border-[#fde3c8] bg-[#fffaf5] px-4 py-3.5 text-center">
+                  <p className="text-[12.5px] leading-relaxed text-slate-600">
                     Use Face ID for quick, secure access. Your facial data is securely managed by your device and is never stored.
                   </p>
                 </div>
+
               </div>
             </div>
           </div>

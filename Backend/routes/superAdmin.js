@@ -2,11 +2,12 @@ import express from 'express';
 import { requireSuperAdmin } from '../middleware/superAdminAuth.js';
 import * as authCtrl from '../controllers/superAdmin/superAdminAuthController.js';
 import * as companyCtrl from '../controllers/superAdmin/companyController.js';
+import { authRateLimiter } from '../middleware/rateLimiter.js';
 
 const router = express.Router();
 
-// Public Super Admin authentication
-router.post('/auth/login', authCtrl.login);
+// Public Super Admin authentication protected by rate limiter
+router.post('/auth/login', authRateLimiter, authCtrl.login);
 
 // Protected Super Admin routes
 router.use(requireSuperAdmin);

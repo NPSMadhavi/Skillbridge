@@ -153,7 +153,8 @@ const mapRagCourse = (dbCourse) => {
     curriculum: Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : [],
     curriculumData,
     lessons,
-    quiz: curriculumData.quiz || []
+    quiz: curriculumData.quiz || [],
+    userProgress: dbCourse.userProgress || null
   };
 };
 
@@ -244,10 +245,19 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
   useEffect(() => {
     loadCourses();
 
-    // Auto-refresh when tab gains focus (e.g., admin assigned in another tab)
-    const handleFocus = () => loadCourses();
+    let lastFetch = Date.now();
+    // Auto-refresh only when tab gains focus after at least 60 seconds of inactivity
+    const handleFocus = () => {
+      if (Date.now() - lastFetch > 60000) {
+        lastFetch = Date.now();
+        loadCourses();
+      }
+    };
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') loadCourses();
+      if (document.visibilityState === 'visible' && Date.now() - lastFetch > 60000) {
+        lastFetch = Date.now();
+        loadCourses();
+      }
     };
 
     window.addEventListener('focus', handleFocus);
@@ -263,37 +273,20 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
     return ragCourses;
   }, [ragCourses]);
 
-  // Load progress data from localStorage + Database API for all courses
+  // Load progress directly from batch course query with fast local fallback (0 extra HTTP roundtrips)
   useEffect(() => {
     const initialMap = {};
     allAvailableCourses.forEach(c => {
-      const localCompleted = getCompletedLessonIdsForCourse(c.id, userId);
-      if (localCompleted.length > 0) {
-        initialMap[c.id] = localCompleted;
+      if (c.userProgress?.completedLessonIds && Array.isArray(c.userProgress.completedLessonIds) && c.userProgress.completedLessonIds.length > 0) {
+        initialMap[c.id] = c.userProgress.completedLessonIds.map(String);
+      } else {
+        const localCompleted = getCompletedLessonIdsForCourse(c.id, userId);
+        if (localCompleted.length > 0) {
+          initialMap[c.id] = localCompleted;
+        }
       }
     });
     setUserProgressMap(initialMap);
-
-    // Sync DB progress
-    allAvailableCourses.forEach(c => {
-      if (c.id) {
-        api.getCourseProgress(c.id)
-          .then(res => {
-            if (res.completedLessonIds && Array.isArray(res.completedLessonIds)) {
-              const uniqueDbLessons = Array.from(new Set(res.completedLessonIds.filter(id => id !== null && id !== undefined).map(String)));
-              setUserProgressMap(prev => {
-                const existing = prev[c.id] || [];
-                const merged = Array.from(new Set([...existing.map(String), ...uniqueDbLessons]));
-                return {
-                  ...prev,
-                  [c.id]: merged
-                };
-              });
-            }
-          })
-          .catch(() => { });
-      }
-    });
   }, [allAvailableCourses, userId]);
 
   // Compute dynamic progress statistics

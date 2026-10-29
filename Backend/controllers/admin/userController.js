@@ -293,7 +293,14 @@ export const updateUser = async (req, res) => {
 
     let faceEmbedding = undefined;
     let faceImage = undefined;
-    if (faceIdData) {
+    const isNewFace = Boolean(
+      faceIdData &&
+      (Array.isArray(faceIdData)
+        ? (faceIdData.length > 0 && faceIdData[0] !== user.faceImage)
+        : (faceIdData !== user.faceImage))
+    );
+
+    if (isNewFace) {
       try {
         const candidates = await prisma.user.findMany({
           where: {

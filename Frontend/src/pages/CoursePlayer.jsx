@@ -57,6 +57,46 @@ const lessonExplanationClientCache = new Map();
 // Audio/Utterance cache pool for pre-warmed concepts (Key: `${courseId}_${lessonId}_${conceptIndex}`)
 const ttsUtterancePool = new Map();
 
+export const haltAllSkillBridgeAudio = () => {
+  try {
+    if (window._skillbridgeCurrentAudio) {
+      const audio = window._skillbridgeCurrentAudio;
+      audio.onended = null;
+      audio.onerror = null;
+      audio.onplay = null;
+      audio.onpause = null;
+      audio.ontimeupdate = null;
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = '';
+      window._skillbridgeCurrentAudio = null;
+    }
+  } catch (e) { }
+
+  if (window._skillbridgeResumeInterval) {
+    clearInterval(window._skillbridgeResumeInterval);
+    window._skillbridgeResumeInterval = null;
+  }
+
+  try {
+    if (window._skillbridgeCurrentUtterance) {
+      window._skillbridgeCurrentUtterance.onstart = null;
+      window._skillbridgeCurrentUtterance.onend = null;
+      window._skillbridgeCurrentUtterance.onerror = null;
+      window._skillbridgeCurrentUtterance.onpause = null;
+      window._skillbridgeCurrentUtterance.onresume = null;
+      window._skillbridgeCurrentUtterance = null;
+    }
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.pause();
+      window.speechSynthesis.cancel();
+      try { window.speechSynthesis.resume(); } catch (_) { }
+      window.speechSynthesis.cancel();
+    }
+  } catch (e) { }
+};
+
 const CoursePlayer = ({
   course,
   initialCompletedLessonId,
@@ -105,16 +145,48 @@ const CoursePlayer = ({
 
   // Universal component unmount cleanup to guarantee zero background audio or speech synthesis and save playback
   useEffect(() => {
+    isMountedRef.current = true;
+
+    const handlePopState = () => {
+      console.log('[CoursePlayer] Browser popstate/back navigation detected: immediately halting audio');
+      isMountedRef.current = false;
+      playingRef.current = false;
+      isAriaSpeakingRef.current = false;
+      isAnsweringRef.current = false;
+      wasLecturePlayingRef.current = false;
+      if (utteranceRef.current) {
+        utteranceRef.current.onstart = null;
+        utteranceRef.current.onend = null;
+        utteranceRef.current.onerror = null;
+        utteranceRef.current = null;
+      }
+      haltAllSkillBridgeAudio();
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('pagehide', handlePopState);
+    window.addEventListener('beforeunload', handlePopState);
+
     return () => {
       console.log('[CoursePlayer] Unmounting player: completely canceling speech synthesis and releasing audio resources.');
-      try {
-        window.speechSynthesis?.cancel?.();
-      } catch (e) { }
+      isMountedRef.current = false;
+      playingRef.current = false;
+      isAriaSpeakingRef.current = false;
+      isAnsweringRef.current = false;
+      wasLecturePlayingRef.current = false;
 
-      if (window._skillbridgeResumeInterval) {
-        clearInterval(window._skillbridgeResumeInterval);
-        window._skillbridgeResumeInterval = null;
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('pagehide', handlePopState);
+      window.removeEventListener('beforeunload', handlePopState);
+
+      if (utteranceRef.current) {
+        utteranceRef.current.onstart = null;
+        utteranceRef.current.onend = null;
+        utteranceRef.current.onerror = null;
+        utteranceRef.current = null;
       }
+
+      haltAllSkillBridgeAudio();
       if (followUpTimerRef.current) {
         clearTimeout(followUpTimerRef.current);
         followUpTimerRef.current = null;
@@ -504,51 +576,6 @@ const CoursePlayer = ({
     pitch: 1.0
   })
 
-  // Dynamic Assistant Name & Wake-Word Configuration Modal State
-  const [showAiConfigModal, setShowAiConfigModal] = useState(false)
-  const [tempAiName, setTempAiName] = useState('')
-  const [tempWakeWord, setTempWakeWord] = useState('')
-  const [isSavingAiConfig, setIsSavingAiConfig] = useState(false)
-
-  const openAiConfigModal = () => {
-    setTempAiName(aiTutorName)
-    setTempWakeWord(aiWakeWord)
-    setShowAiConfigModal(true)
-  }
-
-  const handleSaveAiConfig = async (e) => {
-    e?.preventDefault?.()
-    const cleanName = (tempAiName || '').trim() || 'ARIA'
-    const cleanWake = (tempWakeWord || '').trim() || `Hey ${cleanName}`
-    setIsSavingAiConfig(true)
-    try {
-      await api.updateAssistantSettings({
-        assistantName: cleanName,
-        aiName: cleanName,
-        wakeWord: cleanWake
-      })
-      setAiTutorName(cleanName)
-      setAiWakeWord(cleanWake)
-      if (voiceManagerRef.current) {
-        voiceManagerRef.current.aiName = cleanName
-        voiceManagerRef.current.wakeWord = cleanWake
-        voiceManagerRef.current.options = {
-          ...voiceManagerRef.current.options,
-          aiName: cleanName,
-          wakeWord: cleanWake
-        }
-      }
-      setShowAiConfigModal(false)
-      setVoiceStatusText(`✨ Assistant renamed to "${cleanName}". Say "${cleanWake}" to activate!`)
-      speakAriaAnswer(`Hello! I am now ${cleanName}. You can call me anytime by saying "${cleanWake}".`)
-    } catch (err) {
-      console.error('Failed to update assistant name:', err)
-      alert('Failed to update assistant name: ' + (err.message || 'Unknown error'))
-    } finally {
-      setIsSavingAiConfig(false)
-    }
-  }
-
   // Fetch company AI Tutor and custom wake word configuration
   useEffect(() => {
     let isMounted = true
@@ -639,7 +666,8 @@ const CoursePlayer = ({
   const isAwakeRef = useRef(false)
   const awakeTimerRef = useRef(null)
   const handsFreeVoiceRef = useRef(true)
-  const playingRef = useRef(false)
+  const isMountedRef = useRef(true)
+  const playingRef = useRef(Boolean(initialAutoPlayNext))
   const micStreamRef = useRef(null)
   const lastAriaSpokenTimeRef = useRef(0)
 
@@ -848,6 +876,7 @@ const CoursePlayer = ({
 
   // Auto-resume lecture from the exact saved concept/sentence position
   const resumeLectureFromExactPosition = () => {
+    if (!isMountedRef.current) return;
     if (followUpTimerRef.current) {
       clearTimeout(followUpTimerRef.current)
       followUpTimerRef.current = null
@@ -891,11 +920,11 @@ const CoursePlayer = ({
   }
 
   const speakAriaAnswer = (text, onEndCallback) => {
-    if (!text) {
+    if (!isMountedRef.current || !text) {
       setIsAriaSpeaking(false)
       isAriaSpeakingRef.current = false
       voiceManagerRef.current?.setTutorSpeaking(false)
-      onEndCallback?.()
+      if (isMountedRef.current) onEndCallback?.()
       return
     }
     try {
@@ -943,7 +972,9 @@ const CoursePlayer = ({
         isAriaSpeakingRef.current = false
         lastAriaSpokenTimeRef.current = Date.now()
         voiceManagerRef.current?.setTutorSpeaking(false, cleanText)
-        onEndCallback?.()
+        if (isMountedRef.current) {
+          onEndCallback?.()
+        }
       }
 
       utterance.onend = finishTTS
@@ -989,8 +1020,12 @@ const CoursePlayer = ({
         }
         window._skillbridgeCurrentAudio = audio
 
-        audio.onended = () => finishTTS()
+        audio.onended = () => {
+          if (!isMountedRef.current) return;
+          finishTTS()
+        }
         audio.onerror = () => {
+          if (!isMountedRef.current) return;
           console.warn('[VOICE] Studio neural stream unavailable, using natural browser speech')
           try {
             window.speechSynthesis.speak(utterance)
@@ -1142,7 +1177,7 @@ const CoursePlayer = ({
   }
 
   const handleVoiceQuestion = async (userSpeech) => {
-    if (!userSpeech || isAnsweringRef.current || isAriaSpeakingRef.current) return
+    if (!isMountedRef.current || !userSpeech || isAnsweringRef.current || isAriaSpeakingRef.current) return
     const rawSpeech = userSpeech.trim()
     if (rawSpeech.length < 3 || isNoiseOrHallucination(rawSpeech)) {
       return
@@ -1283,6 +1318,7 @@ const CoursePlayer = ({
         conversationHistory: historyToSend,
         aiName: aiTutorName
       })
+      if (!isMountedRef.current) return;
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
       setChatMessages((prev) => [...prev, { sender: 'aria', text: ariaAnswer }])
       setVoiceStatusText(`🤖 ${aiTutorName} is explaining...`)
@@ -1346,6 +1382,7 @@ const CoursePlayer = ({
       aiName: aiTutorName,
       wakeWord: aiWakeWord,
       onWakeWordDetected: (wakePhrase) => {
+        if (!isMountedRef.current) return;
         console.log(`[VOICE:WAKE_MATCH] Wake phrase received: "${wakePhrase}". Transitioning to greeting...`)
         interruptLectureAndWake()
         const cleanQuestion = extractQuestionFromWakeWord(wakePhrase, aiWakeWord, aiTutorName)
@@ -1364,12 +1401,13 @@ const CoursePlayer = ({
         }
       },
       onAudioCaptured: async (audioBlob, context = {}) => {
-        if (isTranscribingRef.current) return
+        if (!isMountedRef.current || isTranscribingRef.current) return
         isTranscribingRef.current = true
         try {
           const isWakeDetection = context.isWakeDetection || manager.state === TutorState.SLEEPING
           console.log(`[VOICE:TRANSCRIPTION] Transcribing user audio with faster-whisper (${selectedLanguageCode}, size: ${audioBlob.size}B, isWakeDetection: ${isWakeDetection})...`)
           const res = await api.transcribeSpeech(audioBlob, selectedLanguageCode)
+          if (!isMountedRef.current) return;
           const transcription = (res?.text || '').trim()
           console.log(`[VOICE:TRANSCRIPTION] Result: "${transcription}"`)
 
@@ -1489,10 +1527,12 @@ const CoursePlayer = ({
         }
       },
       onQuestionReady: (questionText) => {
+        if (!isMountedRef.current) return;
         console.log(`[VOICE] Browser ASR question ready: "${questionText}"`)
         handleVoiceQuestion(questionText)
       },
       onReturnToSleep: () => {
+        if (!isMountedRef.current) return;
         console.log('[VOICE:RETURN_TO_SLEEP] Conversational window ended. Returning to SLEEPING.')
         if (wasLecturePlayingRef.current) {
           console.log(`[VOICE] Auto-resuming course lecture from Concept ${savedLecturePositionRef.current + 1}...`)
@@ -1508,6 +1548,7 @@ const CoursePlayer = ({
     })
 
     manager.onStateChange((newState) => {
+      if (!isMountedRef.current) return;
       setTutorVoiceState(newState)
       if (newState === TutorState.SLEEPING) {
         setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "${aiWakeWord}" anytime!`)
@@ -1665,7 +1706,7 @@ const CoursePlayer = ({
       const requestLang = langCode;
       api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, requestLang)
         .then(res => {
-          if (selectedLanguageCodeRef.current !== requestLang) return;
+          if (!isMountedRef.current || selectedLanguageCodeRef.current !== requestLang) return;
           const fetchReqDuration = Math.round(performance.now() - fetchReqStartTime);
           console.log(`[PERF:LESSON_FETCH_END] Received lesson script from backend in ${fetchReqDuration}ms (Backend DB Cached: ${res.cached ? 'YES' : 'NO'})`);
           const script = res.explanation || '';
@@ -2104,7 +2145,7 @@ const CoursePlayer = ({
       let isCancelled = false;
 
       const speak = (idx) => {
-        if (isCancelled || !playingRef.current) return;
+        if (isCancelled || !playingRef.current || !isMountedRef.current) return;
         if (idx >= sentences.length) {
           setPlaying(false);
           currentSentenceIdxRef.current = 0;
@@ -2181,7 +2222,7 @@ const CoursePlayer = ({
           utteranceRef.current = utterance; // Prevent GC cancellation bug
 
           utterance.onstart = () => {
-            if (isCancelled || !playingRef.current) return;
+            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
             voiceManagerRef.current?.noteSpokenText?.(spokenText);
             voiceManagerRef.current?.setTutorSpeaking?.(true, spokenText);
             const ttsDuration = Math.round(performance.now() - ttsStartTime);
@@ -2213,7 +2254,12 @@ const CoursePlayer = ({
           };
 
           utterance.onend = () => {
-            if (isCancelled || !playingRef.current) return;
+            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
+            if (utteranceRef.current) {
+              utteranceRef.current.onstart = null;
+              utteranceRef.current.onend = null;
+              utteranceRef.current.onerror = null;
+            }
             voiceManagerRef.current?.setTutorSpeaking?.(false, spokenText);
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
@@ -2227,12 +2273,17 @@ const CoursePlayer = ({
           utterance.onerror = (e) => {
             if (e?.error === 'canceled' || e?.error === 'interrupted') return;
             console.warn('Speech synthesis error:', e);
-            if (isCancelled || !playingRef.current) return;
+            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
+            if (utteranceRef.current) {
+              utteranceRef.current.onstart = null;
+              utteranceRef.current.onend = null;
+              utteranceRef.current.onerror = null;
+            }
             voiceManagerRef.current?.setTutorSpeaking?.(false, spokenText);
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
             setTimeout(() => {
-              if (isCancelled || !playingRef.current) return;
+              if (isCancelled || !playingRef.current || !isMountedRef.current) return;
               const nextIdx = idx + 1;
               currentSentenceIdxRef.current = nextIdx;
               setCurrentSentenceIdx(nextIdx);
@@ -2248,7 +2299,7 @@ const CoursePlayer = ({
 
       // Keep Chrome TTS alive during lecture playback
       const resumeInterval = setInterval(() => {
-        if (playingRef.current && isAriaSpeakingRef.current) {
+        if (playingRef.current && isAriaSpeakingRef.current && isMountedRef.current) {
           try { window.speechSynthesis.resume?.(); } catch (e) { }
         }
       }, 2000);
@@ -2258,12 +2309,22 @@ const CoursePlayer = ({
       return () => {
         isCancelled = true;
         clearInterval(resumeInterval);
+        if (utteranceRef.current) {
+          utteranceRef.current.onstart = null;
+          utteranceRef.current.onend = null;
+          utteranceRef.current.onerror = null;
+        }
         voiceManagerRef.current?.setTutorSpeaking?.(false);
         setIsAriaSpeaking(false);
         isAriaSpeakingRef.current = false;
         try { window.speechSynthesis.cancel(); } catch (e) { }
       };
     } else {
+      if (utteranceRef.current) {
+        utteranceRef.current.onstart = null;
+        utteranceRef.current.onend = null;
+        utteranceRef.current.onerror = null;
+      }
       voiceManagerRef.current?.setTutorSpeaking?.(false);
       try { window.speechSynthesis.cancel(); } catch (e) { }
     }
@@ -2370,6 +2431,7 @@ const CoursePlayer = ({
       aiName: aiTutorName
     })
       .then(res => {
+        if (!isMountedRef.current) return;
         const ariaAnswer = res.text || res.reply || "I'm ready to help with your course questions!"
         setChatMessages(prev => [...prev, { sender: 'aria', text: ariaAnswer }])
         setVoiceStatusText(`🤖 ${aiTutorName} is answering...`)
@@ -2390,6 +2452,7 @@ const CoursePlayer = ({
         setChatLoading(false)
       })
       .catch(err => {
+        if (!isMountedRef.current) return;
         console.error('Chat tutor error:', err)
         setChatMessages(prev => [...prev, { sender: 'aria', text: `⚠️ ${err.message || 'The AI tutor is temporarily unavailable. Please try again in a moment.'}` }])
         setChatLoading(false)
@@ -2402,14 +2465,27 @@ const CoursePlayer = ({
   // Comprehensive Back button exit handler ensuring immediate speech cancellation
   const handleExit = () => {
     console.log('[CoursePlayer] Back button clicked: halting all speech synthesis and audio streams.');
-    try {
-      window.speechSynthesis?.cancel?.();
-    } catch (e) { }
 
-    if (window._skillbridgeResumeInterval) {
-      clearInterval(window._skillbridgeResumeInterval);
-      window._skillbridgeResumeInterval = null;
+    // 1. Immediately flag unmounted and stop all playback flags BEFORE triggering Web Speech cancel
+    isMountedRef.current = false;
+    setPlaying(false);
+    playingRef.current = false;
+    setIsAriaSpeaking(false);
+    isAriaSpeakingRef.current = false;
+    isAnsweringRef.current = false;
+    wasLecturePlayingRef.current = false;
+
+    // 2. Detach utterance listeners so onend/onerror cannot fire next sentence
+    if (utteranceRef.current) {
+      utteranceRef.current.onstart = null;
+      utteranceRef.current.onend = null;
+      utteranceRef.current.onerror = null;
+      utteranceRef.current = null;
     }
+
+    // 3. Halt all audio elements, speech synthesis queue, and intervals
+    haltAllSkillBridgeAudio();
+
     if (followUpTimerRef.current) {
       clearTimeout(followUpTimerRef.current);
       followUpTimerRef.current = null;
@@ -2418,13 +2494,6 @@ const CoursePlayer = ({
       clearTimeout(awakeTimerRef.current);
       awakeTimerRef.current = null;
     }
-
-    setPlaying(false);
-    playingRef.current = false;
-    setIsAriaSpeaking(false);
-    isAriaSpeakingRef.current = false;
-    isAnsweringRef.current = false;
-    wasLecturePlayingRef.current = false;
 
     if (voiceManagerRef.current) {
       try {
@@ -2495,22 +2564,8 @@ const CoursePlayer = ({
           <span className="text-base">←</span> Back
         </button>
 
-        {/* Assistant Name Switcher & Multilingual Teaching Language Switcher */}
+        {/* Multilingual Teaching Language Switcher */}
         <div className="flex items-center gap-2">
-          {/* Quick Assistant Name & Wake Word Pill Button */}
-          <button
-            type="button"
-            onClick={openAiConfigModal}
-            className="flex items-center gap-1.5 bg-white border border-slate-200/90 hover:border-[#ff8c21] rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-800 shadow-2xs transition cursor-pointer hover:bg-orange-50/40"
-            title="Configure Assistant Name and Wake Word"
-          >
-            <span className="text-sm">🤖</span>
-            <span className="font-bold text-[#ff8c21]">{aiTutorName}</span>
-            <span className="hidden sm:inline text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono font-medium">
-              "{aiWakeWord}"
-            </span>
-          </button>
-
           <label className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
             <span>🌐</span>
             <span className="hidden sm:inline">Teaching Language:</span>
@@ -2658,13 +2713,6 @@ const CoursePlayer = ({
               </h2>
             </div>
 
-            {/* Live Hands-Free Status Indicator Banner */}
-            {voiceStatusText && (
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 text-white text-xs font-medium border border-[#ff8c21]/40 shadow-sm shrink-0 animate-fadeIn">
-                <span className="h-2 w-2 rounded-full bg-[#ff8c21] animate-ping" />
-                <span className="truncate max-w-xs sm:max-w-md">{voiceStatusText}</span>
-              </div>
-            )}
           </div>
 
           {/* ENLARGED CENTER LECTURE SLIDE VIDEO PLAYER UI WITH Sleek CONTROL BAR */}
@@ -3161,134 +3209,8 @@ const CoursePlayer = ({
         </div>
       )}
 
-      {/* Dynamic Assistant Name & Wake-Word Configuration Modal */}
-      {showAiConfigModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn"
-          onClick={() => setShowAiConfigModal(false)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-scaleUp"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="bg-gradient-to-r from-slate-900 to-[#182337] px-5 py-4 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded-lg bg-[#ff8c21] flex items-center justify-center text-base shadow-sm">
-                  🤖
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold leading-tight">AI Assistant Configuration</h3>
-                  <p className="text-[11px] text-slate-300">Set dynamic name and voice wake-word</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowAiConfigModal(false)}
-                className="text-slate-400 hover:text-white text-sm p-1 rounded-md transition cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveAiConfig} className="p-5 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Assistant Name
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={tempAiName}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    setTempAiName(val)
-                    const clean = val.trim()
-                    setTempWakeWord(clean ? `Hey ${clean}` : 'Hey ARIA')
-                  }}
-                  placeholder="e.g. ARIA"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
-                />
-
-                {/* Supported AI Tutor Name */}
-                <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                  <span className="text-[10px] text-slate-400 font-medium">Supported:</span>
-                  {['ARIA'].map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => {
-                        setTempAiName(preset)
-                        setTempWakeWord(`Hey ${preset}`)
-                      }}
-                      className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
-                        tempAiName.toLowerCase() === preset.toLowerCase()
-                          ? 'bg-[#ff8c21] text-white shadow-2xs'
-                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                      }`}
-                    >
-                      {preset} (Official Avatar)
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Wake-Word Phrase
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={tempWakeWord}
-                  onChange={(e) => setTempWakeWord(e.target.value)}
-                  placeholder="e.g. Hey ARIA"
-                  className="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#ff8c21] focus:outline-none transition shadow-2xs"
-                />
-                <p className="text-[10px] text-slate-500 mt-1 leading-normal">
-                  Saying either <span className="font-semibold text-slate-700">"{tempAiName || 'name'}"</span> or <span className="font-semibold text-slate-700">"{tempWakeWord || 'Hey name'}"</span> will instantly activate the assistant.
-                </p>
-              </div>
-
-              <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-3 text-[11px] text-blue-900 space-y-1">
-                <div className="flex items-center gap-1.5 font-bold text-blue-800">
-                  <span>💡</span>
-                  <span>Instant Hot-Reload</span>
-                </div>
-                <p className="text-[10px] text-blue-700 leading-relaxed">
-                  Saving updates your assistant identity and wake detector immediately across the entire system without requiring any server restarts.
-                </p>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowAiConfigModal(false)}
-                  disabled={isSavingAiConfig}
-                  className="px-3.5 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingAiConfig || !tempAiName.trim()}
-                  className="px-4 py-1.5 rounded-xl bg-[#ff8c21] hover:bg-[#e87a15] text-white text-xs font-bold shadow-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  {isSavingAiConfig ? (
-                    <>
-                      <div className="h-3 w-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                      <span>Saving...</span>
-                    </>
-                  ) : (
-                    <span>Save & Activate</span>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
-export default CoursePlayer
+export default CoursePlayer;

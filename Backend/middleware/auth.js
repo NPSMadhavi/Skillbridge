@@ -1,10 +1,16 @@
 import jwt from 'jsonwebtoken';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-change-in-prod';
+import { JWT_SECRET } from '../config/jwtConfig.js';
 
 export const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
-  const token = (authHeader && authHeader.split(' ')[1]) || req.query.token;
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  } else if (req.query && req.query.token && req.method === 'GET') {
+    // Only permit query parameter tokens for GET requests (e.g. direct media downloads)
+    token = String(req.query.token).trim();
+  }
 
   if (!token) {
     return res.status(401).json({ error: 'Access token required.' });
@@ -14,7 +20,7 @@ export const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token.' });
     }
-    req.user = decoded; // { id, email, role }
+    req.user = decoded; // { id, email, role, tenantCode }
     next();
   });
 };
