@@ -1,24 +1,28 @@
 import dotenv from 'dotenv';
+import { createRequire } from 'module';
+
 dotenv.config();
+
+const require = createRequire(import.meta.url);
 
 let PrismaClient;
 try {
   // 1. Direct path to custom generated master client
-  const masterModule = await import('../prisma/generated/master-client/index.js');
+  const masterModule = require('../prisma/generated/master-client/index.js');
   PrismaClient = masterModule.PrismaClient;
 } catch (e0) {
   try {
     // 2. Direct path within Backend node_modules (fallback)
-    const masterModule = await import('../node_modules/@prisma/master-client/index.js');
+    const masterModule = require('../node_modules/@prisma/master-client/index.js');
     PrismaClient = masterModule.PrismaClient;
   } catch (e1) {
     try {
       // 3. Package-specifier fallback
-      const masterModule = await import('@prisma/master-client');
+      const masterModule = require('@prisma/master-client');
       PrismaClient = masterModule.PrismaClient;
     } catch (e2) {
       console.warn('[MasterPrisma] Warning: master-client not found, falling back to default PrismaClient:', e2.message);
-      const defaultModule = await import('@prisma/client');
+      const defaultModule = require('@prisma/client');
       PrismaClient = defaultModule.PrismaClient;
     }
   }

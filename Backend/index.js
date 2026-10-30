@@ -41,22 +41,14 @@ const app = express();
 // PORT & PASSENGER CONFIGURATION
 // ============================================================
 // Detect Phusion Passenger (Plesk/cPanel/Passenger Standalone)
-const isPassenger = typeof PhusionPassenger !== 'undefined' || Boolean(process.env.PASSENGER_APP_ENV);
-
 if (typeof PhusionPassenger !== 'undefined') {
   PhusionPassenger.configure({ autoInstall: false });
 }
 
-// In Phusion Passenger, the server MUST listen on 'passenger' or Passenger's socket path.
-// If running standalone/locally, use process.env.PORT or default 5000.
-let PORT;
-if (process.env.PORT && (process.env.PORT.startsWith('/') || process.env.PORT.startsWith('\\\\'))) {
-  PORT = process.env.PORT;
-} else if (isPassenger) {
-  PORT = 'passenger';
-} else {
-  PORT = process.env.PORT || 5000;
-}
+// In Plesk Phusion Passenger, process.env.PORT is dynamically assigned by Passenger.
+// If process.env.PORT is not set and PhusionPassenger is detected, listen on 'passenger'.
+// Otherwise fall back to local development port 5000.
+const PORT = process.env.PORT || (typeof PhusionPassenger !== 'undefined' ? 'passenger' : 5000);
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Get current directory
