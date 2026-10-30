@@ -8,7 +8,7 @@ const getApiBaseUrl = () => {
       return `${protocol}//${hostname}${port ? `:${port}` : ''}/api/v1`;
     }
   }
-  return 'http://localhost:5000/api/v1';
+  return '/api/v1';
 };
 
 const API_BASE_URL = getApiBaseUrl();
@@ -710,12 +710,12 @@ export const api = {
         data.forEach(c => {
           if (c?.id) {
             window.__courseCache.set(String(c.id), c);
-            try { sessionStorage.setItem(`skillbridge_cached_course_${c.id}`, JSON.stringify(c)); } catch (_) {}
+            try { sessionStorage.setItem(`skillbridge_cached_course_${c.id}`, JSON.stringify(c)); } catch (_) { }
           }
         });
         sessionStorage.setItem('skillbridge_cached_courses', JSON.stringify(data));
       }
-    } catch (_) {}
+    } catch (_) { }
     return data;
   },
 
@@ -735,7 +735,7 @@ export const api = {
         window.__courseCache.set(String(data.id), data);
         sessionStorage.setItem(`skillbridge_cached_course_${data.id}`, JSON.stringify(data));
       }
-    } catch (_) {}
+    } catch (_) { }
     return data;
   },
 
@@ -769,7 +769,7 @@ export const api = {
           }
         }
       }
-    } catch (_) {}
+    } catch (_) { }
     return null;
   },
 

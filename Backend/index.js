@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 import authRoutes from './routes/auth.js';
@@ -24,28 +25,52 @@ import { runDailyBackup } from './scripts/daily_backup.js';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+
+// ============================================================
+// PORT & PASSENGER CONFIGURATION
+// ============================================================
+// Support Phusion Passenger (Plesk/cPanel/Passenger Standalone) and standard PORT environment variable
+if (typeof PhusionPassenger !== 'undefined') {
+  PhusionPassenger.configure({ autoInstall: false });
+}
+const PORT = process.env.PORT || (typeof PhusionPassenger !== 'undefined' ? 'passenger' : 5000);
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Get current directory
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Frontend production build
-const frontendPath = path.join(__dirname, '..', 'Frontend', 'dist');
+// Frontend production build resolution (supports Plesk, root httpdocs, dist, public, or relative path)
+const candidateFrontendPaths = [
+  path.join(__dirname, '..', 'Frontend', 'dist'),
+  path.join(__dirname, 'dist'),
+  path.join(__dirname, 'public'),
+  path.join(process.cwd(), 'Frontend', 'dist'),
+  path.join(process.cwd(), 'dist'),
+  path.join(process.cwd(), 'public')
+];
+const frontendPath = candidateFrontendPaths.find(p => fs.existsSync(path.join(p, 'index.html'))) || candidateFrontendPaths[0];
+
+// Serve compiled frontend static assets (JS chunks, CSS, icons, images)
+if (fs.existsSync(frontendPath)) {
+  app.use(express.static(frontendPath, {
+    maxAge: IS_PROD ? '1d' : 0,
+    index: false
+  }));
+}
 
 // ============================================================
 // SECURITY HEADERS & REVERSE PROXY
 // ============================================================
 
-// Trust proxy for secure cookies and rate-limiting when behind reverse proxy (Nginx, Caddy, etc.)
+// Trust 1 hop (reverse proxy like Nginx/Passenger) for secure cookies and rate-limiting
 app.set('trust proxy', 1);
 
 // Configure Helmet for secure HTTP headers & HSTS
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
-  contentSecurityPolicy: false, // Served by frontend or edge
+  contentSecurityPolicy: false, // Handled by edge / frontend meta tags
   hsts: {
     maxAge: 31536000,
     includeSubDomains: true,
@@ -53,10 +78,16 @@ app.use(helmet({
   }
 }));
 
-// Force HTTPS in production environments
+// Force HTTPS in production environments when not on internal/localhost network
 app.use((req, res, next) => {
-  if (IS_PROD && !req.secure && req.headers['x-forwarded-proto'] !== 'https') {
-    return res.redirect(`https://${req.headers.host}${req.url}`);
+  const isHttps = req.secure ||
+                  req.headers['x-forwarded-proto'] === 'https' ||
+                  req.headers['x-forwarded-ssl'] === 'on';
+  const host = req.headers.host || '';
+  const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
+
+  if (IS_PROD && !isHttps && !isLocal && host) {
+    return res.redirect(301, `https://${host}${req.url}`);
   }
   next();
 });
@@ -65,23 +96,47 @@ app.use((req, res, next) => {
 // CORS & BODY PARSING
 // ============================================================
 
-// CORS origin whitelist
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
-  : ['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+// CORS origin whitelist (includes brutallyhired.com, configured frontend URLs, and local development)
+const allowedOrigins = [
+  'https://brutallyhired.com',
+  'https://www.brutallyhired.com',
+  'http://brutallyhired.com',
+  'http://www.brutallyhired.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000'
+];
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL.trim().replace(/\/+$/, ''));
+}
+if (process.env.CORS_ORIGIN) {
+  process.env.CORS_ORIGIN.split(',').forEach(s => allowedOrigins.push(s.trim().replace(/\/+$/, '')));
+}
 
 app.use(cors({
   origin: (origin, callback) => {
     // Allow server-to-server or same-origin requests (no origin header)
     if (!origin) return callback(null, true);
-    if (!IS_PROD || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+
+    const cleanOrigin = origin.replace(/\/+$/, '');
+    if (!IS_PROD || allowedOrigins.includes(cleanOrigin) || allowedOrigins.includes('*')) {
       return callback(null, true);
     }
+
+    // Allow same-host origin requests
+    try {
+      const originHost = new URL(origin).host;
+      if (originHost && originHost.includes('brutallyhired.com')) {
+        return callback(null, true);
+      }
+    } catch (_) {}
+
     return callback(new Error('Blocked by CORS policy: Origin not allowed.'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-company-code']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-company-code', 'x-admin-password']
 }));
 
 // Parse JSON request bodies (supports large multi-slide documents)
@@ -175,12 +230,37 @@ app.get('/api/health', async (req, res) => {
 // REACT SPA FALLBACK
 // ============================================================
 
-app.get('*', (req, res, next) => {
+// Express 5 (path-to-regexp v8) requires '/{*splat}', whereas Express 4 uses '*'
+const isExpress5 = Boolean(
+  (express.version && express.version.startsWith('5')) ||
+  (express.application && !express.application.init)
+);
+const spaWildcard = isExpress5 ? '/{*splat}' : '*';
+
+app.get(spaWildcard, (req, res, next) => {
   if (req.path.startsWith('/api/')) {
     return next();
   }
 
-  res.sendFile(path.join(frontendPath, 'index.html'));
+  const indexPath = path.join(frontendPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+
+  return res.status(200).send(`
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>BrutallyHired / SkillBridge</title>
+      </head>
+      <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 60px 20px; color: #1e293b;">
+        <h2>Backend Service is Running</h2>
+        <p>API status: <a href="/api/health">/api/health</a></p>
+        <p style="color: #64748b; font-size: 14px;">Frontend build was not found at: <code>${frontendPath}</code></p>
+      </body>
+    </html>
+  `);
 });
 
 // ============================================================
@@ -217,8 +297,8 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, async () => {
   console.log('========================================');
-  console.log('SKILLBRIDGE BACKEND STARTED');
-  console.log(`Port: ${PORT}`);
+  console.log('SKILLBRIDGE / BRUTALLYHIRED BACKEND STARTED');
+  console.log(`Port / Socket: ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('========================================');
 
@@ -234,10 +314,13 @@ app.listen(PORT, async () => {
 
   // Schedule automated daily database backup (every 24 hours)
   const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
-  setInterval(() => {
+  const backupTimer = setInterval(() => {
     console.log('[Scheduler] Executing scheduled daily database backup...');
     runDailyBackup().catch((err) => console.error('[Scheduler] Automated backup error:', err.message));
   }, BACKUP_INTERVAL_MS);
+  if (typeof backupTimer.unref === 'function') {
+    backupTimer.unref();
+  }
 });
 
 // ============================================================

@@ -13,6 +13,7 @@ export const authRateLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: {
     error: 'Too many login attempts from this network. Please try again after 15 minutes.'
   },
@@ -28,6 +29,7 @@ export const passwordResetLimiter = rateLimit({
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: {
     error: 'Too many password reset attempts. Please wait 15 minutes before trying again.'
   }
@@ -42,6 +44,7 @@ export const generalApiLimiter = rateLimit({
   max: 600,
   standardHeaders: true,
   legacyHeaders: false,
+  validate: { trustProxy: false },
   message: {
     error: 'Too many requests. Please slow down and try again later.'
   }
