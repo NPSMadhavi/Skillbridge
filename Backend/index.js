@@ -21,19 +21,42 @@ import aiService from './services/aiService.js';
 import { tenantService } from './services/tenantService.js';
 import { runDailyBackup } from './scripts/daily_backup.js';
 
-// Load environment variables
+// Load environment variables with resilient fallback paths
 dotenv.config();
+const potentialEnvPaths = [
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '.env'),
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'),
+  path.join(process.cwd(), '.env'),
+  path.join(process.cwd(), 'Backend', '.env')
+];
+for (const envFile of potentialEnvPaths) {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile, override: false });
+  }
+}
 
 const app = express();
 
 // ============================================================
 // PORT & PASSENGER CONFIGURATION
 // ============================================================
-// Support Phusion Passenger (Plesk/cPanel/Passenger Standalone) and standard PORT environment variable
+// Detect Phusion Passenger (Plesk/cPanel/Passenger Standalone)
+const isPassenger = typeof PhusionPassenger !== 'undefined' || Boolean(process.env.PASSENGER_APP_ENV);
+
 if (typeof PhusionPassenger !== 'undefined') {
   PhusionPassenger.configure({ autoInstall: false });
 }
-const PORT = process.env.PORT || (typeof PhusionPassenger !== 'undefined' ? 'passenger' : 5000);
+
+// In Phusion Passenger, the server MUST listen on 'passenger' or Passenger's socket path.
+// If running standalone/locally, use process.env.PORT or default 5000.
+let PORT;
+if (process.env.PORT && (process.env.PORT.startsWith('/') || process.env.PORT.startsWith('\\\\'))) {
+  PORT = process.env.PORT;
+} else if (isPassenger) {
+  PORT = 'passenger';
+} else {
+  PORT = process.env.PORT || 5000;
+}
 const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Get current directory

@@ -35,7 +35,8 @@ function getMasterDbUrl() {
       return u.toString();
     } catch (_) {}
   }
-  throw new Error('[MasterPrisma] Error: MASTER_DATABASE_URL or DATABASE_URL must be defined in environment.');
+  console.warn('[MasterPrisma] Warning: Neither MASTER_DATABASE_URL nor DATABASE_URL defined. Using default fallback.');
+  return 'postgresql://postgres:postgres@localhost:5432/skillbridge_master?schema=public';
 }
 
 const masterDatabaseUrl = getMasterDbUrl();
