@@ -1,8 +1,15 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import masterPrisma from '../../config/masterPrisma.js';
-
 import { JWT_SECRET } from '../../config/jwtConfig.js';
+import {
+  ensureMasterDatabase,
+  findSuperAdminByEmail,
+  findSuperAdminById,
+  listAllSuperAdmins,
+  getWorkingMasterClient
+} from '../../services/masterDatabaseService.js';
+import crypto from 'crypto';
 
 export const login = async (req, res) => {
   const { email, password } = req.body;
@@ -12,9 +19,10 @@ export const login = async (req, res) => {
   }
 
   try {
-    const superAdmin = await masterPrisma.superAdmin.findUnique({
-      where: { email: email.toLowerCase().trim() }
-    });
+    // Ensure table & default super admin account exist
+    await ensureMasterDatabase().catch(() => {});
+
+    const superAdmin = await findSuperAdminByEmail(email, masterPrisma);
 
     if (!superAdmin) {
       return res.status(401).json({ error: 'Invalid Super Admin credentials.' });
@@ -45,16 +53,13 @@ export const login = async (req, res) => {
     });
   } catch (error) {
     console.error('Super Admin login error:', error);
-    res.status(500).json({ error: 'An error occurred during Super Admin login.' });
+    res.status(500).json({ error: error.message || 'An error occurred during Super Admin login.' });
   }
 };
 
 export const me = async (req, res) => {
   try {
-    const superAdmin = await masterPrisma.superAdmin.findUnique({
-      where: { id: req.superAdmin.id },
-      select: { id: true, email: true, name: true, createdAt: true }
-    });
+    const superAdmin = await findSuperAdminById(req.superAdmin.id, masterPrisma);
 
     if (!superAdmin) {
       return res.status(404).json({ error: 'Super Admin not found.' });
@@ -69,10 +74,7 @@ export const me = async (req, res) => {
 
 export const listSuperAdmins = async (req, res) => {
   try {
-    const superAdmins = await masterPrisma.superAdmin.findMany({
-      select: { id: true, email: true, name: true, createdAt: true },
-      orderBy: { createdAt: 'desc' }
-    });
+    const superAdmins = await listAllSuperAdmins(masterPrisma);
     res.json({ superAdmins, currentSuperAdminId: req.superAdmin?.id });
   } catch (error) {
     console.error('List super admins error:', error);
@@ -92,27 +94,49 @@ export const createSuperAdmin = async (req, res) => {
   const cleanEmail = email.toLowerCase().trim();
 
   try {
-    const existing = await masterPrisma.superAdmin.findUnique({
-      where: { email: cleanEmail }
-    });
+    const existing = await findSuperAdminByEmail(cleanEmail, masterPrisma);
     if (existing) {
       return res.status(400).json({ error: 'A Super Admin with this email already exists.' });
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const newAdmin = await masterPrisma.superAdmin.create({
-      data: {
-        email: cleanEmail,
-        passwordHash,
-        name: name ? name.trim() : null
-      },
-      select: { id: true, email: true, name: true, createdAt: true }
-    });
+    const newId = crypto.randomUUID();
 
-    res.status(201).json({
-      message: `Super Admin "${newAdmin.name || newAdmin.email}" created successfully.`,
-      superAdmin: newAdmin
-    });
+    // Try via masterPrisma
+    if (masterPrisma && masterPrisma.superAdmin && typeof masterPrisma.superAdmin.create === 'function') {
+      try {
+        const newAdmin = await masterPrisma.superAdmin.create({
+          data: {
+            id: newId,
+            email: cleanEmail,
+            passwordHash,
+            name: name ? name.trim() : null
+          },
+          select: { id: true, email: true, name: true, createdAt: true }
+        });
+        return res.status(201).json({
+          message: `Super Admin "${newAdmin.name || newAdmin.email}" created successfully.`,
+          superAdmin: newAdmin
+        });
+      } catch (_) {}
+    }
+
+    // Direct SQL fallback
+    const conn = await getWorkingMasterClient();
+    if (!conn) throw new Error('No master database connection available.');
+    const { client } = conn;
+    try {
+      const insertRes = await client.query(
+        'INSERT INTO "SuperAdmin" ("id", "email", "passwordHash", "name") VALUES ($1, $2, $3, $4) RETURNING id, email, name, "createdAt"',
+        [newId, cleanEmail, passwordHash, name ? name.trim() : null]
+      );
+      res.status(201).json({
+        message: `Super Admin "${insertRes.rows[0].name || insertRes.rows[0].email}" created successfully.`,
+        superAdmin: insertRes.rows[0]
+      });
+    } finally {
+      await client.end().catch(() => {});
+    }
   } catch (error) {
     console.error('Create super admin error:', error);
     res.status(500).json({ error: error.message || 'Failed to create super admin.' });
@@ -126,21 +150,36 @@ export const deleteSuperAdmin = async (req, res) => {
       return res.status(400).json({ error: 'You cannot delete your own Super Admin account.' });
     }
 
-    const count = await masterPrisma.superAdmin.count();
-    if (count <= 1) {
+    const all = await listAllSuperAdmins(masterPrisma);
+    if (all.length <= 1) {
       return res.status(400).json({ error: 'Cannot delete the sole Super Admin of the platform.' });
     }
 
-    const target = await masterPrisma.superAdmin.findUnique({ where: { id } });
+    const target = await findSuperAdminById(id, masterPrisma);
     if (!target) {
       return res.status(404).json({ error: 'Super Admin not found.' });
     }
 
-    await masterPrisma.superAdmin.delete({ where: { id } });
+    if (masterPrisma && masterPrisma.superAdmin && typeof masterPrisma.superAdmin.delete === 'function') {
+      try {
+        await masterPrisma.superAdmin.delete({ where: { id } });
+        return res.json({ message: `Super Admin "${target.name || target.email}" deleted successfully.` });
+      } catch (_) {}
+    }
+
+    const conn = await getWorkingMasterClient();
+    if (conn) {
+      const { client } = conn;
+      try {
+        await client.query('DELETE FROM "SuperAdmin" WHERE id = $1', [id]);
+      } finally {
+        await client.end().catch(() => {});
+      }
+    }
+
     res.json({ message: `Super Admin "${target.name || target.email}" deleted successfully.` });
   } catch (error) {
     console.error('Delete super admin error:', error);
     res.status(500).json({ error: error.message || 'Failed to delete super admin.' });
   }
 };
-

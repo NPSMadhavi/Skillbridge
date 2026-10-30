@@ -19,6 +19,7 @@ import prisma from './config/prisma.js';
 import masterPrisma from './config/masterPrisma.js';
 import aiService from './services/aiService.js';
 import { tenantService } from './services/tenantService.js';
+import { ensureMasterDatabase } from './services/masterDatabaseService.js';
 import { runDailyBackup } from './scripts/daily_backup.js';
 
 // Load environment variables with resilient fallback paths
@@ -174,6 +175,7 @@ app.use('/api/', generalApiLimiter);
 async function checkDatabaseConnection() {
   try {
     await prisma.$connect();
+    await ensureMasterDatabase().catch(e => console.warn('[MasterDB] Initialization notice:', e.message));
     await tenantService.ensureDefaultCompany();
 
     console.log('========================================');

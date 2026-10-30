@@ -14,3 +14,4 @@
   # Route all other URLs (e.g. /admin, /super-admin, /login) to React SPA index.html
   RewriteRule ^ index.html [L]
 </IfModule>
+
