@@ -2008,7 +2008,7 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
 
     // 3. Fallback to Primary OpenAI Audio Transcription Service
     const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || 'https://api.openai.com/v1';
-    const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
+    const OPENAI_API_KEY = process.env.BRUTALLYHIRED_LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
 
     const form = new FormData();
     form.append('file', req.file.buffer, {

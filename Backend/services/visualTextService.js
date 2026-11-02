@@ -15,12 +15,18 @@ function dataUrlToBuffer(dataUrl) {
 }
 
 function gatewayBaseUrl() {
-  return String(process.env.SKILLBRIDGE_LLM_GATEWAY_URL || '').trim().replace(/\/+$/, '');
+  return String(
+    process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
+    process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
+    process.env.LLM_GATEWAY_URL ||
+    'http://192.168.50.6:8081'
+  ).trim().replace(/\/+$/, '');
 }
 
 function gatewayHeaders(extra = {}) {
   const headers = { ...extra };
   const apiKey = (
+    process.env.BRUTALLYHIRED_LLM_API_KEY ||
     process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
     process.env.LLM_GATEWAY_API_KEY ||
     process.env.VEDA_API_KEY ||

@@ -14,17 +14,18 @@ class AIService {
    * Chat and health checks must use this same base URL (port 8081).
    */
   getGatewayBaseUrl() {
-    const raw = (process.env.SKILLBRIDGE_LLM_GATEWAY_URL || '').trim();
-    if (!raw) {
-      const err = new Error('SKILLBRIDGE_LLM_GATEWAY_URL is not configured.');
-      err.status = 503;
-      throw err;
-    }
+    const raw = (
+      process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
+      process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
+      process.env.LLM_GATEWAY_URL ||
+      'http://192.168.50.6:8081'
+    ).trim();
     return raw.replace(/\/+$/, '');
   }
 
   getGatewayApiKey() {
     return (
+      process.env.BRUTALLYHIRED_LLM_API_KEY ||
       process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
       process.env.LLM_GATEWAY_API_KEY ||
       process.env.VEDA_API_KEY ||
