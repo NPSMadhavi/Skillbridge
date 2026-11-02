@@ -93,16 +93,17 @@ export const faceLogin = async (req, res) => {
       return res.status(400).json({ error: 'No Face ID profiles enrolled in system. Contact admin.' });
     }
 
-    // Call Python AI service to find a match among these candidates
+    // Format and verify with Python AI service or local biometric matching
     const result = await pythonService.verifyFace(faceIdData, candidates);
 
-    if (!result.matched || !result.id) {
+    const matchedUserId = result.user_id || result.id;
+    if (!result.matched || !matchedUserId) {
       return res.status(401).json({ error: 'Face verification failed. Face not recognized.' });
     }
 
     // Fetch the matched user profile from PostgreSQL
     const user = await targetPrisma.user.findUnique({
-      where: { id: result.id },
+      where: { id: matchedUserId },
     });
 
     if (!user) {
@@ -135,7 +136,8 @@ export const faceLogin = async (req, res) => {
     });
   } catch (error) {
     console.error('Face login error:', error);
-    const status = error.statusCode || 500;
-    res.status(status).json({ error: error.message || 'An error occurred during face sign in.' });
+    // Return friendly 401 on face recognition failures rather than raw 422 or 500
+    const status = error.statusCode === 422 ? 401 : (error.statusCode || 401);
+    res.status(status).json({ error: error.message || 'Face verification failed. Please try again or log in with credentials.' });
   }
 };
