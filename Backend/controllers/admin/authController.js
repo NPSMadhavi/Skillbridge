@@ -49,7 +49,26 @@ export const login = async (req, res) => {
         .catch(() => null);
     }
 
-    const admin = await targetClient.admin.findUnique({ where: { email: cleanEmail } });
+    let admin = await targetClient.admin.findUnique({ where: { email: cleanEmail } });
+
+    // Self-heal: If this is the default admin email and no admin accounts exist yet, auto-seed it on demand
+    if (!admin && cleanEmail === (process.env.ADMIN_EMAIL || 'admin@skillbridge.com').toLowerCase().trim()) {
+      const adminCount = await targetClient.admin.count().catch(() => 0);
+      if (adminCount === 0) {
+        const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPassword123!';
+        const passwordHash = await bcrypt.hash(defaultAdminPassword, 12);
+        admin = await targetClient.admin.create({
+          data: {
+            email: cleanEmail,
+            passwordHash,
+            mustChangePassword: false,
+            fullName: 'Platform Administrator'
+          }
+        }).catch(() => null);
+        console.log(`[AdminLogin] Auto-seeded initial default admin on demand: ${cleanEmail}`);
+      }
+    }
+
     console.log(`[AdminLogin] Attempt: email="${cleanEmail}", companyCode="${companyCode || ''}", resolvedTenant="${targetTenantCode}", adminFound=${!!admin}`);
 
     if (!admin) {
