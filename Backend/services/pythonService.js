@@ -31,15 +31,16 @@ class PythonService {
   /**
    * Verifies query face image against a list of candidates.
    * @param {string|Array<string>} queryImage Base64 of live camera capture (or array of frames)
-   * @param {Array<{id: string, faceEmbedding?: string, encrypted_embedding?: string}>} candidates List of candidates with embeddings
+   * @param {Array<{id: string, faceEmbedding?: string, encrypted_embedding?: string, faceImage?: string}>} candidates List of candidates with embeddings
    * @returns {Promise<{matched: boolean, user_id: string|null, id: string|null, confidence: number}>}
    */
   async verifyFace(queryImage, candidates) {
-    // 1. Format candidates to match Pydantic schema (expects 'id' and 'encrypted_embedding')
+    // 1. Format candidates to match Pydantic schema (expects 'id', optional 'encrypted_embedding', optional 'face_image')
     const formattedCandidates = (candidates || []).map(c => ({
       id: String(c.id),
-      encrypted_embedding: String(c.encrypted_embedding || c.faceEmbedding || '')
-    })).filter(c => Boolean(c.encrypted_embedding));
+      encrypted_embedding: String(c.encrypted_embedding || c.faceEmbedding || ''),
+      face_image: c.faceImage ? String(c.faceImage) : undefined
+    })).filter(c => Boolean(c.encrypted_embedding || c.face_image));
 
     const singleImage = Array.isArray(queryImage) ? queryImage[0] : (queryImage || '');
     const multiImages = Array.isArray(queryImage) ? queryImage : (queryImage ? [queryImage] : []);
@@ -51,7 +52,7 @@ class PythonService {
     };
 
     try {
-      const response = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/face/verify`, payload, { timeout: 8000 });
+      const response = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/face/verify`, payload, { timeout: 10000 });
       const matchedUserId = response.data?.user_id || response.data?.id || null;
       return {
         matched: Boolean(response.data?.matched),
@@ -76,8 +77,8 @@ class PythonService {
       }
 
       // If service is offline or unprocessable, return clean unmatched response instead of breaking
-      const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND';
-      if (isConnError || error.response?.status === 422) {
+      const isConnError = error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND' || error.code === 'ETIMEDOUT';
+      if (isConnError || error.response?.status === 422 || error.response?.status === 400) {
         return { matched: false, id: null, user_id: null, confidence: 0 };
       }
 

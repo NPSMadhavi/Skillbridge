@@ -1,7 +1,9 @@
 import prisma from '../config/prisma.js';
+import masterPrisma from '../config/masterPrisma.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import pythonService from '../services/pythonService.js';
+import { tenantService } from '../services/tenantService.js';
 import { JWT_SECRET } from '../config/jwtConfig.js';
 
 export const passwordLogin = async (req, res) => {
@@ -77,17 +79,63 @@ export const faceLogin = async (req, res) => {
   }
 
   try {
-    const targetPrisma = req.prisma || prisma;
-    // Get all users who have face embeddings registered in PostgreSQL
-    const candidates = await targetPrisma.user.findMany({
+    let targetPrisma = req.prisma || prisma;
+    let effectiveTenantCode = req.tenantCode || 'default';
+
+    // 1. Fetch candidates from requested tenant database
+    let candidates = await targetPrisma.user.findMany({
       where: {
-        faceEmbedding: { not: null },
+        OR: [
+          { faceEmbedding: { not: null } },
+          { faceImage: { not: null } },
+        ],
       },
       select: {
         id: true,
         faceEmbedding: true,
+        faceImage: true,
       },
-    });
+    }).catch(() => []);
+
+    // Track which tenant client each candidate belongs to
+    const candidateTenantMap = new Map();
+    candidates.forEach(c => candidateTenantMap.set(c.id, { client: targetPrisma, tenantCode: effectiveTenantCode }));
+
+    // 2. If requested tenant was 'default' or no candidates found, search all active company tenants
+    if (effectiveTenantCode === 'default' || candidates.length === 0) {
+      try {
+        const companies = await masterPrisma.company.findMany({
+          where: { status: 'ACTIVE' },
+          select: { code: true },
+        }).catch(() => []);
+
+        for (const comp of companies) {
+          if (comp.code === effectiveTenantCode) continue;
+          try {
+            const compClient = await tenantService.getTenantClient(comp.code);
+            const compCandidates = await compClient.user.findMany({
+              where: {
+                OR: [
+                  { faceEmbedding: { not: null } },
+                  { faceImage: { not: null } },
+                ],
+              },
+              select: {
+                id: true,
+                faceEmbedding: true,
+                faceImage: true,
+              },
+            });
+            for (const cc of compCandidates) {
+              if (!candidateTenantMap.has(cc.id)) {
+                candidates.push(cc);
+                candidateTenantMap.set(cc.id, { client: compClient, tenantCode: comp.code });
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
 
     if (candidates.length === 0) {
       return res.status(400).json({ error: 'No Face ID profiles enrolled in system. Contact admin.' });
@@ -98,11 +146,16 @@ export const faceLogin = async (req, res) => {
 
     const matchedUserId = result.user_id || result.id;
     if (!result.matched || !matchedUserId) {
-      return res.status(401).json({ error: 'Face verification failed. Face not recognized.' });
+      console.warn(`[FaceLogin] Verification rejected. Highest similarity confidence: ${result.confidence || 0}`);
+      return res.status(401).json({ error: 'Face verification failed. Face not recognized. Look directly into camera with good lighting and try again.' });
     }
 
-    // Fetch the matched user profile from PostgreSQL
-    const user = await targetPrisma.user.findUnique({
+    // Locate the matched user in the corresponding tenant database
+    const tenantInfo = candidateTenantMap.get(matchedUserId) || { client: targetPrisma, tenantCode: effectiveTenantCode };
+    const matchedPrisma = tenantInfo.client;
+    const finalTenantCode = tenantInfo.tenantCode;
+
+    const user = await matchedPrisma.user.findUnique({
       where: { id: matchedUserId },
     });
 
@@ -116,14 +169,15 @@ export const faceLogin = async (req, res) => {
 
     const userRole = user.role || 'STUDENT';
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: userRole, tenantCode: req.tenantCode || 'default' },
+      { id: user.id, email: user.email, role: userRole, tenantCode: finalTenantCode },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     res.json({
       token,
-      tenant: { code: req.tenantCode || 'default' },
+      tenantCode: finalTenantCode,
+      tenant: { code: finalTenantCode },
       user: {
         id: user.id,
         fullName: user.fullName,
@@ -132,6 +186,7 @@ export const faceLogin = async (req, res) => {
         preferredLanguage: user.preferredLanguage,
         country: user.country,
         role: userRole,
+        tenantCode: finalTenantCode,
       },
     });
   } catch (error) {

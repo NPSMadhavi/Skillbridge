@@ -197,18 +197,34 @@ class FaceService:
         best_match_id = None
         best_sim = -1.0
         highest_similarity = -1.0
-        threshold = 0.48  # Balanced cosine threshold for InceptionResnetV1 VGGFace2
+        threshold = 0.42  # Calibrated cosine threshold for InceptionResnetV1 VGGFace2
 
         for candidate in candidates:
             cand_id = candidate.get("id")
             encrypted_emb = candidate.get("encrypted_embedding")
             
-            if not encrypted_emb:
+            cand_face_img = candidate.get("face_image")
+            cand_emb = None
+
+            if encrypted_emb:
+                try:
+                    cand_emb = crypto_service.decrypt_embedding(encrypted_emb)
+                except Exception:
+                    cand_emb = None
+
+            if cand_emb is None and cand_face_img:
+                try:
+                    pil_cand = self.decode_base64_image(cand_face_img)
+                    cand_emb = self.get_embedding(pil_cand)
+                except Exception as e:
+                    print(f"Skipping candidate {cand_id} face_image embedding extraction: {str(e)}")
+                    cand_emb = None
+
+            if cand_emb is None:
                 continue
 
             try:
-                # Decrypt candidate embedding
-                cand_emb = crypto_service.decrypt_embedding(encrypted_emb)
+                # Compare candidate embedding
                 # Compute maximum similarity across all query frames for this candidate
                 for q_emb in query_embeddings:
                     sim = self.compare_embeddings(q_emb, cand_emb)

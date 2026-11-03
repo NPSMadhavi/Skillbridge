@@ -174,7 +174,7 @@ const Login = ({ onSuccess }) => {
     let stream = null
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: 300, height: 300 },
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
         audio: false,
       })
       if (signal.aborted) {
@@ -193,33 +193,47 @@ const Login = ({ onSuccess }) => {
     }
 
     try {
-      // Quick frame stabilization delay for instant face scan
-      await wait(420, signal)
+      setFaceCopy('Look directly into the camera…')
+      // Camera stabilization delay for auto-exposure & white balance
+      await wait(750, signal)
       if (signal.aborted) return
 
-      setFaceCopy('Verifying identity…')
+      setFaceCopy('Scanning face biometric…')
 
       const video = videoRef.current
       if (!video) throw new Error('Video stream is not ready.')
 
+      const frames = []
       const canvas = document.createElement('canvas')
-      canvas.width = 300
-      canvas.height = 300
+      canvas.width = 480
+      canvas.height = 480
       const ctx = canvas.getContext('2d')
-      const size = Math.min(video.videoWidth, video.videoHeight)
-      const sx = (video.videoWidth - size) / 2
-      const sy = (video.videoHeight - size) / 2
-      ctx.drawImage(video, sx, sy, size, size, 0, 0, 300, 300)
-      const base64Data = canvas.toDataURL('image/jpeg', 0.88)
 
-      const cleanCode = (companyCode || 'default').trim().toLowerCase()
-      const res = await api.studentFaceLogin(base64Data, cleanCode)
+      // Capture a multi-frame burst for high biometric stability
+      for (let i = 0; i < 3; i++) {
+        if (signal.aborted) return
+        const size = Math.min(video.videoWidth, video.videoHeight) || 480
+        const sx = (video.videoWidth - size) / 2
+        const sy = (video.videoHeight - size) / 2
+        ctx.clearRect(0, 0, 480, 480)
+        ctx.drawImage(video, sx, sy, size, size, 0, 0, 480, 480)
+        frames.push(canvas.toDataURL('image/jpeg', 0.92))
+        if (i < 2) {
+          await wait(180, signal)
+        }
+      }
 
+      setFaceCopy('Verifying identity…')
+
+      const cleanCode = (companyCode || localStorage.getItem('skillbridge_tenant') || 'default').trim().toLowerCase()
+      const res = await api.studentFaceLogin(frames, cleanCode)
+
+      const effectiveTenant = res.tenantCode || res.tenant?.code || res.user?.tenantCode || cleanCode
       const userPayload = JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
       sessionStorage.setItem('skillbridge_user', userPayload)
       localStorage.setItem('skillbridge_user', userPayload)
-      sessionStorage.setItem('skillbridge_tenant', cleanCode)
-      localStorage.setItem('skillbridge_tenant', cleanCode)
+      sessionStorage.setItem('skillbridge_tenant', effectiveTenant)
+      localStorage.setItem('skillbridge_tenant', effectiveTenant)
       restoreLanguageAfterLogin(res.user)
 
       setFaceState('success')

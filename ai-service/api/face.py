@@ -16,7 +16,8 @@ class FaceRegisterResponse(BaseModel):
 
 class Candidate(BaseModel):
     id: str
-    encrypted_embedding: str
+    encrypted_embedding: str | None = None
+    face_image: str | None = None
 
 class FaceVerifyRequest(BaseModel):
     query_image: str | None = None
