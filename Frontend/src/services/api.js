@@ -874,7 +874,18 @@ export const api = {
 
   transcribeSpeech: async (audioBlob, language) => {
     const formData = new FormData();
-    formData.append('file', audioBlob, 'voice.webm');
+    const type = (audioBlob?.type || '').toLowerCase();
+    let filename = 'voice.webm';
+    if (type.includes('mp4') || type.includes('m4a') || type.includes('aac')) {
+      filename = 'voice.mp4';
+    } else if (type.includes('ogg')) {
+      filename = 'voice.ogg';
+    } else if (type.includes('wav')) {
+      filename = 'voice.wav';
+    } else if (type.includes('webm')) {
+      filename = 'voice.webm';
+    }
+    formData.append('file', audioBlob, filename);
     if (language) {
       formData.append('language', language);
     }

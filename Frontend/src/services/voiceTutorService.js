@@ -641,6 +641,8 @@ export class VoiceTutorManager {
     this.mediaRecorder = null;
 
     this.audioChunks = [];
+    this.currentRecordingSessionId = 0;
+    this._discardedSessionIds = new Set();
 
     this.vadInterval = null;
 
@@ -1389,242 +1391,148 @@ export class VoiceTutorManager {
     this._recordPeakRms = 0;
 
     try {
-
       if (
         this.mediaRecorder &&
-        this.mediaRecorder.state !==
-        'inactive'
+        this.mediaRecorder.state !== 'inactive'
       ) {
-
         try {
-
+          if (this.currentRecordingSessionId) {
+            this._discardedSessionIds.add(this.currentRecordingSessionId);
+          }
           this.mediaRecorder.stop();
-
         } catch (e) { }
       }
 
-
-      this.audioChunks =
-        [];
-
+      this.currentRecordingSessionId = (this.currentRecordingSessionId || 0) + 1;
+      const sessionId = this.currentRecordingSessionId;
+      const sessionChunks = [];
 
       const mimeType =
-        MediaRecorder.isTypeSupported(
-          'audio/webm;codecs=opus'
-        )
-
+        MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
           ? 'audio/webm;codecs=opus'
-
-          : MediaRecorder.isTypeSupported(
-            'audio/webm'
-          )
-
+          : MediaRecorder.isTypeSupported('audio/webm')
             ? 'audio/webm'
+            : MediaRecorder.isTypeSupported('audio/mp4')
+              ? 'audio/mp4'
+              : '';
 
-            : '';
+      const recorder = mimeType
+        ? new MediaRecorder(this.micStream, { mimeType })
+        : new MediaRecorder(this.micStream);
 
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          sessionChunks.push(event.data);
+        }
+      };
 
-      const recorder =
-        mimeType
+      recorder.onstop = async () => {
+        this.isRecording = false;
 
-          ? new MediaRecorder(
-            this.micStream,
-            {
-              mimeType
-            }
-          )
+        if (this._discardedSessionIds.has(sessionId)) {
+          this._discardedSessionIds.delete(sessionId);
+          return;
+        }
 
-          : new MediaRecorder(
-            this.micStream
-          );
-
-
-      recorder.ondataavailable =
-        (event) => {
-
-          if (
-            event.data &&
-            event.data.size > 0
-          ) {
-
-            this.audioChunks.push(
-              event.data
-            );
-          }
-        };
-
-
-      recorder.onstop =
-        async () => {
-
-          this.isRecording =
-            false;
-
-          if (this._skipNextAudioCapture) {
-            this._skipNextAudioCapture = false;
-            this.audioChunks = [];
-            return;
-          }
-
-          /*
-           * Never submit audio recorded
-           * during ARIA speech.
-           */
-
-          // Only discard if tutor is still speaking. Do NOT use ttsMutedUntil here —
-          // that gate was dropping the user's first question right after "Yes, I'm listening."
-          if (this.isTutorSpeaking) {
-            this.log(
-              LogCategory.ECHO_REJECTED,
-              'Discarding recording because ARIA is speaking'
-            );
-            this.audioChunks = [];
-            return;
-          }
-
-
-          const audioBlob =
-            new Blob(
-              this.audioChunks,
-              {
-                type:
-                  recorder.mimeType ||
-                  'audio/webm'
-              }
-            );
-
-
-          this.audioChunks =
-            [];
-
-
-          const duration =
-            Date.now() -
-            this.recordingStartTime;
-
-
+        /*
+         * Never submit audio recorded during ARIA speech.
+         */
+        if (this.isTutorSpeaking) {
           this.log(
-            LogCategory.AUDIO_DURATION,
-            `Audio captured: ${audioBlob.size} bytes / ${duration}ms`
+            LogCategory.ECHO_REJECTED,
+            'Discarding recording because ARIA is speaking'
+          );
+          return;
+        }
+
+        const audioBlob = new Blob(sessionChunks, {
+          type: recorder.mimeType || 'audio/webm'
+        });
+
+        const duration = Date.now() - this.recordingStartTime;
+
+        this.log(
+          LogCategory.AUDIO_DURATION,
+          `Audio captured: ${audioBlob.size} bytes / ${duration}ms (mime: ${audioBlob.type})`
+        );
+
+        if (audioBlob.size < 1000 || duration < 400) {
+          this.log(
+            LogCategory.TRANSCRIPTION,
+            'Audio too short; ignored'
           );
 
-
           if (
-
-            audioBlob.size <
-            2500 ||
-
-            duration < 600
-
+            this.state === TutorState.ACTIVE_LISTENING ||
+            this.state === TutorState.FOLLOW_UP_LISTENING
           ) {
-
-            this.log(
-              LogCategory.TRANSCRIPTION,
-              'Audio too short; ignored'
-            );
-
-
-            if (
-
-              this.state ===
-              TutorState.ACTIVE_LISTENING ||
-
-              this.state ===
-              TutorState.FOLLOW_UP_LISTENING
-
-            ) {
-
-              this.resetFollowUpTimeout();
-
-            }
-
-
-            return;
+            this.resetFollowUpTimeout();
           }
 
+          return;
+        }
 
-          if (this.options.onAudioCaptured) {
-            const recordedState = this.recordingStateAtStart || this.state;
-            const wasSleeping = (recordedState === TutorState.SLEEPING);
+        if (this.options.onAudioCaptured) {
+          const recordedState = this.recordingStateAtStart || this.state;
+          const wasSleeping = (recordedState === TutorState.SLEEPING);
 
-            if (!wasSleeping) {
-              this.setState(TutorState.PROCESSING);
-            }
+          if (!wasSleeping) {
+            this.setState(TutorState.PROCESSING);
+          }
 
-            try {
-              await this.options.onAudioCaptured(audioBlob, {
-                state: recordedState,
-                isWakeDetection: wasSleeping,
-                isLecturePlaying: this.isLecturePlaying
-              });
-            } catch (error) {
-              console.error(
-                '[VOICE] onAudioCaptured failed:',
-                error
+          try {
+            await this.options.onAudioCaptured(audioBlob, {
+              state: recordedState,
+              isWakeDetection: wasSleeping,
+              isLecturePlaying: this.isLecturePlaying,
+              sessionId
+            });
+          } catch (error) {
+            console.error(
+              '[VOICE] onAudioCaptured failed:',
+              error
+            );
+
+            if (this.state === TutorState.PROCESSING) {
+              this.setState(
+                TutorState.FOLLOW_UP_LISTENING
               );
 
-              if (this.state === TutorState.PROCESSING) {
-                this.setState(
-                  TutorState.FOLLOW_UP_LISTENING
-                );
-
-                this.resetFollowUpTimeout();
-              }
+              this.resetFollowUpTimeout();
             }
           }
-
-        };
-
+        }
+      };
 
       recorder.start(250);
-
-
-      this.mediaRecorder =
-        recorder;
-
-
-      this.isRecording =
-        true;
-
-
-      this.recordingStartTime =
-        Date.now();
-
-
-      this.lastSpeechTime =
-        Date.now();
-
+      this.mediaRecorder = recorder;
+      this.isRecording = true;
+      this.recordingStartTime = Date.now();
+      this.lastSpeechTime = Date.now();
 
     } catch (error) {
-
       console.error(
         '[VOICE] MediaRecorder error:',
         error
       );
-
-
-      this.isRecording =
-        false;
+      this.isRecording = false;
     }
   }
-
 
   /* ==========================================================
      STOP RECORDING
   ========================================================== */
 
   stopMediaRecording(options = {}) {
-    if (options.skipCapture) {
-      this._skipNextAudioCapture = true;
-      this.audioChunks = [];
+    if (options.skipCapture && this.currentRecordingSessionId) {
+      this._discardedSessionIds.add(this.currentRecordingSessionId);
     }
 
     this.isRecording = false;
 
     if (
       this.mediaRecorder &&
-      this.mediaRecorder.state ===
-      'recording'
+      this.mediaRecorder.state !== 'inactive'
     ) {
       try {
         this.mediaRecorder.stop();
@@ -1636,7 +1544,6 @@ export class VoiceTutorManager {
       }
     }
   }
-
 
   /* ==========================================================
      SPEECH RECOGNITION
@@ -2285,12 +2192,33 @@ export class VoiceTutorManager {
       }
       this._latestInterimText = '';
 
-      // Accumulate text across isFinal events to avoid chopping multi-part sentences
+      // Accumulate text across isFinal events with word-boundary deduplication
       if (this._accumulatedTranscript) {
-        if (!text.toLowerCase().startsWith(this._accumulatedTranscript.toLowerCase())) {
-          this._accumulatedTranscript = (this._accumulatedTranscript + ' ' + text).trim();
+        const prev = this._accumulatedTranscript.trim();
+        const curr = text.trim();
+        if (curr.toLowerCase().startsWith(prev.toLowerCase())) {
+          this._accumulatedTranscript = curr;
+        } else if (prev.toLowerCase().endsWith(curr.toLowerCase())) {
+          this._accumulatedTranscript = prev;
         } else {
-          this._accumulatedTranscript = text.trim();
+          // Check for word-level overlap at chunk boundaries
+          const prevWords = prev.split(/\s+/);
+          const currWords = curr.split(/\s+/);
+          let overlapLen = 0;
+          const maxOverlap = Math.min(prevWords.length, currWords.length);
+          for (let len = maxOverlap; len > 0; len--) {
+            const prevTail = prevWords.slice(-len).join(' ').toLowerCase();
+            const currHead = currWords.slice(0, len).join(' ').toLowerCase();
+            if (prevTail === currHead) {
+              overlapLen = len;
+              break;
+            }
+          }
+          if (overlapLen > 0) {
+            this._accumulatedTranscript = prevWords.concat(currWords.slice(overlapLen)).join(' ');
+          } else {
+            this._accumulatedTranscript = (prev + ' ' + curr).trim();
+          }
         }
       } else {
         this._accumulatedTranscript = text.trim();

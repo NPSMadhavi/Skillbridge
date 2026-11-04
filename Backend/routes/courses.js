@@ -1936,12 +1936,12 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
     const resolveLanguageCode = (lang) => {
       if (!lang) return null;
       const l = String(lang).toLowerCase().trim();
-      if (l === 'zh' || l.includes('chinese') || l.includes('中文')) return 'zh';
-      if (l === 'ms' || l.includes('malay') || l.includes('melayu')) return 'ms';
-      if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'ta';
-      if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'bn';
-      if (l === 'te' || l.includes('telugu') || l.includes('తెలుగు')) return 'te';
-      if (l === 'en' || l.includes('english')) return 'en';
+      if (l === 'zh' || l.startsWith('zh-') || l.includes('chinese') || l.includes('中文')) return 'zh';
+      if (l === 'ms' || l.startsWith('ms-') || l.includes('malay') || l.includes('melayu')) return 'ms';
+      if (l === 'ta' || l.startsWith('ta-') || l.includes('tamil') || l.includes('தமிழ்')) return 'ta';
+      if (l === 'bn' || l.startsWith('bn-') || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'bn';
+      if (l === 'te' || l.startsWith('te-') || l.includes('telugu') || l.includes('తెలుగు')) return 'te';
+      if (l === 'en' || l.startsWith('en-') || l.includes('english')) return 'en';
       return null;
     };
 
