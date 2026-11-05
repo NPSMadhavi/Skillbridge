@@ -448,12 +448,17 @@ export const tenantService = {
   },
 
   /**
-   * Update full company profile (name, department, admin contact details, status)
+   * Update full company profile (name, department, admin contact details, status, password)
    */
-  async updateCompany(id, { name, department, fullName, nricFin, phone, adminEmail, email, status }) {
+  async updateCompany(id, { name, department, fullName, nricFin, phone, adminEmail, email, status, password, adminPassword }) {
     const existing = await masterPrisma.company.findUnique({ where: { id } });
     if (!existing) {
       throw new Error('Company not found.');
+    }
+
+    const newPassword = (password || adminPassword || '').trim();
+    if (newPassword && newPassword.length < 6) {
+      throw new Error('Admin password must be at least 6 characters long.');
     }
 
     const dataToUpdate = {};
@@ -484,15 +489,21 @@ export const tenantService = {
     // Also sync admin profile in tenant DB if updated
     try {
       const client = await this.getTenantClient(updated.code);
+      const adminUpdateData = {
+        email: updated.adminEmail,
+        fullName: updated.fullName,
+        nricFin: updated.nricFin,
+        phone: updated.phone,
+        department: updated.department
+      };
+
+      if (newPassword && newPassword.length >= 6) {
+        adminUpdateData.passwordHash = await bcrypt.hash(newPassword, 10);
+      }
+
       await client.admin.updateMany({
         where: { email: existing.adminEmail },
-        data: {
-          email: updated.adminEmail,
-          fullName: updated.fullName,
-          nricFin: updated.nricFin,
-          phone: updated.phone,
-          department: updated.department
-        }
+        data: adminUpdateData
       });
     } catch (err) {
       console.warn(`[Multi-Tenant] Notice: Could not sync tenant Admin table: ${err.message}`);
@@ -508,6 +519,152 @@ export const tenantService = {
     }
 
     return updated;
+  },
+
+  /**
+   * Get all company administrators for a given company
+   */
+  async getCompanyAdmins(companyId) {
+    const company = await masterPrisma.company.findUnique({
+      where: { id: companyId },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        dbName: true,
+        status: true,
+        adminEmail: true,
+        fullName: true,
+        phone: true,
+        department: true,
+      }
+    });
+
+    if (!company) {
+      throw new Error('Company not found.');
+    }
+
+    try {
+      const client = await this.getTenantClient(company.code);
+      const admins = await client.admin.findMany({
+        select: {
+          id: true,
+          email: true,
+          fullName: true,
+          nricFin: true,
+          phone: true,
+          department: true,
+          mustChangePassword: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      return {
+        company,
+        admins
+      };
+    } catch (err) {
+      console.error(`[Multi-Tenant] Error fetching company admins for ${company.code}:`, err);
+      return {
+        company,
+        admins: [
+          {
+            id: 'primary',
+            email: company.adminEmail,
+            fullName: company.fullName || 'Primary Administrator',
+            nricFin: company.nricFin || '',
+            phone: company.phone || '',
+            department: company.department || '',
+            mustChangePassword: false,
+            createdAt: new Date().toISOString()
+          }
+        ]
+      };
+    }
+  },
+
+  /**
+   * Change password for a company administrator
+   */
+  async changeCompanyAdminPassword(companyId, { adminId, adminEmail, password, mustChangePassword = false, sendEmail = true }) {
+    const company = await masterPrisma.company.findUnique({
+      where: { id: companyId }
+    });
+
+    if (!company) {
+      throw new Error('Company not found.');
+    }
+
+    const cleanPassword = (password || '').trim();
+    if (!cleanPassword || cleanPassword.length < 6) {
+      throw new Error('New password must be at least 6 characters long.');
+    }
+
+    const client = await this.getTenantClient(company.code);
+    const passwordHash = await bcrypt.hash(cleanPassword, 10);
+
+    let targetAdmin = null;
+    if (adminId && adminId !== 'primary') {
+      targetAdmin = await client.admin.findUnique({ where: { id: adminId } });
+    }
+    if (!targetAdmin && adminEmail) {
+      targetAdmin = await client.admin.findUnique({ where: { email: adminEmail.trim().toLowerCase() } });
+    }
+    if (!targetAdmin && company.adminEmail) {
+      targetAdmin = await client.admin.findUnique({ where: { email: company.adminEmail } });
+    }
+
+    if (!targetAdmin) {
+      throw new Error(`Admin not found in company "${company.name}" database.`);
+    }
+
+    const updatedAdmin = await client.admin.update({
+      where: { id: targetAdmin.id },
+      data: {
+        passwordHash,
+        mustChangePassword: Boolean(mustChangePassword)
+      },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        nricFin: true,
+        phone: true,
+        department: true,
+        mustChangePassword: true
+      }
+    });
+
+    // Optional email dispatch
+    let emailStatus = null;
+    if (sendEmail) {
+      try {
+        emailStatus = await sendCompanyAdminCredentials({
+          adminEmail: updatedAdmin.email,
+          fullName: updatedAdmin.fullName || company.fullName || 'Company Administrator',
+          companyName: company.name,
+          slug: company.code,
+          password: cleanPassword
+        });
+      } catch (mailErr) {
+        console.warn(`[Multi-Tenant] Could not send password update email to ${updatedAdmin.email}:`, mailErr.message);
+        emailStatus = { success: false, error: mailErr.message };
+      }
+    }
+
+    return {
+      success: true,
+      message: `Password for admin ${updatedAdmin.email} has been updated successfully.`,
+      company: {
+        id: company.id,
+        name: company.name,
+        code: company.code
+      },
+      admin: updatedAdmin,
+      newPassword: cleanPassword,
+      emailStatus
+    };
   },
 
   /**

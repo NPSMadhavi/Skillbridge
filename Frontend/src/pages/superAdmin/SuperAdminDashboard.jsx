@@ -10,7 +10,8 @@ import {
   EditCompanyModal,
   InspectDatabaseModal,
   DeleteCompanyModal,
-  CreateSuperAdminModal
+  CreateSuperAdminModal,
+  ChangeAdminPasswordModal
 } from './components/CompanyModals';
 
 export default function SuperAdminDashboard() {
@@ -59,6 +60,10 @@ export default function SuperAdminDashboard() {
   const [dropPhysicalDb, setDropPhysicalDb] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState(null);
+
+  // 5. CHANGE ADMIN PASSWORD Modal State
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [passwordCompany, setPasswordCompany] = useState(null);
 
   // 5. SUPER ADMINS State
   const [superAdmins, setSuperAdmins] = useState([]);
@@ -275,10 +280,16 @@ export default function SuperAdminDashboard() {
       nricFin: company.nricFin || '',
       phone: company.phone || '',
       adminEmail: company.adminEmail || '',
-      status: company.status || 'ACTIVE'
+      status: company.status || 'ACTIVE',
+      adminPassword: ''
     });
     setEditError(null);
     setShowEditModal(true);
+  };
+
+  const handleOpenChangePasswordModal = (company) => {
+    setPasswordCompany(company);
+    setShowPasswordModal(true);
   };
 
   const handleEditSubmit = async (e) => {
@@ -293,6 +304,11 @@ export default function SuperAdminDashboard() {
       }
     }
 
+    if (editingCompany?.adminPassword && editingCompany.adminPassword.trim().length < 6) {
+      setEditError('New admin password must be at least 6 characters long.');
+      return;
+    }
+
     setUpdating(true);
 
     try {
@@ -303,7 +319,8 @@ export default function SuperAdminDashboard() {
         nricFin: editingCompany.nricFin,
         phone: editingCompany.phone,
         email: editingCompany.adminEmail,
-        status: editingCompany.status
+        status: editingCompany.status,
+        adminPassword: editingCompany.adminPassword ? editingCompany.adminPassword.trim() : undefined
       });
 
       setShowEditModal(false);
@@ -637,7 +654,18 @@ export default function SuperAdminDashboard() {
                                   </svg>
                                 </button>
 
-                                {/* 3. SUSPEND / ACTIVATE */}
+                                {/* 3. CHANGE ADMIN PASSWORD */}
+                                <button
+                                  title="Change Admin Password"
+                                  onClick={() => handleOpenChangePasswordModal(c)}
+                                  className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-slate-200 hover:border-amber-200 transition-colors cursor-pointer"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                                  </svg>
+                                </button>
+
+                                {/* 4. SUSPEND / ACTIVATE */}
                                 <button
                                   title={c.status === 'ACTIVE' ? 'Suspend Company' : 'Activate Company'}
                                   onClick={() => handleToggleStatus(c)}
@@ -836,9 +864,24 @@ export default function SuperAdminDashboard() {
           setShowViewModal(false);
           handleOpenEditModal(viewingCompany);
         }}
+        onOpenChangePassword={() => {
+          setShowViewModal(false);
+          handleOpenChangePasswordModal(viewingCompany);
+        }}
       />
 
-      {/* 3. Edit Company Modal */}
+      {/* 3. Change Admin Password Modal */}
+      <ChangeAdminPasswordModal
+        isOpen={showPasswordModal}
+        onClose={() => {
+          setShowPasswordModal(false);
+          setPasswordCompany(null);
+        }}
+        company={passwordCompany}
+        onSuccess={(msg) => triggerSuccessAlert(msg)}
+      />
+
+      {/* 4. Edit Company Modal */}
       <EditCompanyModal
         isOpen={showEditModal}
         onClose={() => setShowEditModal(false)}

@@ -16,6 +16,8 @@ router.get('/auth/me', authCtrl.me);
 router.get('/companies', companyCtrl.listCompanies);
 router.post('/companies', companyCtrl.createCompany);
 router.get('/companies/:id', companyCtrl.getCompany);
+router.get('/companies/:id/admins', companyCtrl.getCompanyAdmins);
+router.post('/companies/:id/admin-password', companyCtrl.changeCompanyAdminPassword);
 router.put('/companies/:id', companyCtrl.updateCompany);
 router.patch('/companies/:id/status', companyCtrl.updateStatus);
 router.delete('/companies/:id', companyCtrl.deleteCompany);

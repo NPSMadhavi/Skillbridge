@@ -195,6 +195,31 @@ export const api = {
     return res.json();
   },
 
+  getCompanyAdmins: async (id) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies/${id}/admins`, {
+      method: 'GET',
+      headers: getHeaders('super'),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to retrieve company administrators.');
+    }
+    return res.json();
+  },
+
+  changeCompanyAdminPassword: async (id, payload) => {
+    const res = await fetch(`${API_BASE_URL}/super-admin/companies/${id}/admin-password`, {
+      method: 'POST',
+      headers: getHeaders('super'),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to change company administrator password.');
+    }
+    return res.json();
+  },
+
   // Company Admin Auth
   adminLogin: async (email, password, companyCode = null) => {
     const headers = {

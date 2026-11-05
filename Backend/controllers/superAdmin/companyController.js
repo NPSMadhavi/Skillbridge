@@ -91,3 +91,30 @@ export const deleteCompany = async (req, res) => {
     res.status(400).json({ error: error.message || 'Failed to delete company.' });
   }
 };
+
+export const getCompanyAdmins = async (req, res) => {
+  try {
+    const data = await tenantService.getCompanyAdmins(req.params.id);
+    res.json(data);
+  } catch (error) {
+    console.error('Get company admins error:', error);
+    res.status(400).json({ error: error.message || 'Failed to retrieve company administrators.' });
+  }
+};
+
+export const changeCompanyAdminPassword = async (req, res) => {
+  const { adminId, adminEmail, password, mustChangePassword, sendEmail } = req.body;
+  try {
+    const result = await tenantService.changeCompanyAdminPassword(req.params.id, {
+      adminId,
+      adminEmail,
+      password,
+      mustChangePassword,
+      sendEmail
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Change company admin password error:', error);
+    res.status(400).json({ error: error.message || 'Failed to change company admin password.' });
+  }
+};
