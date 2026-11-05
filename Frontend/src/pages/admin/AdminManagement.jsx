@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { api } from '../../services/api';
+import CountrySelect from '../../components/CountrySelect';
+import { getCountry, getCountryDialCode, applyCountryDialCode } from '../../data/countries';
 
 const NRIC_FIN_REGEX = /^[STFGMstfgm]\d{7}[A-Za-z]$/;
 
@@ -20,6 +22,7 @@ export default function AdminManagement() {
     fullName: '',
     nricFin: '',
     email: '',
+    country: '',
     phone: '',
     department: '',
     password: '',
@@ -53,6 +56,7 @@ export default function AdminManagement() {
       fullName: '',
       nricFin: '',
       email: '',
+      country: '',
       phone: '',
       department: '',
       password: '',
@@ -365,29 +369,61 @@ export default function AdminManagement() {
 
                   <div>
                     <label className="block text-xs font-semibold text-fg mb-1">
-                      Phone Number
+                      Country <span className="text-muted font-normal">(Select to add code)</span>
                     </label>
-                    <input
-                      type="tel"
-                      placeholder="e.g. +65 9123 4567"
-                      value={form.phone}
-                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-ink/60 border border-line rounded-xl text-xs text-fg focus:outline-none focus:border-sky focus:bg-panel"
+                    <CountrySelect
+                      value={form.country || ''}
+                      onChange={(val) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          country: val,
+                          phone: applyCountryDialCode(prev.phone, val)
+                        }))
+                      }
+                      placeholder="Select country..."
                     />
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-fg mb-1">
-                    Department <span className="text-muted font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Human Resources, Operations"
-                    value={form.department}
-                    onChange={(e) => setForm({ ...form, department: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-ink/60 border border-line rounded-xl text-xs text-fg focus:outline-none focus:border-sky focus:bg-panel"
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-fg">
+                        Phone Number
+                      </label>
+                      {form.country && (
+                        <span className="text-[11px] font-mono text-sky flex items-center gap-1">
+                          <span>{getCountry(form.country)?.flag}</span>
+                          <span className="font-semibold">{getCountryDialCode(form.country)}</span>
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="tel"
+                      placeholder={form.country ? `e.g. ${getCountryDialCode(form.country)} 9123 4567` : 'e.g. +65 9123 4567'}
+                      value={form.phone}
+                      onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-ink/60 border border-line rounded-xl text-xs text-fg focus:outline-none focus:border-sky focus:bg-panel"
+                    />
+                    <p className="text-[11px] text-muted mt-1">
+                      {form.country
+                        ? `Dial code (${getCountryDialCode(form.country)}) applied for ${form.country}.`
+                        : 'Select country to auto-add code (e.g. +65, +91).'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-fg mb-1">
+                      Department <span className="text-muted font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Human Resources, Operations"
+                      value={form.department}
+                      onChange={(e) => setForm({ ...form, department: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-ink/60 border border-line rounded-xl text-xs text-fg focus:outline-none focus:border-sky focus:bg-panel"
+                    />
+                  </div>
                 </div>
 
                 <div>

@@ -1,4 +1,6 @@
 import React from 'react';
+import CountrySelect from '../../../components/CountrySelect';
+import { getCountry, getCountryDialCode, applyCountryDialCode } from '../../../data/countries';
 
 // ============================================================================
 // 1. NEW / REGISTER COMPANY MODAL
@@ -309,40 +311,72 @@ export function NewCompanyModal({
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Phone Number <span className="text-red-500">*</span>
+                      Country <span className="text-slate-400 font-normal">(Select to add code)</span>
                     </label>
+                    <CountrySelect
+                      value={newCompany.country || ''}
+                      onChange={(val) =>
+                        setNewCompany((prev) => ({
+                          ...prev,
+                          country: val,
+                          phone: applyCountryDialCode(prev.phone, val)
+                        }))
+                      }
+                      placeholder="Search or select country..."
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Phone Number <span className="text-red-500">*</span>
+                      </label>
+                      {newCompany.country && (
+                        <span className="text-[11px] font-mono text-blue-600 flex items-center gap-1">
+                          <span>{getCountry(newCompany.country)?.flag}</span>
+                          <span className="font-semibold">{getCountryDialCode(newCompany.country)}</span>
+                        </span>
+                      )}
+                    </div>
                     <input
                       type="tel"
                       required
-                      placeholder="e.g. +65 8000 0000"
+                      placeholder={newCompany.country ? `e.g. ${getCountryDialCode(newCompany.country)} 8000 0000` : 'e.g. +65 8000 0000'}
                       value={newCompany.phone}
                       onChange={(e) =>
                         setNewCompany((prev) => ({ ...prev, phone: e.target.value }))
                       }
                       className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
                     />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      {newCompany.country
+                        ? `Dial code (${getCountryDialCode(newCompany.country)}) applied for ${newCompany.country}.`
+                        : 'Select country above to auto-add code (e.g. +65, +91).'}
+                    </p>
                   </div>
-                </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Initial Admin Password <span className="text-slate-400 font-normal">(Optional)</span>
-                    </label>
-                    <span className="text-[11px] text-emerald-600 font-medium">✉️ Will be sent to admin email</span>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-semibold text-slate-700">
+                        Initial Admin Password <span className="text-slate-400 font-normal">(Optional)</span>
+                      </label>
+                      <span className="text-[11px] text-emerald-600 font-medium">✉️ Will be sent to admin email</span>
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Leave blank to auto-generate secure password & email to admin"
+                      value={newCompany.adminPassword}
+                      onChange={(e) =>
+                        setNewCompany((prev) => ({ ...prev, adminPassword: e.target.value }))
+                      }
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 font-mono"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      If left blank, a secure password will be generated and automatically emailed to the admin.
+                    </p>
                   </div>
-                  <input
-                    type="text"
-                    placeholder="Leave blank to auto-generate secure password & email to admin"
-                    value={newCompany.adminPassword}
-                    onChange={(e) =>
-                      setNewCompany((prev) => ({ ...prev, adminPassword: e.target.value }))
-                    }
-                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 font-mono"
-                  />
-                  <p className="text-[11px] text-slate-500 mt-1">
-                    If left blank, a secure password will be generated and automatically emailed to the admin.
-                  </p>
                 </div>
               </div>
             </div>
@@ -518,15 +552,39 @@ export function EditCompanyModal({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Phone Number</label>
-                <input
-                  type="tel"
-                  required
-                  value={editingCompany.phone}
-                  onChange={(e) => setEditingCompany({ ...editingCompany, phone: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Country</label>
+                <CountrySelect
+                  value={editingCompany.country || ''}
+                  onChange={(val) =>
+                    setEditingCompany((prev) => ({
+                      ...prev,
+                      country: val,
+                      phone: applyCountryDialCode(prev.phone, val)
+                    }))
+                  }
+                  placeholder="Select country..."
                 />
               </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-slate-700">Phone Number</label>
+                {editingCompany.country && (
+                  <span className="text-[11px] font-mono text-blue-600 flex items-center gap-1">
+                    <span>{getCountry(editingCompany.country)?.flag}</span>
+                    <span className="font-semibold">{getCountryDialCode(editingCompany.country)}</span>
+                  </span>
+                )}
+              </div>
+              <input
+                type="tel"
+                required
+                value={editingCompany.phone}
+                onChange={(e) => setEditingCompany({ ...editingCompany, phone: e.target.value })}
+                placeholder={editingCompany.country ? `e.g. ${getCountryDialCode(editingCompany.country)} 8000 0000` : 'e.g. +65 8000 0000'}
+                className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
+              />
             </div>
           </div>
 
