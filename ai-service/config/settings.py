@@ -5,5 +5,6 @@ class Settings(BaseSettings):
     
     PORT: int = 8000
     EMBEDDING_ENCRYPTION_KEY: str = "f1RjLU5HMG1xWktNek11eDJnZXZ1T1k4clJpWjA5cWw="
+    FACE_MATCH_THRESHOLD: float = 0.73
 
 settings = Settings()

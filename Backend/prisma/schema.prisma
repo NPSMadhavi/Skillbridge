@@ -17,6 +17,7 @@ model User {
   email             String                 @unique
   passwordHash      String?
   country           String?
+  phone             String?
   faceImage         String?                // Base64 thumbnail image
   role              String                 @default("STUDENT")
   faceEmbedding     String?                // Encrypted 512-dim embedding string (Base64 AES payload)

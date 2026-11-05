@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+const NRIC_FIN_REGEX = /^[STFGMstfgm]\d{7}[A-Za-z]$/;
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 
@@ -209,6 +210,13 @@ export default function SuperAdminDashboard() {
   const handleCreateSubmit = async (e) => {
     e.preventDefault();
     setCreateError(null);
+
+    const cleanFin = (newCompany.nricFin || '').trim().toUpperCase();
+    if (!cleanFin || cleanFin.length !== 9 || !NRIC_FIN_REGEX.test(cleanFin)) {
+      setCreateError('NRIC/FIN number must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).');
+      return;
+    }
+
     setCreating(true);
 
     try {
@@ -274,6 +282,15 @@ export default function SuperAdminDashboard() {
   const handleEditSubmit = async (e) => {
     e.preventDefault();
     setEditError(null);
+
+    if (editingCompany?.nricFin) {
+      const cleanFin = editingCompany.nricFin.trim().toUpperCase();
+      if (cleanFin.length !== 9 || !NRIC_FIN_REGEX.test(cleanFin)) {
+        setEditError('NRIC/FIN number must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).');
+        return;
+      }
+    }
+
     setUpdating(true);
 
     try {

@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS "User" (
     "email" TEXT NOT NULL UNIQUE,
     "passwordHash" TEXT,
     "country" TEXT,
+    "phone" TEXT,
     "faceImage" TEXT,
     "role" TEXT NOT NULL DEFAULT 'STUDENT',
     "faceEmbedding" TEXT,
@@ -101,6 +102,7 @@ CREATE INDEX IF NOT EXISTS "UserCourseAssignment_courseId_idx" ON "UserCourseAss
 
 -- Schema Migrations for Existing Databases
 ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "fullName" TEXT;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "phone" TEXT;
 ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "nricFin" TEXT;
 ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
 ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;

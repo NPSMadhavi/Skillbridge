@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 import CountrySelect from '../../components/CountrySelect'
+import { applyCountryDialCode, getCountryDialCode, getCountry } from '../../data/countries'
 
 const LANGUAGES = [
   { value: 'en', label: 'English' },
@@ -25,6 +26,7 @@ const UsersList = () => {
     fullName: '',
     finNumber: '',
     email: '',
+    phone: '',
     preferLanguage: 'en',
     country: '',
     password: '',
@@ -266,6 +268,7 @@ const UsersList = () => {
       fullName: user.fullName,
       finNumber: user.finNumber,
       email: user.email,
+      phone: user.phone || '',
       preferLanguage: user.preferLanguage || 'en',
       country: user.country,
       password: '',
@@ -281,10 +284,17 @@ const UsersList = () => {
 
     const errors = {}
     if (!editForm.fullName.trim()) errors.fullName = 'Full name is required.'
-    if (!editForm.finNumber.trim()) {
+    const cleanFin = editForm.finNumber.trim().toUpperCase()
+    if (!cleanFin) {
       errors.finNumber = 'FIN is required.'
-    } else if (!/^[STFGMstfgm]\d{7}[A-Za-z]$/.test(editForm.finNumber.trim())) {
-      errors.finNumber = 'FIN must be 9 characters (e.g. S1234567A).'
+    } else if (cleanFin.length !== 9 || !/^[STFGMstfgm]\d{7}[A-Za-z]$/.test(cleanFin)) {
+      errors.finNumber = 'FIN must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).'
+    }
+    if (editForm.phone && editForm.phone.trim()) {
+      const digitsOnly = editForm.phone.replace(/\D/g, '')
+      if (digitsOnly.length < 6) {
+        errors.phone = 'Mobile number must contain at least 6 digits.'
+      }
     }
     if (!editForm.email.trim()) errors.email = 'Email is required.'
     if (!editForm.country.trim()) errors.country = 'Country is required.'
@@ -299,7 +309,8 @@ const UsersList = () => {
     try {
       const payload = {
         fullName: editForm.fullName.trim(),
-        finNumber: editForm.finNumber.trim(),
+        finNumber: cleanFin,
+        phone: editForm.phone ? editForm.phone.trim() : null,
         preferLanguage: editForm.preferLanguage,
         email: editForm.email.trim().toLowerCase(),
         country: editForm.country.trim(),
@@ -471,6 +482,12 @@ const UsersList = () => {
                           <div className="min-w-0">
                             <p className="font-semibold text-fg truncate">{user.fullName}</p>
                             <p className="text-xs text-muted truncate">{user.email}</p>
+                            {user.phone && (
+                              <p className="text-[11px] font-mono text-sky/90 truncate flex items-center gap-1 mt-0.5">
+                                <span>📞</span>
+                                <span>{user.phone}</span>
+                              </p>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -680,7 +697,11 @@ const UsersList = () => {
               <div className="grid grid-cols-2 gap-x-4 gap-y-3.5 text-sm">
                 <div>
                   <p className="text-[0.7rem] font-semibold tracking-wider text-muted uppercase">FIN Number</p>
-                  <p className="mt-0.5 font-semibold text-fg">{selectedUser.finNumber}</p>
+                  <p className="mt-0.5 font-semibold text-fg font-mono">{selectedUser.finNumber}</p>
+                </div>
+                <div>
+                  <p className="text-[0.7rem] font-semibold tracking-wider text-muted uppercase">Mobile Number</p>
+                  <p className="mt-0.5 font-semibold text-fg font-mono">{selectedUser.phone || '—'}</p>
                 </div>
                 <div>
                   <p className="text-[0.7rem] font-semibold tracking-wider text-muted uppercase">Preferred Language</p>
@@ -1016,17 +1037,27 @@ const UsersList = () => {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-                  FIN number
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                    FIN number <span className="text-danger">*</span>
+                  </label>
+                  <span className={`text-[11px] font-mono ${editForm.finNumber.length === 9 ? 'text-ok font-semibold' : editForm.finNumber.length > 0 ? 'text-sky' : 'text-muted'}`}>
+                    {editForm.finNumber.length}/9 chars
+                  </span>
+                </div>
                 <input
                   name="edit_finNumber"
                   autoComplete="off"
+                  maxLength={9}
                   value={editForm.finNumber}
-                  onChange={(e) => setEditForm(prev => ({ ...prev, finNumber: e.target.value }))}
-                  className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
+                  onChange={(e) => setEditForm(prev => ({ ...prev, finNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 9) }))}
+                  className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] font-mono text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky tracking-wider"
                 />
-                {editErrors.finNumber && <p className="text-xs text-danger">{editErrors.finNumber}</p>}
+                {editErrors.finNumber ? (
+                  <p className="text-xs text-danger">{editErrors.finNumber}</p>
+                ) : (
+                  <p className="text-[11px] text-muted">Fixed 9-character format (e.g. S1234567A, F1234567M)</p>
+                )}
               </div>
 
               <div className="flex flex-col gap-1.5">
@@ -1047,30 +1078,65 @@ const UsersList = () => {
               <div className="grid grid-cols-2 gap-3.5">
                 <div className="flex flex-col gap-1.5">
                   <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
-                    Language
-                  </label>
-                  <select
-                    value={editForm.preferLanguage}
-                    onChange={(e) => setEditForm(prev => ({ ...prev, preferLanguage: e.target.value }))}
-                    className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
-                  >
-                    {LANGUAGES.map(lang => (
-                      <option key={lang.value} value={lang.value}>{lang.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
                     Country
                   </label>
                   <CountrySelect
                     value={editForm.country}
-                    onChange={(val) => setEditForm(prev => ({ ...prev, country: val }))}
+                    onChange={(val) => setEditForm(prev => ({
+                      ...prev,
+                      country: val,
+                      phone: applyCountryDialCode(prev.phone, val),
+                    }))}
                     hasError={!!editErrors.country}
                     placeholder="Select country..."
                   />
                   {editErrors.country && <p className="text-xs text-danger">{editErrors.country}</p>}
                 </div>
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                      Mobile Number
+                    </label>
+                    {editForm.country && (
+                      <span className="text-[11px] font-mono text-sky flex items-center gap-1">
+                        <span>{getCountry(editForm.country)?.flag}</span>
+                        <span className="font-semibold">{getCountryDialCode(editForm.country)}</span>
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="tel"
+                    name="edit_user_phone"
+                    value={editForm.phone || ''}
+                    onChange={(e) => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
+                    placeholder={editForm.country ? `e.g. ${getCountryDialCode(editForm.country)} 9123 4567` : 'e.g. +65 9123 4567'}
+                    className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
+                  />
+                  {editErrors.phone ? (
+                    <p className="text-xs text-danger">{editErrors.phone}</p>
+                  ) : (
+                    <p className="text-[11px] text-muted">
+                      {editForm.country
+                        ? `Dial code (${getCountryDialCode(editForm.country)}) added for ${editForm.country}.`
+                        : 'Country code updates when selecting country.'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[0.75rem] font-semibold tracking-[0.08em] text-muted uppercase">
+                  Language
+                </label>
+                <select
+                  value={editForm.preferLanguage}
+                  onChange={(e) => setEditForm(prev => ({ ...prev, preferLanguage: e.target.value }))}
+                  className="w-full rounded-xl border border-line bg-ink/50 px-4 py-3 text-[0.95rem] text-fg outline-none transition placeholder:text-muted/60 hover:border-sky/40 focus:border-sky"
+                >
+                  {LANGUAGES.map(lang => (
+                    <option key={lang.value} value={lang.value}>{lang.label}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="flex flex-col gap-1.5">

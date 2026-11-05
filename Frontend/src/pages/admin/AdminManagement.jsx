@@ -334,14 +334,18 @@ export default function AdminManagement() {
                   <input
                     type="text"
                     required
+                    maxLength={9}
                     placeholder="e.g. S1234567A"
                     value={form.nricFin}
-                    onChange={(e) => setForm({ ...form, nricFin: e.target.value.toUpperCase() })}
-                    className="w-full px-3.5 py-2.5 bg-ink/60 border border-line rounded-xl text-xs font-mono font-semibold text-sky focus:outline-none focus:border-sky focus:bg-panel"
+                    onChange={(e) => setForm({ ...form, nricFin: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 9) })}
+                    className="w-full px-3.5 py-2.5 bg-ink/60 border border-line rounded-xl text-xs font-mono font-semibold text-sky focus:outline-none focus:border-sky focus:bg-panel tracking-wider"
                   />
-                  <p className="text-[11px] text-muted mt-1">
-                    Must start with S, T, F, G, or M followed by 7 digits and 1 letter.
-                  </p>
+                  <div className="flex items-center justify-between mt-1 text-[11px]">
+                    <span className="text-muted">Fixed 9 characters starting with S, T, F, G, or M.</span>
+                    <span className={`font-mono ${form.nricFin.length === 9 ? 'text-ok font-semibold' : 'text-sky'}`}>
+                      {form.nricFin.length}/9 chars
+                    </span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">

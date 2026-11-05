@@ -1,4 +1,5 @@
 import prisma from '../../config/prisma.js';
+const NRIC_FIN_REGEX = /^[STFGMstfgm]\d{7}[A-Za-z]$/;
 import bcrypt from 'bcryptjs';
 import pythonService from '../../services/pythonService.js';
 
@@ -68,10 +69,17 @@ export const checkUserExists = async (req, res) => {
 };
 
 export const registerUser = async (req, res) => {
-  const { fullName, finNumber, preferLanguage, email, password, faceIdData, faceEnrollment, country, assignedCourseIds } = req.body;
+  const { fullName, finNumber, phone, preferLanguage, email, password, faceIdData, faceEnrollment, country, assignedCourseIds } = req.body;
 
   if (!fullName || !finNumber || !preferLanguage || !email || !password || !country) {
     return res.status(400).json({ error: 'All fields are required.' });
+  }
+
+  const cleanFin = (finNumber || '').trim().toUpperCase();
+  if (cleanFin.length !== 9 || !NRIC_FIN_REGEX.test(cleanFin)) {
+    return res.status(400).json({
+      error: 'Invalid FIN number format. FIN must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).',
+    });
   }
 
   try {
@@ -81,7 +89,7 @@ export const registerUser = async (req, res) => {
       return res.status(400).json({ error: 'User already exists with this email address.' });
     }
 
-    const existingFin = await prisma.user.findUnique({ where: { finNumber: finNumber.trim().toUpperCase() } });
+    const existingFin = await prisma.user.findUnique({ where: { finNumber: cleanFin } });
     if (existingFin) {
       return res.status(400).json({ error: 'User already exists with this FIN number.' });
     }
@@ -163,11 +171,12 @@ export const registerUser = async (req, res) => {
     const newUser = await prisma.user.create({
       data: {
         fullName: fullName.trim(),
-        finNumber,
+        finNumber: cleanFin,
         preferredLanguage: preferLanguage,
         email: email.trim().toLowerCase(),
         passwordHash,
         country: country.trim(),
+        phone: phone ? phone.trim() : null,
         faceImage,
         faceEmbedding,
         role: 'STUDENT',
@@ -200,6 +209,7 @@ export const registerUser = async (req, res) => {
         finNumber: newUser.finNumber,
         preferLanguage: newUser.preferredLanguage,
         country: newUser.country,
+        phone: newUser.phone,
         status: newUser.status,
         hasFaceId: !!newUser.faceEmbedding,
         registeredAt: newUser.registeredAt,
@@ -247,6 +257,7 @@ export const getUsers = async (req, res) => {
         finNumber: user.finNumber,
         preferLanguage: user.preferredLanguage,
         country: user.country,
+        phone: user.phone || '',
         status: user.status,
         faceIdData: user.faceImage, // raw base64 image data
         registeredAt: user.registeredAt,
@@ -269,7 +280,7 @@ export const getUsers = async (req, res) => {
 
 export const updateUser = async (req, res) => {
   const { id } = req.params;
-  const { fullName, finNumber, preferLanguage, email, password, country, status, faceIdData, assignedCourseIds } = req.body;
+  const { fullName, finNumber, phone, preferLanguage, email, password, country, status, faceIdData, assignedCourseIds } = req.body;
 
   try {
     const user = await prisma.user.findUnique({ where: { id } });
@@ -284,10 +295,18 @@ export const updateUser = async (req, res) => {
       }
     }
 
-    if (finNumber && finNumber !== user.finNumber) {
-      const dupFin = await prisma.user.findUnique({ where: { finNumber } });
-      if (dupFin) {
-        return res.status(400).json({ error: 'A user with this FIN number is already registered.' });
+    if (finNumber) {
+      const cleanFin = finNumber.trim().toUpperCase();
+      if (cleanFin.length !== 9 || !NRIC_FIN_REGEX.test(cleanFin)) {
+        return res.status(400).json({
+          error: 'Invalid FIN number format. FIN must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).',
+        });
+      }
+      if (cleanFin !== user.finNumber) {
+        const dupFin = await prisma.user.findUnique({ where: { finNumber: cleanFin } });
+        if (dupFin) {
+          return res.status(400).json({ error: 'A user with this FIN number is already registered.' });
+        }
       }
     }
 
@@ -334,7 +353,8 @@ export const updateUser = async (req, res) => {
 
     const updateData = {};
     if (fullName) updateData.fullName = fullName.trim();
-    if (finNumber) updateData.finNumber = finNumber.trim();
+    if (finNumber) updateData.finNumber = finNumber.trim().toUpperCase();
+    if (phone !== undefined) updateData.phone = phone ? phone.trim() : null;
     if (preferLanguage) updateData.preferredLanguage = preferLanguage;
     if (email) updateData.email = email.trim().toLowerCase();
     if (country) updateData.country = country.trim();
@@ -375,6 +395,7 @@ export const updateUser = async (req, res) => {
         finNumber: updated.finNumber,
         preferLanguage: updated.preferredLanguage,
         country: updated.country,
+        phone: updated.phone,
         status: updated.status,
         faceIdData: updated.faceImage,
         assignedCourseIds: assignments.map(a => a.courseId),

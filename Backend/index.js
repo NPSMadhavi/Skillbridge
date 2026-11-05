@@ -97,8 +97,8 @@ app.use(helmet({
 // Force HTTPS in production environments when not on internal/localhost network
 app.use((req, res, next) => {
   const isHttps = req.secure ||
-                  req.headers['x-forwarded-proto'] === 'https' ||
-                  req.headers['x-forwarded-ssl'] === 'on';
+    req.headers['x-forwarded-proto'] === 'https' ||
+    req.headers['x-forwarded-ssl'] === 'on';
   const host = req.headers.host || '';
   const isLocal = host.includes('localhost') || host.includes('127.0.0.1');
 
@@ -146,7 +146,7 @@ app.use(cors({
       if (originHost && originHost.includes('brutallyhired.com')) {
         return callback(null, true);
       }
-    } catch (_) {}
+    } catch (_) { }
 
     return callback(new Error('Blocked by CORS policy: Origin not allowed.'));
   },

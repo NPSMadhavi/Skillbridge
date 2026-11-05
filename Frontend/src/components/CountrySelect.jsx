@@ -166,6 +166,11 @@ const CountrySelect = forwardRef(function CountrySelect(
                 {selectedCountry.flag}
               </span>
               <span className="font-medium text-fg">{selectedCountry.name}</span>
+              {selectedCountry.dialCode && (
+                <span className="text-xs font-mono text-sky bg-sky/10 px-1.5 py-0.5 rounded ml-1">
+                  {selectedCountry.dialCode}
+                </span>
+              )}
             </>
           ) : (
             <span className="text-muted/60">{placeholder}</span>
@@ -281,20 +286,27 @@ const CountrySelect = forwardRef(function CountrySelect(
                       <span className="text-[11px] font-mono text-muted/70">{c.code}</span>
                     </div>
 
-                    {isSelected && (
-                      <svg
-                        className="h-4 w-4 text-sky shrink-0"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                        aria-hidden="true"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {c.dialCode && (
+                        <span className="text-xs font-mono text-sky/90 bg-sky/10 px-1.5 py-0.5 rounded">
+                          {c.dialCode}
+                        </span>
+                      )}
+                      {isSelected && (
+                        <svg
+                          className="h-4 w-4 text-sky shrink-0"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                          aria-hidden="true"
+                        >
+                          <path
+                            fillRule="evenodd"
+                            d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
+                      )}
+                    </div>
                   </li>
                 )
               })

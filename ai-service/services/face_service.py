@@ -11,6 +11,7 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 from facenet_pytorch import MTCNN, InceptionResnetV1
 from services.crypto_service import crypto_service
+from config.settings import settings
 
 class FaceService:
     def __init__(self):
@@ -165,7 +166,7 @@ class FaceService:
     def verify_face(self, query_image_base64: str | None = None, candidates: list[dict] = [], query_images_base64: list[str] | None = None) -> dict:
         """
         Compares query image or list of query images with candidates' encrypted embeddings.
-        candidates: [{"id": str, "encrypted_embedding": str}]
+        candidates: [{"id": str, "encrypted_embedding": str, "face_image": str}]
         """
         query_embeddings = []
 
@@ -178,31 +179,38 @@ class FaceService:
                 except Exception as e:
                     print(f"Skipping query frame in verify_face: {str(e)}")
                     continue
-            
-            # Also add mean vector across query frames
-            if query_embeddings:
-                avg_emb = np.mean(query_embeddings, axis=0)
-                norm = np.linalg.norm(avg_emb)
-                if norm > 0:
-                    query_embeddings.append((avg_emb / norm).tolist())
 
-        elif query_image_base64:
-            query_pil = self.decode_base64_image(query_image_base64)
-            query_emb = self.get_embedding(query_pil)
-            query_embeddings.append(query_emb)
+        if not query_embeddings and query_image_base64:
+            try:
+                query_pil = self.decode_base64_image(query_image_base64)
+                query_emb = self.get_embedding(query_pil)
+                query_embeddings.append(query_emb)
+            except Exception as e:
+                print(f"Failed to extract embedding from query_image: {str(e)}")
 
         if not query_embeddings:
             raise ValueError("No face detected in query image(s). Ensure proper lighting and look directly at the camera.")
 
+        # Compute consensus query embedding (L2 normalized mean across all valid query frames)
+        if len(query_embeddings) > 1:
+            avg_emb = np.mean(query_embeddings, axis=0)
+            norm = np.linalg.norm(avg_emb)
+            if norm > 0:
+                consensus_query = (avg_emb / norm).tolist()
+            else:
+                consensus_query = query_embeddings[0]
+        else:
+            consensus_query = query_embeddings[0]
+
         best_match_id = None
         best_sim = -1.0
         highest_similarity = -1.0
-        threshold = 0.42  # Calibrated cosine threshold for InceptionResnetV1 VGGFace2
+        # Calibrated threshold for InceptionResnetV1 VGGFace2 (default 0.73)
+        threshold = float(getattr(settings, "FACE_MATCH_THRESHOLD", 0.73))
 
         for candidate in candidates:
             cand_id = candidate.get("id")
             encrypted_emb = candidate.get("encrypted_embedding")
-            
             cand_face_img = candidate.get("face_image")
             cand_emb = None
 
@@ -224,26 +232,55 @@ class FaceService:
                 continue
 
             try:
-                # Compare candidate embedding
-                # Compute maximum similarity across all query frames for this candidate
-                for q_emb in query_embeddings:
-                    sim = self.compare_embeddings(q_emb, cand_emb)
-                    if sim > highest_similarity:
-                        highest_similarity = sim
-                    if sim >= threshold and sim > best_sim:
-                        best_sim = sim
+                # Ensure candidate vector is unit-normalized
+                cand_vec = np.array(cand_emb, dtype=np.float32)
+                cand_norm = np.linalg.norm(cand_vec)
+                if cand_norm > 0:
+                    cand_emb = (cand_vec / cand_norm).tolist()
+
+                # 1. Similarity against consensus query
+                consensus_sim = self.compare_embeddings(consensus_query, cand_emb)
+
+                # 2. Similarities against individual query frames
+                frame_sims = [self.compare_embeddings(q, cand_emb) for q in query_embeddings]
+                max_frame_sim = max(frame_sims) if frame_sims else consensus_sim
+
+                # Composite score: consensus provides high stability against outliers;
+                # max_frame gives slight bonus if one frame had optimal lighting/pose.
+                if len(query_embeddings) > 1:
+                    cand_score = (0.70 * consensus_sim) + (0.30 * max_frame_sim)
+                else:
+                    cand_score = consensus_sim
+
+                if cand_score > highest_similarity:
+                    highest_similarity = cand_score
+
+                # Candidate qualifies only if:
+                # 1. The composite score reaches the calibrated threshold (e.g. >= 0.73)
+                # 2. Consensus similarity is also sufficiently high (prevents an outlier frame from spoofing)
+                if cand_score >= threshold and consensus_sim >= (threshold - 0.03):
+                    if cand_score > best_sim:
+                        best_sim = cand_score
                         best_match_id = cand_id
+                    print(f"[FaceID Matcher] Candidate {cand_id} QUALIFIED: composite={cand_score:.4f}, consensus={consensus_sim:.4f}, max_frame={max_frame_sim:.4f} >= threshold {threshold:.4f}")
+                else:
+                    if cand_score >= 0.50:
+                        print(f"[FaceID Matcher] Candidate {cand_id} REJECTED: composite={cand_score:.4f}, consensus={consensus_sim:.4f} < threshold {threshold:.4f}")
             except Exception as e:
                 print(f"Failed to process candidate {cand_id}: {str(e)}")
                 continue
 
         matched = best_match_id is not None
-        confidence = best_sim if matched else highest_similarity
-        print(f"Biometric Verification Result: matched={matched}, user_id={best_match_id}, confidence={confidence:.4f} (threshold={threshold})")
+        confidence = best_sim if matched else (highest_similarity if highest_similarity > 0 else 0.0)
+        if matched:
+            print(f"[Biometric Result] ACCEPTED: User '{best_match_id}' authenticated with confidence {confidence:.4f} (threshold={threshold:.4f})")
+        else:
+            print(f"[Biometric Result] REJECTED: Unauthorized individual. Highest score {confidence:.4f} < threshold {threshold:.4f}")
+
         return {
             "matched": matched,
             "user_id": best_match_id,
-            "confidence": confidence
+            "confidence": float(confidence)
         }
 
 # Global face service instance (will lazy-load models on import)

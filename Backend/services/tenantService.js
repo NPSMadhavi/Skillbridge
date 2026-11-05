@@ -138,6 +138,8 @@ export const tenantService = {
 
     // Ensure backwards-compatible schema columns exist in tenant DB
     client.$executeRawUnsafe(`
+      ALTER TABLE IF EXISTS "User"
+        ADD COLUMN IF NOT EXISTS "phone" TEXT;
       ALTER TABLE IF EXISTS "Admin"
         ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS "fullName" TEXT,
@@ -179,6 +181,10 @@ export const tenantService = {
     }
     if (!finalNricFin) {
       throw new Error('NRIC/FIN Number is required.');
+    }
+    const NRIC_FIN_REGEX = /^[STFGMstfgm]\d{7}[A-Za-z]$/;
+    if (finalNricFin.length !== 9 || !NRIC_FIN_REGEX.test(finalNricFin)) {
+      throw new Error('NRIC/FIN number must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).');
     }
     if (!finalEmail) {
       throw new Error('Email address is required.');
@@ -454,7 +460,14 @@ export const tenantService = {
     if (name && name.trim()) dataToUpdate.name = name.trim();
     if (department !== undefined) dataToUpdate.department = department?.trim() || null;
     if (fullName && fullName.trim()) dataToUpdate.fullName = fullName.trim();
-    if (nricFin && nricFin.trim()) dataToUpdate.nricFin = nricFin.trim().toUpperCase();
+    if (nricFin && nricFin.trim()) {
+      const cleanFin = nricFin.trim().toUpperCase();
+      const NRIC_FIN_REGEX = /^[STFGMstfgm]\d{7}[A-Za-z]$/;
+      if (cleanFin.length !== 9 || !NRIC_FIN_REGEX.test(cleanFin)) {
+        throw new Error('NRIC/FIN number must be exactly 9 characters starting with S, T, F, G, or M (e.g. S1234567A).');
+      }
+      dataToUpdate.nricFin = cleanFin;
+    }
     if (phone && phone.trim()) dataToUpdate.phone = phone.trim();
     if ((email || adminEmail) && (email || adminEmail).trim()) {
       dataToUpdate.adminEmail = (email || adminEmail).trim().toLowerCase();
@@ -625,7 +638,9 @@ export const tenantService = {
 
       // 4. Ensure required schema columns exist in default database
       await defaultPrisma.$executeRawUnsafe(`
-        ALTER TABLE IF EXISTS "Admin"
+        ALTER TABLE IF EXISTS "User"
+        ADD COLUMN IF NOT EXISTS "phone" TEXT;
+      ALTER TABLE IF EXISTS "Admin"
           ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
           ADD COLUMN IF NOT EXISTS "fullName" TEXT,
           ADD COLUMN IF NOT EXISTS "nricFin" TEXT,

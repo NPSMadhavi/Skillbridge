@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 import CountrySelect from '../../components/CountrySelect'
+import { applyCountryDialCode, getCountryDialCode, getCountry } from '../../data/countries'
 import FaceEnrollmentModal from '../../components/face/FaceEnrollmentModal'
 
 const LANGUAGES = [
@@ -16,7 +17,7 @@ const LANGUAGES = [
 ]
 
 const ExclamationCircleIcon = () => (
-  <svg className="h-3.5 w-3.5 shrink-0 text-rose-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+  <svg className="h-3.5 w-3.5 shrink-0" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
     <path
       fillRule="evenodd"
       d="M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0Zm-8-5a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 10 5Zm0 10a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"
@@ -25,27 +26,25 @@ const ExclamationCircleIcon = () => (
   </svg>
 )
 
-const EyeIcon = ({ open }) => (
-  <svg className="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    {open ? (
-      <>
-        <path
-          d="M2.8 12S6.2 6.2 12 6.2 21.2 12 21.2 12 17.8 17.8 12 17.8 2.8 12 2.8 12Z"
-          stroke="currentColor"
-          strokeWidth="1.7"
-        />
-        <circle cx="12" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      </>
-    ) : (
+const EyeIcon = ({ open }) =>
+  open ? (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
       <path
-        d="M3.2 4.2 20.8 21.8M10 10.2A2.8 2.8 0 0 0 14 14M7.4 7.7C5.4 9 3.8 11.2 3.2 12c0 0 3.4 5.8 8.8 5.8 1.5 0 2.9-.4 4.1-1.1M14.5 6.6A8.4 8.4 0 0 0 12 6.2C6.6 6.2 3.2 12 3.2 12"
-        stroke="currentColor"
-        strokeWidth="1.7"
         strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"
       />
-    )}
-  </svg>
-)
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+    </svg>
+  ) : (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.775M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88"
+      />
+    </svg>
+  )
 
 const getFieldClass = (hasError) =>
   `w-full rounded-xl border bg-ink/50 px-3.5 py-2 text-[0.875rem] text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel ${
@@ -58,6 +57,7 @@ const emptyForm = {
   fullName: '',
   finNumber: '',
   email: '',
+  phone: '',
   preferLanguage: 'en',
   password: '',
   country: '',
@@ -68,6 +68,7 @@ const emptyTouched = {
   fullName: false,
   finNumber: false,
   email: false,
+  phone: false,
   preferLanguage: false,
   password: false,
   country: false,
@@ -98,6 +99,15 @@ const validateField = (key, val) => {
       if (!trimmed) return 'Email address is required.'
       if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(trimmed)) {
         return 'Enter a valid email address.'
+      }
+      return ''
+    }
+    case 'phone': {
+      const trimmed = (val || '').trim()
+      if (!trimmed) return 'Mobile number is required.'
+      const digitsOnly = trimmed.replace(/\D/g, '')
+      if (digitsOnly.length < 6) {
+        return 'Enter a valid mobile number with at least 6 digits.'
       }
       return ''
     }
@@ -150,6 +160,7 @@ const RegisterUser = () => {
   const emailRef = useRef(null)
   const passwordRef = useRef(null)
   const countryRef = useRef(null)
+  const phoneRef = useRef(null)
 
   const formRef = useRef(form)
   formRef.current = form
@@ -159,18 +170,37 @@ const RegisterUser = () => {
       setExistingFaceUser(null)
       setFaceEnrollment(null)
     }
+
+    if (key === 'country') {
+      const nextCountry = value || ''
+      setTouched((prev) => ({ ...prev, country: true }))
+      setForm((prev) => {
+        // Automatically add or update dial code when country changes
+        const nextPhone = applyCountryDialCode(prev.phone, nextCountry)
+        const next = { ...prev, country: nextCountry, phone: nextPhone }
+        formRef.current = next
+
+        const countryErr = validateField('country', nextCountry)
+        const phoneErr = (touched.phone || errors.phone) ? validateField('phone', nextPhone) : undefined
+        setErrors((prevErr) => ({
+          ...prevErr,
+          country: countryErr || undefined,
+          phone: phoneErr || undefined,
+        }))
+        return next
+      })
+      return
+    }
+
     setForm((prev) => {
       const next = { ...prev, [key]: value }
       formRef.current = next
-      if (touched[key] || errors[key] || key === 'country') {
+      if (touched[key] || errors[key] || key === 'finNumber') {
         const err = validateField(key, value)
         setErrors((prevErr) => ({ ...prevErr, [key]: err || undefined }))
       }
       return next
     })
-    if (key === 'country') {
-      setTouched((prev) => ({ ...prev, country: true }))
-    }
   }
 
   const handleBlur = async (key) => {
@@ -210,20 +240,19 @@ const RegisterUser = () => {
         console.warn('Email existence check warning:', e)
       }
     }
-
-    setErrors((prev) => ({ ...prev, [key]: undefined }))
   }
 
   const handleEnrollmentComplete = (enrollmentResult) => {
-    setExistingFaceUser(null)
+    const primaryFace = enrollmentResult.thumbnailImage
     setFaceEnrollment(enrollmentResult)
-    updateField('faceIdData', enrollmentResult.thumbnailImage)
+    setExistingFaceUser(null)
+    updateField('faceIdData', primaryFace)
     setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-    toast.success('Live Face ID enrolled and liveness verified!')
+    toast.success('Face biometric vector captured successfully!')
   }
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
+  const handleSubmit = async (e) => {
+    e.preventDefault()
     setStatusBanner(null)
 
     // Mark all touched
@@ -253,6 +282,7 @@ const RegisterUser = () => {
       else if (nextErrors.email) emailRef.current?.focus()
       else if (nextErrors.password) passwordRef.current?.focus()
       else if (nextErrors.country) countryRef.current?.focus()
+      else if (nextErrors.phone) phoneRef.current?.focus()
       return
     }
 
@@ -265,6 +295,7 @@ const RegisterUser = () => {
         email: form.email.trim().toLowerCase(),
         password: form.password,
         country: form.country.trim(),
+        phone: form.phone.trim(),
         faceIdData: form.faceIdData,
         faceEnrollment: faceEnrollment,
       })
@@ -283,12 +314,15 @@ const RegisterUser = () => {
       } else if (errorMsg.toLowerCase().includes('face') || errorMsg.toLowerCase().includes('biometric')) {
         setExistingFaceUser(null)
         setErrors((prev) => ({ ...prev, faceIdData: errorMsg }))
-      } else if (errorMsg.toLowerCase().includes('fin number')) {
+      } else if (errorMsg.toLowerCase().includes('fin number') || errorMsg.toLowerCase().includes('fin')) {
         setErrors((prev) => ({ ...prev, finNumber: errorMsg }))
         finNumberRef.current?.focus()
       } else if (errorMsg.toLowerCase().includes('email')) {
         setErrors((prev) => ({ ...prev, email: errorMsg }))
         emailRef.current?.focus()
+      } else if (errorMsg.toLowerCase().includes('phone') || errorMsg.toLowerCase().includes('mobile')) {
+        setErrors((prev) => ({ ...prev, phone: errorMsg }))
+        phoneRef.current?.focus()
       }
       toast.error(errorMsg)
       setStatusBanner({ type: 'error', text: errorMsg })
@@ -297,21 +331,21 @@ const RegisterUser = () => {
     }
   }
 
-
+  const selectedCountryInfo = form.country ? getCountry(form.country) : null
 
   return (
-    <div className="animate-rise-in w-full space-y-3.5">
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-4 sm:p-6 lg:p-8">
       <div>
         <h1 className="font-display text-xl sm:text-2xl font-semibold tracking-tight text-fg">
           Register user
         </h1>
         <p className="mt-0.5 text-xs text-muted">
-          Add a learner with FIN, region, contact details, and Face ID enrollment.
+          Add a learner with FIN, country, mobile number, contact details, and Face ID enrollment.
         </p>
       </div>
 
       <section className="rounded-2xl border border-line bg-panel p-4 sm:p-5 shadow-sm">
-        <form className="grid gap-3 sm:grid-cols-2" onSubmit={handleSubmit} noValidate autoComplete="off">
+        <form className="grid gap-3.5 sm:grid-cols-2" onSubmit={handleSubmit} noValidate autoComplete="off">
           {/* Row 1: Full Name & FIN Number */}
           <div className="flex flex-col gap-1">
             <label htmlFor="fullName" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
@@ -339,9 +373,22 @@ const RegisterUser = () => {
           </div>
 
           <div className="flex flex-col gap-1">
-            <label htmlFor="finNumber" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
-              FIN number <span className="text-rose-500">*</span>
-            </label>
+            <div className="flex items-center justify-between">
+              <label htmlFor="finNumber" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
+                FIN number <span className="text-rose-500">*</span>
+              </label>
+              <span
+                className={`font-mono text-[11px] ${
+                  form.finNumber.length === 9
+                    ? 'text-ok font-semibold'
+                    : form.finNumber.length > 0
+                    ? 'text-sky'
+                    : 'text-muted'
+                }`}
+              >
+                {form.finNumber.length}/9 chars
+              </span>
+            </div>
             <input
               ref={finNumberRef}
               id="finNumber"
@@ -349,17 +396,23 @@ const RegisterUser = () => {
               autoComplete="off"
               maxLength={9}
               value={form.finNumber}
-              onChange={(e) => updateField('finNumber', e.target.value.toUpperCase())}
+              onChange={(e) =>
+                updateField('finNumber', e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 9))
+              }
               onBlur={() => handleBlur('finNumber')}
               placeholder="e.g. S1234567A"
               aria-invalid={!!errors.finNumber}
               aria-describedby={errors.finNumber ? 'finNumber-error' : undefined}
-              className={getFieldClass(!!errors.finNumber)}
+              className={`${getFieldClass(!!errors.finNumber)} font-mono tracking-wider`}
             />
-            {errors.finNumber && (
+            {errors.finNumber ? (
               <p id="finNumber-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
                 <ExclamationCircleIcon />
                 <span>{errors.finNumber}</span>
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted pl-0.5">
+                Fixed 9-character format (e.g. S1234567A, F1234567M)
               </p>
             )}
           </div>
@@ -427,7 +480,7 @@ const RegisterUser = () => {
             )}
           </div>
 
-          {/* Row 3: Country & Prefer Language */}
+          {/* Row 3: Country & Mobile Number */}
           <div className="flex flex-col gap-1">
             <label htmlFor="country" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Country <span className="text-rose-500">*</span>
@@ -450,6 +503,52 @@ const RegisterUser = () => {
           </div>
 
           <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <label htmlFor="phone" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
+                Mobile number <span className="text-rose-500">*</span>
+              </label>
+              {selectedCountryInfo && (
+                <span className="text-[11px] font-mono text-sky flex items-center gap-1">
+                  <span>{selectedCountryInfo.flag}</span>
+                  <span className="font-semibold">{selectedCountryInfo.dialCode}</span>
+                </span>
+              )}
+            </div>
+            <div className="relative flex items-center">
+              <input
+                ref={phoneRef}
+                id="phone"
+                name="phone"
+                type="tel"
+                value={form.phone}
+                onChange={(e) => updateField('phone', e.target.value)}
+                onBlur={() => handleBlur('phone')}
+                placeholder={
+                  selectedCountryInfo
+                    ? `e.g. ${selectedCountryInfo.dialCode} 9123 4567`
+                    : 'Select country to auto-add code (e.g. +65, +91)'
+                }
+                aria-invalid={!!errors.phone}
+                aria-describedby={errors.phone ? 'phone-error' : undefined}
+                className={getFieldClass(!!errors.phone)}
+              />
+            </div>
+            {errors.phone ? (
+              <p id="phone-error" role="alert" className="flex items-center gap-1.5 pl-0.5 text-xs text-rose-500 font-medium animate-fade-in">
+                <ExclamationCircleIcon />
+                <span>{errors.phone}</span>
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted pl-0.5">
+                {selectedCountryInfo
+                  ? `Dial code (${selectedCountryInfo.dialCode}) applied for ${selectedCountryInfo.name}.`
+                  : 'Select country above to auto-add dial code (e.g. +65, +91).'}
+              </p>
+            )}
+          </div>
+
+          {/* Row 4: Prefer Language */}
+          <div className="flex flex-col gap-1 sm:col-span-2">
             <label htmlFor="preferLanguage" className="text-[0.7rem] font-semibold tracking-[0.06em] text-muted uppercase">
               Prefer language <span className="text-rose-500">*</span>
             </label>
@@ -493,58 +592,68 @@ const RegisterUser = () => {
                   </div>
 
                   <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-                    <div className="relative shrink-0">
-                      <img
-                        src={form.faceIdData}
-                        alt="Captured Face ID"
-                        className="h-12 w-12 rounded-lg object-cover border-2 border-rose-500/50 shadow-sm"
-                      />
-                      <span className="absolute bottom-0.5 right-0.5 rounded bg-rose-600 px-1 py-0.2 text-[9px] font-bold text-white uppercase">
-                        New
-                      </span>
-                    </div>
-
+                    {existingFaceUser.faceImage && (
+                      <div className="relative shrink-0">
+                        <img
+                          src={existingFaceUser.faceImage}
+                          alt="Existing User Face"
+                          className="h-16 w-16 rounded-lg object-cover border border-rose-500/30 shadow-sm"
+                        />
+                        <span className="absolute -bottom-1 -right-1 bg-rose-500 text-[9px] text-white font-bold px-1 rounded shadow">
+                          MATCH
+                        </span>
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
-                      <h4 className="font-semibold text-rose-500 text-xs truncate">
-                        Matched: {existingFaceUser.fullName || 'Registered User'}
-                      </h4>
-                      <p className="text-[11px] text-muted">
+                      <p className="text-xs font-semibold text-fg">
+                        {existingFaceUser.fullName || 'Registered User'}
+                      </p>
+                      <p className="text-[11px] text-muted truncate">
+                        Email: <span className="font-medium text-fg">{existingFaceUser.email || 'N/A'}</span>
+                      </p>
+                      <p className="text-[11px] text-muted truncate">
                         FIN: <span className="font-mono font-medium text-fg">{existingFaceUser.finNumber || 'N/A'}</span>
                       </p>
-                      <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setExistingFaceUser(null)
-                            setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-                            setEnrollmentModalOpen(true)
-                          }}
-                          className="cursor-pointer rounded-md border border-rose-500/40 bg-rose-500/20 px-2.5 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-500/30 transition"
-                        >
-                          Recapture Face
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            updateField('faceIdData', '')
-                            setExistingFaceUser(null)
-                            setErrors((prev) => ({ ...prev, faceIdData: undefined }))
-                          }}
-                          className="cursor-pointer rounded-md border border-line bg-panel px-2.5 py-1 text-xs font-semibold text-fg hover:border-sky/40 transition"
-                        >
-                          Remove
-                        </button>
-                      </div>
                     </div>
+                  </div>
+
+                  <p className="text-[11px] text-rose-400">
+                    A user cannot be registered with a face that is already enrolled in the system. Please scan the correct person or remove the capture.
+                  </p>
+
+                  <div className="flex items-center gap-2 pt-1 border-t border-rose-500/20">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExistingFaceUser(null)
+                        setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                        setEnrollmentModalOpen(true)
+                      }}
+                      className="cursor-pointer rounded-lg bg-rose-500/20 px-3 py-1 text-xs font-semibold text-rose-400 hover:bg-rose-500/30 transition"
+                    >
+                      Scan Again
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateField('faceIdData', '')
+                        setFaceEnrollment(null)
+                        setExistingFaceUser(null)
+                        setErrors((prev) => ({ ...prev, faceIdData: undefined }))
+                      }}
+                      className="cursor-pointer rounded-lg bg-transparent px-3 py-1 text-xs font-semibold text-muted hover:text-fg transition"
+                    >
+                      Clear
+                    </button>
                   </div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-ok/25 bg-ok/5 px-3.5 py-2">
+                <div className="flex items-center justify-between rounded-xl border border-ok/30 bg-ok/5 p-3">
                   <div className="flex items-center gap-3 min-w-0">
                     <img
                       src={form.faceIdData}
-                      alt="Enrolled Face ID"
-                      className="h-11 w-11 shrink-0 rounded-lg object-cover border border-ok/30 shadow-sm"
+                      alt="Enrolled Face"
+                      className="h-12 w-12 rounded-lg object-cover border border-ok/40 shrink-0"
                     />
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
