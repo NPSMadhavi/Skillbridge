@@ -305,7 +305,7 @@ export default function SuperAdminDashboard() {
     }
 
     if (editingCompany?.adminPassword && editingCompany.adminPassword.trim().length < 6) {
-      setEditError('New admin password must be at least 6 characters long.');
+      setEditError('New password must be at least 6 characters long.');
       return;
     }
 
@@ -654,18 +654,7 @@ export default function SuperAdminDashboard() {
                                   </svg>
                                 </button>
 
-                                {/* 3. CHANGE ADMIN PASSWORD */}
-                                <button
-                                  title="Change Admin Password"
-                                  onClick={() => handleOpenChangePasswordModal(c)}
-                                  className="p-1.5 text-slate-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg border border-slate-200 hover:border-amber-200 transition-colors cursor-pointer"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-                                  </svg>
-                                </button>
-
-                                {/* 4. SUSPEND / ACTIVATE */}
+                                {/* 3. SUSPEND / ACTIVATE */}
                                 <button
                                   title={c.status === 'ACTIVE' ? 'Suspend Company' : 'Activate Company'}
                                   onClick={() => handleToggleStatus(c)}

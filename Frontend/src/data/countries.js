@@ -158,3 +158,32 @@ export const applyCountryDialCode = (currentPhone, newCountry) => {
   // If purely digits or standard local number, prefix it
   return `${dialCode} ${trimmed}`
 }
+
+/**
+ * Return country object by dial code, e.g. "+65", "+91".
+ */
+export const findCountryByDialCode = (dialCode) => {
+  if (!dialCode) return null
+  const code = dialCode.trim().startsWith('+') ? dialCode.trim() : `+${dialCode.trim()}`
+  return COUNTRIES.find((c) => c.dialCode === code) || null
+}
+
+/**
+ * Given a phone number string (e.g. "+91 9876543210" or "+6581234567"),
+ * detects the matching Country.
+ */
+export const detectCountryFromPhone = (phone) => {
+  if (!phone) return null
+  const trimmed = String(phone).trim()
+  if (!trimmed.startsWith('+')) return null
+
+  // Sort by dialCode length descending so +880 matches before +8 etc.
+  const sorted = [...COUNTRIES].sort((a, b) => b.dialCode.length - a.dialCode.length)
+  for (const c of sorted) {
+    if (trimmed.startsWith(c.dialCode)) {
+      return c
+    }
+  }
+  return null
+}
+

@@ -101,41 +101,39 @@ export const faceLogin = async (req, res) => {
     const candidateTenantMap = new Map();
     candidates.forEach(c => candidateTenantMap.set(c.id, { client: targetPrisma, tenantCode: effectiveTenantCode }));
 
-    // 2. If requested tenant was 'default' or no candidates found, search all active company tenants
-    if (effectiveTenantCode === 'default' || candidates.length === 0) {
-      try {
-        const companies = await masterPrisma.company.findMany({
-          where: { status: 'ACTIVE' },
-          select: { code: true },
-        }).catch(() => []);
+    // 2. Also search all active company tenants to pool all enrolled students
+    try {
+      const companies = await masterPrisma.company.findMany({
+        where: { status: 'ACTIVE' },
+        select: { code: true },
+      }).catch(() => []);
 
-        for (const comp of companies) {
-          if (comp.code === effectiveTenantCode) continue;
-          try {
-            const compClient = await tenantService.getTenantClient(comp.code);
-            const compCandidates = await compClient.user.findMany({
-              where: {
-                OR: [
-                  { faceEmbedding: { not: null } },
-                  { faceImage: { not: null } },
-                ],
-              },
-              select: {
-                id: true,
-                faceEmbedding: true,
-                faceImage: true,
-              },
-            });
-            for (const cc of compCandidates) {
-              if (!candidateTenantMap.has(cc.id)) {
-                candidates.push(cc);
-                candidateTenantMap.set(cc.id, { client: compClient, tenantCode: comp.code });
-              }
+      for (const comp of companies) {
+        if (comp.code === effectiveTenantCode) continue;
+        try {
+          const compClient = await tenantService.getTenantClient(comp.code);
+          const compCandidates = await compClient.user.findMany({
+            where: {
+              OR: [
+                { faceEmbedding: { not: null } },
+                { faceImage: { not: null } },
+              ],
+            },
+            select: {
+              id: true,
+              faceEmbedding: true,
+              faceImage: true,
+            },
+          });
+          for (const cc of compCandidates) {
+            if (!candidateTenantMap.has(cc.id)) {
+              candidates.push(cc);
+              candidateTenantMap.set(cc.id, { client: compClient, tenantCode: comp.code });
             }
-          } catch (_) {}
-        }
-      } catch (_) {}
-    }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
 
     if (candidates.length === 0) {
       return res.status(400).json({ error: 'No Face ID profiles enrolled in system. Contact admin.' });

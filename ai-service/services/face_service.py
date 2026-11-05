@@ -205,8 +205,8 @@ class FaceService:
         best_match_id = None
         best_sim = -1.0
         highest_similarity = -1.0
-        # Calibrated threshold for InceptionResnetV1 VGGFace2 (default 0.73)
-        threshold = float(getattr(settings, "FACE_MATCH_THRESHOLD", 0.73))
+        # Calibrated threshold for InceptionResnetV1 VGGFace2 (default 0.70)
+        threshold = float(getattr(settings, "FACE_MATCH_THRESHOLD", 0.70))
 
         for candidate in candidates:
             cand_id = candidate.get("id")
@@ -258,7 +258,7 @@ class FaceService:
                 # Candidate qualifies only if:
                 # 1. The composite score reaches the calibrated threshold (e.g. >= 0.73)
                 # 2. Consensus similarity is also sufficiently high (prevents an outlier frame from spoofing)
-                if cand_score >= threshold and consensus_sim >= (threshold - 0.03):
+                if cand_score >= threshold and consensus_sim >= (threshold - 0.05):
                     if cand_score > best_sim:
                         best_sim = cand_score
                         best_match_id = cand_id

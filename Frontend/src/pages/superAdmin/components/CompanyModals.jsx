@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../../../services/api';
 import CountrySelect from '../../../components/CountrySelect';
+import PhoneInputWithCountry from '../../../components/PhoneInputWithCountry';
 import { getCountry, getCountryDialCode, applyCountryDialCode } from '../../../data/countries';
 
 // ============================================================================
@@ -311,73 +312,44 @@ export function NewCompanyModal({
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Country <span className="text-slate-400 font-normal">(Select to add code)</span>
-                    </label>
-                    <CountrySelect
-                      value={newCompany.country || ''}
-                      onChange={(val) =>
-                        setNewCompany((prev) => ({
-                          ...prev,
-                          country: val,
-                          phone: applyCountryDialCode(prev.phone, val)
-                        }))
-                      }
-                      placeholder="Search or select country..."
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div>
                     <div className="flex items-center justify-between mb-1">
                       <label className="block text-xs font-semibold text-slate-700">
                         Phone Number <span className="text-red-500">*</span>
                       </label>
-                      {newCompany.country && (
-                        <span className="text-[11px] font-mono text-blue-600 flex items-center gap-1">
-                          <span>{getCountry(newCompany.country)?.flag}</span>
-                          <span className="font-semibold">{getCountryDialCode(newCompany.country)}</span>
-                        </span>
-                      )}
+                      <span className="text-[11px] text-blue-600 font-medium">Select country to set code</span>
                     </div>
-                    <input
-                      type="tel"
-                      required
-                      placeholder={newCompany.country ? `e.g. ${getCountryDialCode(newCompany.country)} 8000 0000` : 'e.g. +65 8000 0000'}
+                    <PhoneInputWithCountry
                       value={newCompany.phone}
-                      onChange={(e) =>
-                        setNewCompany((prev) => ({ ...prev, phone: e.target.value }))
-                      }
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
+                      onChange={(val) => setNewCompany((prev) => ({ ...prev, phone: val }))}
+                      country={newCompany.country}
+                      onCountryChange={(cntry) => setNewCompany((prev) => ({ ...prev, country: cntry }))}
+                      required
                     />
                     <p className="text-[11px] text-slate-500 mt-1">
-                      {newCompany.country
-                        ? `Dial code (${getCountryDialCode(newCompany.country)}) applied for ${newCompany.country}.`
-                        : 'Select country above to auto-add code (e.g. +65, +91).'}
+                      Click the flag button to choose your country dial code (e.g. +65, +91).
                     </p>
                   </div>
+                </div>
 
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-xs font-semibold text-slate-700">
-                        Initial Admin Password <span className="text-slate-400 font-normal">(Optional)</span>
-                      </label>
-                      <span className="text-[11px] text-emerald-600 font-medium">✉️ Will be sent to admin email</span>
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Leave blank to auto-generate secure password & email to admin"
-                      value={newCompany.adminPassword}
-                      onChange={(e) =>
-                        setNewCompany((prev) => ({ ...prev, adminPassword: e.target.value }))
-                      }
-                      className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 font-mono"
-                    />
-                    <p className="text-[11px] text-slate-500 mt-1">
-                      If left blank, a secure password will be generated and automatically emailed to the admin.
-                    </p>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-slate-700">
+                      Initial Admin Password <span className="text-slate-400 font-normal">(Optional)</span>
+                    </label>
+                    <span className="text-[11px] text-emerald-600 font-medium">✉️ Will be sent to admin email</span>
                   </div>
+                  <input
+                    type="text"
+                    placeholder="Leave blank to auto-generate secure password & email to admin"
+                    value={newCompany.adminPassword}
+                    onChange={(e) =>
+                      setNewCompany((prev) => ({ ...prev, adminPassword: e.target.value }))
+                    }
+                    className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 font-mono"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    If left blank, a secure password will be generated and automatically emailed to the admin.
+                  </p>
                 </div>
               </div>
             </div>
@@ -553,51 +525,30 @@ export function EditCompanyModal({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Country</label>
-                <CountrySelect
-                  value={editingCompany.country || ''}
-                  onChange={(val) =>
-                    setEditingCompany((prev) => ({
-                      ...prev,
-                      country: val,
-                      phone: applyCountryDialCode(prev.phone, val)
-                    }))
-                  }
-                  placeholder="Select country..."
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700">Phone Number</label>
+                  <span className="text-[11px] text-blue-600 font-medium">Select country code</span>
+                </div>
+                <PhoneInputWithCountry
+                  value={editingCompany.phone}
+                  onChange={(val) => setEditingCompany({ ...editingCompany, phone: val })}
+                  country={editingCompany.country}
+                  onCountryChange={(cntry) => setEditingCompany((prev) => ({ ...prev, country: cntry }))}
+                  required
                 />
               </div>
             </div>
 
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-semibold text-slate-700">Phone Number</label>
-                {editingCompany.country && (
-                  <span className="text-[11px] font-mono text-blue-600 flex items-center gap-1">
-                    <span>{getCountry(editingCompany.country)?.flag}</span>
-                    <span className="font-semibold">{getCountryDialCode(editingCompany.country)}</span>
-                  </span>
-                )}
-              </div>
-              <input
-                type="tel"
-                required
-                value={editingCompany.phone}
-                onChange={(e) => setEditingCompany({ ...editingCompany, phone: e.target.value })}
-                placeholder={editingCompany.country ? `e.g. ${getCountryDialCode(editingCompany.country)} 8000 0000` : 'e.g. +65 8000 0000'}
-                className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100"
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-semibold text-slate-700">
-                  New Admin Password <span className="text-slate-400 font-normal">(Optional)</span>
+                  New Password <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <span className="text-[11px] text-slate-500">Leave blank to keep existing password</span>
               </div>
               <input
                 type="text"
-                placeholder="Enter 6+ characters to reset admin password"
+                placeholder="Enter 6+ characters to reset password"
                 value={editingCompany.adminPassword || ''}
                 onChange={(e) => setEditingCompany({ ...editingCompany, adminPassword: e.target.value })}
                 className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:border-blue-400 focus:ring-3 focus:ring-blue-100 font-mono"

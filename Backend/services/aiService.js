@@ -240,19 +240,25 @@ class AIService {
 
     if (gatewayUrl) {
       const message = this._buildGatewayMessage(systemPrompt, userPrompt, jsonMode, conversationHistory);
-      try {
-        const response = await axios.post(`${gatewayUrl}/chat`, { message }, {
-          headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
-          timeout: jsonMode ? 180000 : 25000
-        });
+      const endpoints = [`${gatewayUrl}/recruitment/chat`, `${gatewayUrl}/chat`];
+      for (const endpoint of endpoints) {
+        try {
+          const response = await axios.post(endpoint, { message }, {
+            headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+            timeout: jsonMode ? 180000 : 25000
+          });
 
-        const text = response.data?.response;
-        if (typeof text === 'string' && text.trim()) {
-          return text.trim();
+          const text = response.data?.response;
+          if (typeof text === 'string' && text.trim()) {
+            return text.trim();
+          }
+        } catch (error) {
+          if (error.response?.status === 401 || error.response?.status === 404) {
+            continue; // try next endpoint (/recruitment/chat or /chat)
+          }
+          console.warn(`[AIService] Local LLM gateway issue at ${endpoint} (${error.code || error.response?.status || error.message}). Attempting OpenAI fallback...`);
+          break;
         }
-        console.warn('[AIService] Local LLM gateway returned empty response. Attempting fallback...');
-      } catch (error) {
-        console.warn(`[AIService] Local LLM gateway issue (${error.code || error.response?.status || error.message}). Attempting OpenAI fallback...`);
       }
     }
 
