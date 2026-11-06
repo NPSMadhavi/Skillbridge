@@ -12,7 +12,7 @@ import documentExtractor from '../services/documentExtractor.js';
 import tenantService from '../services/tenantService.js';
 import { authenticateToken, requireRole } from '../middleware/auth.js';
 import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
-import { cleanUnsupportedWords } from '../utils/contentQuality.js';
+import { cleanUnsupportedWords, stripSlidePlaceholders, isBinaryNoiseText, isPlaceholderTitle } from '../utils/contentQuality.js';
 
 const router = express.Router();
 const upload = multer({
@@ -912,16 +912,31 @@ router.get('/:id', authenticateToken, async (req, res) => {
           }));
         }
 
+        const cleanExplanation = lesson.explanation ? cleanUnsupportedWords(stripSlidePlaceholders(lesson.explanation)) : '';
+        const cleanSpokenExplanation = lesson.spoken_explanation ? cleanUnsupportedWords(stripSlidePlaceholders(lesson.spoken_explanation)) : '';
+        const cleanTitle = stripSlidePlaceholders(lesson.title) || lesson.title;
+
+        const cleanExplanations = {};
+        if (lesson.explanations && typeof lesson.explanations === 'object') {
+          for (const [lKey, lVal] of Object.entries(lesson.explanations)) {
+            cleanExplanations[lKey] = typeof lVal === 'string' ? cleanUnsupportedWords(stripSlidePlaceholders(lVal)) : lVal;
+          }
+        }
+
         return {
           ...lesson,
+          title: cleanTitle,
+          explanation: cleanExplanation || lesson.explanation,
+          spoken_explanation: cleanSpokenExplanation || cleanExplanation || lesson.spoken_explanation,
+          explanations: Object.keys(cleanExplanations).length > 0 ? cleanExplanations : lesson.explanations,
           sourceSlides: sNums,
           visuals: cleanLessonVisuals,
           slideData,
           chunkData: matchedChunk ? {
             chunkIndex: matchedChunk.chunkIndex,
-            title: matchedChunk.concept || lesson.title,
-            text: matchedChunk.chunkText || '',
-            bulletPoints: matchedChunk.keyPoints || []
+            title: matchedChunk.concept || cleanTitle,
+            text: stripSlidePlaceholders(matchedChunk.chunkText || ''),
+            bulletPoints: Array.isArray(matchedChunk.keyPoints) ? matchedChunk.keyPoints.map(stripSlidePlaceholders) : []
           } : null
         };
       });
@@ -1055,7 +1070,7 @@ function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', mat
   const concept = targetChunk.concept || lessonTitle;
   const topic = targetChunk.topic || matchingLesson?.chapterTitle || matchingLesson?.moduleTitle || courseTitle;
 
-  let rawText = (targetChunk.text || targetChunk.chunkText || '')
+  let rawText = stripSlidePlaceholders(targetChunk.text || targetChunk.chunkText || '')
     .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
     .replace(/Slide\s*\d+:?\s*---*/gi, '')
     .replace(/Slide\s*\d+:\s*/gi, '')
@@ -1066,13 +1081,13 @@ function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', mat
     .trim();
 
   // Rejoin fragmented lines from PowerPoint line wraps into coherent sentences
-  const rawLines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const rawLines = rawText.split('\n').map(l => stripSlidePlaceholders(l.trim())).filter(Boolean);
   const cleanBlocks = [];
   let buffer = '';
   for (const line of rawLines) {
     const isBullet = /^[-*•➔\d\.]+\s+/.test(line);
-    const cleanLine = line.replace(/^[-*•➔\d\.]+\s+/, '').trim();
-    if (!cleanLine) continue;
+    const cleanLine = stripSlidePlaceholders(line.replace(/^[-*•➔\d\.]+\s+/, '').trim());
+    if (!cleanLine || isBinaryNoiseText(cleanLine)) continue;
     if (isBullet) {
       if (buffer) { cleanBlocks.push(buffer); buffer = ''; }
       buffer = cleanLine;
@@ -1083,19 +1098,19 @@ function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', mat
       buffer = cleanLine;
     }
   }
-  if (buffer) cleanBlocks.push(buffer);
-  const cleanContentText = cleanBlocks.join('\n\n');
+  if (buffer && !isBinaryNoiseText(buffer)) cleanBlocks.push(buffer);
+  const cleanContentText = cleanUnsupportedWords(cleanBlocks.join('\n\n'));
 
   let keyPoints = targetChunk.key_points || targetChunk.keyPoints || [];
   if (typeof keyPoints === 'string') {
     try { keyPoints = JSON.parse(keyPoints); } catch(e) { keyPoints = []; }
   }
   keyPoints = (keyPoints || [])
-    .map(kp => String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())
-    .filter(kp => kp.length > 5);
+    .map(kp => cleanUnsupportedWords(stripSlidePlaceholders(String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())))
+    .filter(kp => kp.length > 5 && !isBinaryNoiseText(kp));
 
   const sections = [];
-  let summary = (targetChunk.semanticSummary || `In this lesson, we study the core standards, operational requirements, and protocols for ${concept}.`)
+  let summary = cleanUnsupportedWords(stripSlidePlaceholders(targetChunk.semanticSummary || `In this lesson, we study the core standards, operational requirements, and protocols for ${concept}.`))
     .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
     .replace(/Slide\s*\d+:\s*/gi, '')
     .replace(/\s+/g, ' ')
@@ -1169,14 +1184,15 @@ router.post('/:id/lessons/:lessonId/explain', authenticateToken, async (req, res
           textMatchesLanguage(cachedExplanation, targetLangInfo.code)
         ) {
           const fetchDuration = Date.now() - fetchStartTime;
+          const cleanCached = cleanUnsupportedWords(stripSlidePlaceholders(cachedExplanation));
           console.log(`[PERF:LESSON_FETCH_END] Served lesson "${lessonTitle}" directly from PostgreSQL DB cache in ${fetchDuration}ms (0 network / 0 LLM latency)`);
           return res.json({
-            explanation: cachedExplanation,
-            spoken_explanation: cachedExplanation,
-            title: lessonTitle,
+            explanation: cleanCached,
+            spoken_explanation: cleanCached,
+            title: stripSlidePlaceholders(lessonTitle) || lessonTitle,
             page_or_slide_number: existingLesson.sourceSlides?.[0] || existingLesson.id || 1,
-            key_points: existingLesson.key_points || [],
-            safety_warnings: existingLesson.safety_warnings || [],
+            key_points: (existingLesson.key_points || []).map(stripSlidePlaceholders),
+            safety_warnings: (existingLesson.safety_warnings || []).map(stripSlidePlaceholders),
             suggested_next_transition: 'Proceed to the next section when ready.',
             visuals: existingLesson.visuals || [],
             sourceSlides: existingLesson.sourceSlides || [],
@@ -1336,14 +1352,42 @@ router.post('/:id/page/:pageNum/explain', authenticateToken, async (req, res) =>
     const targetSlide = slides.find(s => s.slideNumber === pageNum || s.sourceSlide === pageNum);
     const targetPage = pages.find(p => p.page_number === pageNum || p.pageNumber === pageNum);
 
-    const title = targetSlide?.title || targetPage?.title || `Page ${pageNum}`;
-    const text = targetSlide?.fullText || targetPage?.text || '';
+    const title = targetSlide?.title || targetPage?.title || `Slide ${pageNum}`;
+    const rawTeachingText = targetSlide
+      ? (aiService._slideTeachingText(targetSlide) || targetSlide.fullText || targetSlide.title || '')
+      : (targetPage?.text || targetPage?.title || '');
+
+    // Search for a pre-computed semantic knowledge chunk for this specific slide
+    let chunkContext = '';
+    try {
+      const targetPrisma = req.prisma || prisma;
+      const matchingChunk = await targetPrisma.courseChunk.findFirst({
+        where: {
+          courseId: course.id,
+          OR: [
+            { sourcePage: pageNum },
+            { sourceSection: { contains: `${pageNum}` } }
+          ]
+        }
+      });
+      if (matchingChunk?.chunkText) {
+        chunkContext = matchingChunk.chunkText;
+      }
+    } catch (_) {}
+
+    const fullSlideContent = [chunkContext, rawTeachingText].filter(Boolean).join('\n\n');
     const visuals = targetSlide?.images || targetPage?.images || (targetPage?.pageImage ? [targetPage.pageImage] : []);
+    const cleanBullets = (targetSlide?.bulletPoints || [])
+      .map(b => stripSlidePlaceholders(b))
+      .filter(b => b && !isBinaryNoiseText(b));
+
+    const cleanFullContent = cleanUnsupportedWords(stripSlidePlaceholders(fullSlideContent));
 
     const structured = await aiService.explainVisibleContent({
       pageNumber: pageNum,
-      title,
-      text,
+      title: stripSlidePlaceholders(title) || `Slide ${pageNum}`,
+      text: cleanFullContent,
+      bulletPoints: cleanBullets,
       visuals
     }, course.title, targetLangInfo.name);
 
@@ -1525,18 +1569,17 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
     const jsonCompleted = JSON.stringify(finalCompleted);
 
     let record;
-    if (existing) {
-      record = await targetPrisma.courseProgress.update({
-        where: { id: existing.id },
-        data: {
+    try {
+      record = await targetPrisma.courseProgress.upsert({
+        where: {
+          userId_courseId: { userId, courseId }
+        },
+        update: {
           progress: calcProgress,
           completed: isCompleted,
           completedLessonIds: jsonCompleted
-        }
-      });
-    } else {
-      record = await targetPrisma.courseProgress.create({
-        data: {
+        },
+        create: {
           userId,
           courseId,
           progress: calcProgress,
@@ -1544,6 +1587,20 @@ router.post('/:id/progress', authenticateToken, async (req, res) => {
           completedLessonIds: jsonCompleted
         }
       });
+    } catch (upsertErr) {
+      const retryExisting = existing || await targetPrisma.courseProgress.findFirst({ where: { userId, courseId } });
+      if (retryExisting) {
+        record = await targetPrisma.courseProgress.update({
+          where: { id: retryExisting.id },
+          data: {
+            progress: calcProgress,
+            completed: isCompleted,
+            completedLessonIds: jsonCompleted
+          }
+        });
+      } else {
+        throw upsertErr;
+      }
     }
 
     res.json({
@@ -2008,7 +2065,7 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
 
     // 3. Fallback to Primary OpenAI Audio Transcription Service
     const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || process.env.AI_BASE_URL || 'https://api.openai.com/v1';
-    const OPENAI_API_KEY = process.env.BRUTALLYHIRED_LLM_API_KEY || process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY || '';
 
     const form = new FormData();
     form.append('file', req.file.buffer, {

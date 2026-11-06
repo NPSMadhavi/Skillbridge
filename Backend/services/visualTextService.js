@@ -1,11 +1,13 @@
 import { createWorker } from 'tesseract.js';
 import axios from 'axios';
 import FormData from 'form-data';
-import { isGarbageTitle, firstUsefulTitleLine } from '../utils/contentQuality.js';
+import { isGarbageTitle, isPlaceholderTitle, firstUsefulTitleLine } from '../utils/contentQuality.js';
 
 const MIN_IMAGE_BYTES = 12000;
 const MIN_TEACHING_IMAGE_BYTES = 25000;
 const MAX_VISION_IMAGES = 40;
+let gatewayVisionDisabledUntil = 0;
+let consecutiveVisionFailures = 0;
 
 function dataUrlToBuffer(dataUrl) {
   if (!dataUrl || typeof dataUrl !== 'string') return null;
@@ -16,19 +18,19 @@ function dataUrlToBuffer(dataUrl) {
 
 function gatewayBaseUrl() {
   return String(
-    process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
     process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
     process.env.LLM_GATEWAY_URL ||
-    'http://192.168.50.6:8081'
+    process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
+    'https://rsvragsvr.tail236357.ts.net'
   ).trim().replace(/\/+$/, '');
 }
 
 function gatewayHeaders(extra = {}) {
   const headers = { ...extra };
   const apiKey = (
-    process.env.BRUTALLYHIRED_LLM_API_KEY ||
     process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
     process.env.LLM_GATEWAY_API_KEY ||
+    process.env.BRUTALLYHIRED_LLM_API_KEY ||
     process.env.VEDA_API_KEY ||
     ''
   ).trim();
@@ -137,6 +139,7 @@ function teachingImagesForSlide(slide) {
 }
 
 export async function analyzeImageWithQwen(img, slideNumber) {
+  if (Date.now() < gatewayVisionDisabledUntil) return null;
   const gateway = gatewayBaseUrl();
   if (!gateway) return null;
   const buf = img.buffer || dataUrlToBuffer(img.dataUrl);
@@ -154,15 +157,28 @@ export async function analyzeImageWithQwen(img, slideNumber) {
     `Do not reuse content from other slides. Do not invent a generic safety lecture.`
   );
 
-  const response = await axios.post(`${gateway}/analyze-image`, form, {
-    headers: gatewayHeaders(form.getHeaders()),
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity,
-    timeout: 180000
-  });
+  try {
+    const response = await axios.post(`${gateway}/analyze-image`, form, {
+      headers: gatewayHeaders(form.getHeaders()),
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 20000
+    });
 
-  const explanation = cleanOcrText(response.data?.explanation);
-  return explanation && explanation.length > 30 ? explanation : null;
+    consecutiveVisionFailures = 0;
+    const explanation = cleanOcrText(response.data?.explanation);
+    return explanation && explanation.length > 30 ? explanation : null;
+  } catch (err) {
+    consecutiveVisionFailures++;
+    const isTimeout = err.code === 'ECONNABORTED' || String(err.message || '').includes('timeout');
+    const isOfflineOrAuth = err.response?.status === 401 || err.response?.status === 403 || err.response?.status === 404 || err.code === 'ECONNREFUSED';
+
+    if (isOfflineOrAuth || consecutiveVisionFailures >= 2) {
+      console.warn(`[VisualText] Gateway image analysis unavailable (${isTimeout ? '2 consecutive timeouts' : `HTTP ${err.response?.status || err.code}`}). Disabling remote vision for next 10 minutes.`);
+      gatewayVisionDisabledUntil = Date.now() + 10 * 60 * 1000;
+    }
+    throw err;
+  }
 }
 
 export async function ocrFallback(images) {
@@ -245,14 +261,30 @@ export async function enrichDocumentVisuals(doc) {
   };
 
   if (slides.length > 0) {
-    const visionLimit = Math.min(slides.length, 80);
-    console.log(`[VisualText] Analyzing ${visionLimit} of ${slides.length} slide(s) with Qwen vision (one unique image set per slide)...`);
-    for (const slide of slides.slice(0, visionLimit)) {
-      await analyzeSlideImages(slide);
+    // Only target slides that lack meaningful text (image-only slides)
+    const textlessSlides = slides.filter(s => {
+      const txt = ((s.paragraphs || []).join(' ') + ' ' + (s.bulletPoints || []).join(' ')).trim();
+      return txt.length < 50;
+    });
+
+    if (textlessSlides.length > 0) {
+      const visionLimit = Math.min(textlessSlides.length, 5);
+      console.log(`[VisualText] Analyzing ${visionLimit} visual-only slide(s) lacking text with Qwen vision...`);
+      for (const slide of textlessSlides.slice(0, visionLimit)) {
+        if (Date.now() < gatewayVisionDisabledUntil) {
+          console.log(`[VisualText] Gateway vision circuit breaker active. Skipping remaining remote slide vision calls.`);
+          break;
+        }
+        await analyzeSlideImages(slide);
+      }
+    } else {
+      console.log(`[VisualText] All ${slides.length} slides have complete structured text. Remote vision skipped.`);
     }
   } else {
     const images = Array.isArray(doc.images) ? doc.images : [];
-    await analyzeSlideImages({ slideNumber: 1, images });
+    if (Date.now() >= gatewayVisionDisabledUntil && images.length > 0) {
+      await analyzeSlideImages({ slideNumber: 1, images: images.slice(0, 3) });
+    }
   }
 
   const stillNeedOcr = [];

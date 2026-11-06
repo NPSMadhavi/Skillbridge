@@ -22,10 +22,10 @@ class QwenLlmService {
    */
   getGatewayBaseUrl() {
     const raw = (
+      process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
       process.env.LLM_GATEWAY_URL ||
       process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
-      process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
-      'https://llm.brutallyhired.com'
+      'https://rsvragsvr.tail236357.ts.net'
     ).trim();
 
     return raw.replace(/\/+$/, '');
@@ -36,9 +36,9 @@ class QwenLlmService {
    */
   getApiKey() {
     return (
-      process.env.BRUTALLYHIRED_LLM_API_KEY ||
-      process.env.LLM_GATEWAY_API_KEY ||
       process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
+      process.env.LLM_GATEWAY_API_KEY ||
+      process.env.BRUTALLYHIRED_LLM_API_KEY ||
       ''
     ).trim();
   }

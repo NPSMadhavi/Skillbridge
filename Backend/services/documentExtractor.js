@@ -11,7 +11,7 @@ import path from 'path';
 import os from 'os';
 import aiService from './aiService.js';
 import { enrichDocumentVisuals, extractEmbeddedRasterImages, analyzeImageWithQwen, ocrFallback } from './visualTextService.js';
-import { isGarbageTitle, isBinaryNoiseText, firstUsefulTitleLine } from '../utils/contentQuality.js';
+import { isGarbageTitle, isBinaryNoiseText, isPlaceholderTitle, firstUsefulTitleLine, stripSlidePlaceholders } from '../utils/contentQuality.js';
 
 const execPromise = util.promisify(exec);
 
@@ -73,6 +73,7 @@ async function renderPptSlidesToImages(fileBuffer, originalname) {
   const tmpDir = path.join(os.tmpdir(), `ppt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
   const tmpFile = path.join(tmpDir, `presentation.${ext}`);
   const outDir = path.join(tmpDir, 'slides');
+  const jsonOut = path.join(outDir, 'slides_data.json');
 
   try {
     fs.mkdirSync(outDir, { recursive: true });
@@ -81,10 +82,73 @@ async function renderPptSlidesToImages(fileBuffer, originalname) {
     const psScript = `
 $fullPpt = "${tmpFile.replace(/\\/g, '\\\\')}"
 $fullOut = "${outDir.replace(/\\/g, '\\\\')}"
+$jsonOut = "${jsonOut.replace(/\\/g, '\\\\')}"
 $ppt = New-Object -ComObject PowerPoint.Application
 try {
   $pres = $ppt.Presentations.Open($fullPpt, 1, 0, 0)
   $pres.SaveAs($fullOut, 18)
+
+  $slideList = @()
+  for ($i = 1; $i -le $pres.Slides.Count; $i++) {
+    $slide = $pres.Slides.Item($i)
+    $idx = $slide.SlideIndex
+    $title = ""
+    $bodyLines = @()
+    $notes = ""
+
+    foreach ($shape in $slide.Shapes) {
+      if ($shape.HasTextFrame -and $shape.TextFrame.HasText) {
+        $raw = $shape.TextFrame.TextRange.Text
+        if ($raw) {
+          $lines = $raw -split "\\r?\\n"
+          foreach ($l in $lines) {
+            $cl = $l.Trim()
+            if ($cl.Length -gt 0) {
+              if ($cl -match '^(Text|Date|Footer|Slide\\s*Number|Title|Header|Sub-Title|Picture|Object|Shape|Media)\\s*Placeholder' -or $cl -match '^Click\\s+to\\s+(add|edit)') {
+                continue
+              }
+              if (-not $title -and ($shape.Type -eq 14 -or $shape.Name -like "*Title*")) {
+                $title = $cl
+              } else {
+                $bodyLines += $cl
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (-not $title -and $bodyLines.Count -gt 0) {
+      $candidate = $bodyLines[0]
+      if ($candidate.Length -gt 2 -and $candidate.Length -lt 90) {
+        $title = $candidate
+        $bodyLines = $bodyLines[1..($bodyLines.Count - 1)]
+      }
+    }
+    if (-not $title) { $title = "Slide $idx" }
+
+    try {
+      foreach ($nShape in $slide.NotesPage.Shapes) {
+        if ($nShape.HasTextFrame -and $nShape.TextFrame.HasText) {
+          $nt = $nShape.TextFrame.TextRange.Text.Trim()
+          if ($nt -and $nt -notmatch '^\\d+$') {
+            $notes += $nt + "\`n"
+          }
+        }
+      }
+    } catch {}
+
+    $slideList += [PSCustomObject]@{
+      slideNumber = $idx
+      title = $title
+      paragraphs = $bodyLines
+      speakerNotes = $notes.Trim()
+    }
+  }
+
+  $jsonContent = $slideList | ConvertTo-Json -Depth 6
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($jsonOut, $jsonContent, $utf8NoBom)
   $pres.Close()
 } finally {
   $ppt.Quit()
@@ -94,7 +158,7 @@ try {
     const psFile = path.join(tmpDir, 'export.ps1');
     fs.writeFileSync(psFile, psScript);
 
-    await execPromise(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 60000 });
+    await execPromise(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 90000 });
 
     if (!fs.existsSync(outDir)) return [];
     const files = fs.readdirSync(outDir);
@@ -127,6 +191,49 @@ try {
       });
     }
 
+    // Read PowerPoint COM structured slides if available
+    let comSlides = [];
+    if (fs.existsSync(jsonOut)) {
+      try {
+        const rawJson = fs.readFileSync(jsonOut, 'utf8')
+          .replace(/^\uFEFF/, '')
+          .replace(/^[\s\0]+/, '')
+          .trim();
+        const parsedList = JSON.parse(rawJson);
+        const items = Array.isArray(parsedList) ? parsedList : [parsedList];
+        comSlides = items.map(ps => {
+          const sNum = parseInt(ps.slideNumber, 10);
+          const matchingImg = slideImages.find(img => img.sourceSlide === sNum) || null;
+          const cleanTitle = stripSlidePlaceholders(ps.title) || `Slide ${sNum}`;
+          const cleanParas = (Array.isArray(ps.paragraphs) ? ps.paragraphs : [ps.paragraphs].filter(Boolean))
+            .map(stripSlidePlaceholders)
+            .filter(p => p && !isBinaryNoiseText(p));
+          const bulletPoints = cleanParas.map(p => `- ${p}`);
+          const cleanNotes = stripSlidePlaceholders(ps.speakerNotes || '');
+          const fullText = `--- Slide ${sNum}: ${cleanTitle} ---\n` +
+            (cleanParas.length > 0 ? cleanParas.join('\n\n') : `[Visual Content on Slide ${sNum}]: Full slide presentation`) +
+            (cleanNotes ? `\n\n[Speaker Notes for Slide ${sNum}]:\n${cleanNotes}` : '');
+
+          return {
+            slideNumber: sNum,
+            title: cleanTitle,
+            headings: [],
+            bulletPoints,
+            paragraphs: cleanParas,
+            tables: [],
+            images: matchingImg ? [matchingImg] : [],
+            fullSlideImage: matchingImg,
+            speakerNotes: cleanNotes,
+            fullText: fullText.trim()
+          };
+        });
+        console.log(`[Doc Extractor] Extracted clean PowerPoint COM structured text for ${comSlides.length} slides.`);
+      } catch (jsonErr) {
+        console.warn('[Doc Extractor] Warning reading slides_data.json:', jsonErr.message);
+      }
+    }
+
+    slideImages.comSlides = comSlides;
     return slideImages;
   } catch (err) {
     console.warn('[Doc Extractor] PowerPoint COM slide rendering notice:', err.message);
@@ -674,6 +781,13 @@ function alignSlidesToRendered(slides, renderedSlides) {
     return { slides: slides || [], rebuilt: false };
   }
 
+  // If PowerPoint COM extracted clean structured slides, prefer them 100%!
+  const comSlides = Array.isArray(renderedSlides.comSlides) ? renderedSlides.comSlides : [];
+  if (comSlides.length >= Math.floor(renderedSlides.length * 0.7) && comSlides.length > 0) {
+    console.log(`[Doc Extractor] Using ${comSlides.length} clean PowerPoint COM slides directly.`);
+    return { slides: comSlides, rebuilt: true };
+  }
+
   const existing = Array.isArray(slides) ? slides : [];
   const garbageCount = existing.filter(s => isGarbageTitle(s?.title)).length;
   const garbageRatio = garbageCount / Math.max(1, existing.length);
@@ -688,6 +802,10 @@ function alignSlidesToRendered(slides, renderedSlides) {
       if (targetSlide) {
         targetSlide.images = [rImg, ...(targetSlide.images || []).filter(img => img.id !== rImg.id)];
         targetSlide.fullSlideImage = rImg;
+        targetSlide.title = stripSlidePlaceholders(targetSlide.title) || targetSlide.title;
+        targetSlide.bulletPoints = (targetSlide.bulletPoints || []).map(stripSlidePlaceholders).filter(b => b && !isBinaryNoiseText(b));
+        targetSlide.paragraphs = (targetSlide.paragraphs || []).map(stripSlidePlaceholders).filter(p => p && !isBinaryNoiseText(p));
+        targetSlide.fullText = stripSlidePlaceholders(targetSlide.fullText || '');
       }
     }
     return { slides: existing, rebuilt: false };
@@ -696,20 +814,32 @@ function alignSlidesToRendered(slides, renderedSlides) {
   const byNum = new Map(existing.map(s => [s.slideNumber, s]));
   const rebuilt = renderedSlides.map((rImg) => {
     const prev = byNum.get(rImg.sourceSlide);
-    const keepTitle = prev && !isGarbageTitle(prev.title);
+    const keepTitle = prev && !isGarbageTitle(prev.title) && !isPlaceholderTitle(prev.title);
+    const cleanTitle = keepTitle ? stripSlidePlaceholders(prev.title) : `Slide ${rImg.sourceSlide}`;
+    const cleanBulletPoints = (prev?.bulletPoints || [])
+      .map(stripSlidePlaceholders)
+      .filter(b => b && b.length > 3 && !isBinaryNoiseText(b));
+    const cleanParagraphs = (prev?.paragraphs || [])
+      .map(stripSlidePlaceholders)
+      .filter(p => p && p.length > 3 && !isBinaryNoiseText(p));
+    const cleanNotes = prev?.speakerNotes ? stripSlidePlaceholders(prev.speakerNotes) : '';
+
+    let fullText = keepTitle && prev.fullText
+      ? stripSlidePlaceholders(prev.fullText)
+      : `--- Slide ${rImg.sourceSlide}: ${cleanTitle} ---\n` +
+        (cleanParagraphs.length > 0 ? cleanParagraphs.join('\n\n') : `[Visual Content on Slide ${rImg.sourceSlide}]: Full slide presentation`);
+
     return {
       slideNumber: rImg.sourceSlide,
-      title: keepTitle ? prev.title : `Slide ${rImg.sourceSlide}`,
-      headings: (prev?.headings || []).filter(h => !isGarbageTitle(h)),
-      bulletPoints: prev?.bulletPoints || [],
-      paragraphs: prev?.paragraphs || [],
+      title: cleanTitle || `Slide ${rImg.sourceSlide}`,
+      headings: (prev?.headings || []).map(stripSlidePlaceholders).filter(h => !isGarbageTitle(h) && !isPlaceholderTitle(h)),
+      bulletPoints: cleanBulletPoints,
+      paragraphs: cleanParagraphs,
       tables: prev?.tables || [],
       images: [rImg],
       fullSlideImage: rImg,
-      speakerNotes: prev?.speakerNotes || '',
-      fullText: keepTitle && prev.fullText
-        ? prev.fullText
-        : `--- Slide ${rImg.sourceSlide}: Visual training slide ---\n[Visual Content on Slide ${rImg.sourceSlide}]: Full slide presentation`
+      speakerNotes: cleanNotes,
+      fullText: fullText.trim()
     };
   });
 
@@ -730,8 +860,11 @@ function extractPptBinary(buffer) {
   let match;
   while ((match = utf16Regex.exec(rawStr)) !== null) {
     const decoded = Buffer.from(match[0], 'binary').toString('utf16le').trim();
-    if (decoded.length >= 8 && !isBinaryNoiseText(decoded)) {
-      textMatches.push(decoded);
+    if (decoded.length >= 6 && !isBinaryNoiseText(decoded) && !isPlaceholderTitle(decoded)) {
+      const clean = stripSlidePlaceholders(decoded);
+      if (clean.length >= 6 && !isBinaryNoiseText(clean) && !textMatches.includes(clean)) {
+        textMatches.push(clean);
+      }
     }
   }
 
@@ -739,8 +872,11 @@ function extractPptBinary(buffer) {
   const asciiRegex = /[\x20-\x7E\t\r\n]{8,}/g;
   while ((match = asciiRegex.exec(rawStr)) !== null) {
     const clean = match[0].replace(/\0/g, '').trim();
-    if (clean.length >= 12 && !textMatches.includes(clean) && !isBinaryNoiseText(clean)) {
-      textMatches.push(clean);
+    if (clean.length >= 8 && !isBinaryNoiseText(clean) && !isPlaceholderTitle(clean)) {
+      const cleanAscii = stripSlidePlaceholders(clean);
+      if (cleanAscii.length >= 8 && !isBinaryNoiseText(cleanAscii) && !textMatches.includes(cleanAscii)) {
+        textMatches.push(cleanAscii);
+      }
     }
   }
 
@@ -753,17 +889,18 @@ function extractPptBinary(buffer) {
     if (currentSlideNum > MAX_HINT_SLIDES) break;
     currentTexts.push(t);
     if (currentTexts.join(' ').length > 800) {
-      const rawTitle = currentTexts.find(line => !isGarbageTitle(line)) || `Slide ${currentSlideNum}`;
-      const slideTitle = isGarbageTitle(rawTitle) ? `Slide ${currentSlideNum}` : rawTitle.slice(0, 80);
+      const cleanLines = currentTexts.map(stripSlidePlaceholders).filter(line => line && line.length >= 4 && !isBinaryNoiseText(line));
+      const rawTitle = cleanLines.find(line => !isGarbageTitle(line) && !isPlaceholderTitle(line)) || `Slide ${currentSlideNum}`;
+      const slideTitle = isGarbageTitle(rawTitle) || isPlaceholderTitle(rawTitle) ? `Slide ${currentSlideNum}` : rawTitle.slice(0, 80);
       slides.push({
         slideNumber: currentSlideNum,
         title: slideTitle,
         headings: [],
-        bulletPoints: currentTexts.slice(1, 8).map(b => `- ${b}`),
-        paragraphs: currentTexts.slice(0, 8),
+        bulletPoints: cleanLines.slice(1, 8).map(b => `- ${b}`),
+        paragraphs: cleanLines.slice(0, 8),
         tables: [],
         speakerNotes: '',
-        fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + currentTexts.slice(0, 8).join('\n')
+        fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + cleanLines.slice(0, 8).join('\n')
       });
       currentSlideNum++;
       currentTexts = [];
@@ -771,17 +908,18 @@ function extractPptBinary(buffer) {
   }
 
   if (currentTexts.length > 0 && currentSlideNum <= MAX_HINT_SLIDES) {
-    const rawTitle = currentTexts.find(line => !isGarbageTitle(line)) || `Slide ${currentSlideNum}`;
-    const slideTitle = isGarbageTitle(rawTitle) ? `Slide ${currentSlideNum}` : rawTitle.slice(0, 80);
+    const cleanLines = currentTexts.map(stripSlidePlaceholders).filter(line => line && line.length >= 4 && !isBinaryNoiseText(line));
+    const rawTitle = cleanLines.find(line => !isGarbageTitle(line) && !isPlaceholderTitle(line)) || `Slide ${currentSlideNum}`;
+    const slideTitle = isGarbageTitle(rawTitle) || isPlaceholderTitle(rawTitle) ? `Slide ${currentSlideNum}` : rawTitle.slice(0, 80);
     slides.push({
       slideNumber: currentSlideNum,
       title: slideTitle,
       headings: [],
-      bulletPoints: currentTexts.slice(1, 8).map(b => `- ${b}`),
-      paragraphs: currentTexts.slice(0, 8),
+      bulletPoints: cleanLines.slice(1, 8).map(b => `- ${b}`),
+      paragraphs: cleanLines.slice(0, 8),
       tables: [],
       speakerNotes: '',
-      fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + currentTexts.slice(0, 8).join('\n')
+      fullText: `--- Slide ${currentSlideNum}: ${slideTitle} ---\n` + cleanLines.slice(0, 8).join('\n')
     });
   }
 

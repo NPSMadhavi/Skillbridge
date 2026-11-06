@@ -3,7 +3,8 @@ import { api } from '../services/api'
 import VoiceTutorManager, { TutorState, containsWakeWord, extractQuestionFromWakeWord, isNoiseOrHallucination, isDanglingFragment } from '../services/voiceTutorService'
 import logo from '../assets/SkillBridge_AI.png'
 import { persistLanguageSelection, readStoredLanguageCode, textMatchesLanguage } from '../utils/language'
-import { cleanUnsupportedWords, cleanForSpeech as cleanSpeechUtil } from '../utils/textCleaner'
+import { cleanUnsupportedWords, cleanForSpeech as cleanSpeechUtil, stripSlidePlaceholders } from '../utils/textCleaner'
+import { buildTeacherLectureSentences } from '../utils/teacherNarrator'
 import { getStudentUser } from '../utils/authSession'
 
 const CourseBookIcon = ({ className = "h-5 w-5" }) => (
@@ -576,6 +577,12 @@ const CoursePlayer = ({
     pitch: 1.0
   })
 
+  // Dynamic Viseme Lip-Sync and Google Voice Pacing states
+  const [activeSpokenWord, setActiveSpokenWord] = useState('')
+  const [activeCharIndex, setActiveCharIndex] = useState(0)
+  const speechTimeoutRef = useRef(null)
+  const watchdogRef = useRef(null)
+
   // Fetch company AI Tutor and custom wake word configuration
   useEffect(() => {
     let isMounted = true
@@ -952,6 +959,16 @@ const CoursePlayer = ({
       utterance.rate = aiVoiceConfig?.rate || 0.95
       utterance.pitch = aiVoiceConfig?.pitch || 1.0
 
+      // Hook boundary for avatar lip-sync during Q&A answers
+      utterance.onboundary = (event) => {
+        if (!isMountedRef.current) return;
+        if (event.name === 'word') {
+          const word = cleanText.substring(event.charIndex, event.charIndex + (event.charLength || 6)).trim();
+          setActiveSpokenWord(word);
+          setActiveCharIndex(event.charIndex);
+        }
+      };
+
       // Global reference to prevent browser GC bug
       window._skillbridgeCurrentUtterance = utterance
 
@@ -960,6 +977,7 @@ const CoursePlayer = ({
       const finishTTS = () => {
         if (hasFinished) return
         hasFinished = true
+        setActiveSpokenWord('')
         if (safetyTimer) {
           clearTimeout(safetyTimer)
           safetyTimer = null
@@ -1065,15 +1083,17 @@ const CoursePlayer = ({
     console.log('[VOICE:INTERRUPT] Wake command detected - interrupting lecture and greeting');
 
     // ==========================================================
-    // SAVE COURSE POSITION + STOP COURSE
+    // 1. SAVE COURSE POSITION + STOP COURSE
     // ==========================================================
 
-    if (playingRef.current) {
+    const wasPlaying = Boolean(playingRef.current || playing);
+    if (wasPlaying) {
       wasLecturePlayingRef.current = true;
       savedLecturePositionRef.current = currentSentenceIdxRef.current;
       console.log(`[VOICE:INTERRUPT] Pausing course at Concept ${currentSentenceIdxRef.current + 1}`);
 
-      // Pause course
+      // Immediately flag paused in ref & state so lecture loops halt synchronously
+      playingRef.current = false;
       setPlaying(false);
       voiceManagerRef.current?.setLecturePlaying(false);
     } else if (isAriaSpeakingRef.current) {
@@ -1082,18 +1102,44 @@ const CoursePlayer = ({
       isAriaSpeakingRef.current = false;
     }
 
+    // ==========================================================
+    // 2. DETACH & CANCEL ANY RUNNING LECTURE UTTERANCES / AUDIO
+    // ==========================================================
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+    if (utteranceRef.current) {
+      utteranceRef.current.onstart = null;
+      utteranceRef.current.onend = null;
+      utteranceRef.current.onerror = null;
+      utteranceRef.current.onboundary = null;
+      utteranceRef.current = null;
+    }
+    window._activeSpeechUtterance = null;
+
     try {
       if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.onended = null;
+        window._skillbridgeCurrentAudio.onerror = null;
         window._skillbridgeCurrentAudio.pause();
         window._skillbridgeCurrentAudio.currentTime = 0;
         window._skillbridgeCurrentAudio = null;
       }
       window.speechSynthesis.cancel();
-      window.speechSynthesis.resume();
+      window.speechSynthesis.resume?.();
     } catch (e) { }
 
+    setIsAriaSpeaking(false);
+    isAriaSpeakingRef.current = false;
+    isAnsweringRef.current = false;
+
     // ==========================================================
-    // ENTER GREETING & SPEAK "Yes, I'm listening."
+    // 3. ENTER GREETING & SPEAK "Yes, I'm listening."
     // ==========================================================
 
     voiceManagerRef.current?.setState(
@@ -1108,25 +1154,29 @@ const CoursePlayer = ({
       `👋 ${aiTutorName}: "${ack}"`
     );
 
-
-    speakAriaAnswer(
-      ack,
-      () => {
-        console.log(
-          '[VOICE] Wake acknowledgement finished. Listening for question.'
-        );
-        const vm = voiceManagerRef.current;
-        if (vm) {
-          vm.ttsMutedUntil = 0;
-          vm.setState(TutorState.ACTIVE_LISTENING);
-          vm.resetFollowUpTimeout();
-          try {
-            vm.restartSpeechRecognition?.(true);
-          } catch (e) { }
+    // Defer speakAriaAnswer by 80ms to let React flush setPlaying(false)
+    // and ensure the browser synthesis engine has finished cancellation
+    setTimeout(() => {
+      if (!isMountedRef.current) return;
+      speakAriaAnswer(
+        ack,
+        () => {
+          console.log(
+            '[VOICE] Wake acknowledgement finished. Listening for question.'
+          );
+          const vm = voiceManagerRef.current;
+          if (vm) {
+            vm.ttsMutedUntil = 0;
+            vm.setState(TutorState.ACTIVE_LISTENING);
+            vm.resetFollowUpTimeout();
+            try {
+              vm.restartSpeechRecognition?.(true);
+            } catch (e) { }
+          }
+          setVoiceStatusText(`👂 Listening for your question…`);
         }
-        setVoiceStatusText(`👂 Listening for your question…`);
-      }
-    );
+      );
+    }, 80);
   };
 
   const handleAvatarCall = () => {
@@ -1141,6 +1191,7 @@ const CoursePlayer = ({
     // Ensure handsFreeVoice is active
     if (!handsFreeVoice) {
       setHandsFreeVoice(true);
+      handsFreeVoiceRef.current = true;
     }
 
     interruptLectureAndWake();
@@ -1177,7 +1228,7 @@ const CoursePlayer = ({
   }
 
   const handleVoiceQuestion = async (userSpeech) => {
-    if (!isMountedRef.current || !userSpeech || isAnsweringRef.current || isAriaSpeakingRef.current) return
+    if (!isMountedRef.current || !userSpeech || isAnsweringRef.current) return
     const rawSpeech = userSpeech.trim()
     if (rawSpeech.length < 3 || isNoiseOrHallucination(rawSpeech)) {
       return
@@ -1435,25 +1486,27 @@ const CoursePlayer = ({
             return
           }
 
+          if (containsWakeWord(transcription, aiWakeWord, aiTutorName)) {
+            console.log(`[VOICE:WAKE_MATCH] Whisper wake word detected: "${transcription}". Interrupting course lecture...`)
+            interruptLectureAndWake()
+            const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
+            const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
+            if (
+              cleanQuestion &&
+              wordCount >= 3 &&
+              !isDanglingFragment(cleanQuestion) &&
+              !isNoiseOrHallucination(cleanQuestion) &&
+              !isLectureEcho(cleanQuestion)
+            ) {
+              setTimeout(() => handleVoiceQuestion(cleanQuestion), 1600)
+            }
+            return
+          }
+
           if (playingRef.current || isAriaSpeakingRef.current || isLectureEcho(transcription)) {
-            if (containsWakeWord(transcription, aiWakeWord, aiTutorName) && playingRef.current) {
-              interruptLectureAndWake()
-              const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
-              const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
-              if (
-                cleanQuestion &&
-                wordCount >= 3 &&
-                !isDanglingFragment(cleanQuestion) &&
-                !isNoiseOrHallucination(cleanQuestion) &&
-                !isLectureEcho(cleanQuestion)
-              ) {
-                setTimeout(() => handleVoiceQuestion(cleanQuestion), 1600)
-              }
-            } else {
-              console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/TTS capture: "${transcription.slice(0, 80)}"`)
-              if (manager.state === TutorState.PROCESSING) {
-                manager.returnToSleep()
-              }
+            console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/TTS capture: "${transcription.slice(0, 80)}"`)
+            if (manager.state === TutorState.PROCESSING) {
+              manager.returnToSleep()
             }
             return
           }
@@ -1715,6 +1768,9 @@ const CoursePlayer = ({
           }
           lessonExplanationClientCache.set(cacheKey, script);
           setExplanation(script);
+          if (res.page_or_slide_number && res.page_or_slide_number !== currentPageNum) {
+            setCurrentPageNum(res.page_or_slide_number);
+          }
           setTutorGuidance({
             keyPoints: res.key_points || [],
             safetyWarnings: res.safety_warnings || [],
@@ -1726,7 +1782,7 @@ const CoursePlayer = ({
         })
         .catch(err => {
           console.error('Failed to load dynamic lesson explanation:', err);
-          const fallbackText = 'Frontend: Client-side logic (React, HTML/CSS, JavaScript)\nBackend: Server-side logic (Node.js, Express, API routes)\nDatabase: Storing data (SQL vs NoSQL, schema design)';
+          const fallbackText = activeLesson?.explanation || activeLesson?.spoken_explanation || `In this lesson, we study ${activeLesson?.title || 'the curriculum'}. Please review the slide displayed on your screen to understand the mandatory operational requirements and safety guidelines.`;
           setExplanation(fallbackText);
           setLessonVisuals(activeLesson.visuals || []);
           setLoadingExplanation(false);
@@ -1738,27 +1794,28 @@ const CoursePlayer = ({
   // Complete Unicode regex matching all emojis
   const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F000}-\u{1F02F}]|[\u{1F0A0}-\u{1F0FF}]|[\u{1F100}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{1FA70}-\u{1FAFF}]|[\u{2300}-\u{23FF}]|[\u{2B50}]|[\u{FE00}-\u{FE0F}]/gu
 
-  // Helper to clean raw text for Speech TTS (removes hashtags, references, markdown symbols, and emojis that TTS speaks out loud)
+  // Helper to clean raw text for Speech TTS (removes hashtags, references, markdown symbols, placeholders, and emojis)
   const cleanForSpeech = (text) => {
     if (!text) return ''
-    return cleanSpeechUtil(text)
+    return stripSlidePlaceholders(cleanSpeechUtil(text))
   }
 
-  // Helper to clean raw text for Chalkboard Display (removes emojis, references, #, ###, markdown symbols, prompt leakage)
+  // Helper to clean raw text for Chalkboard Display (removes emojis, references, #, ###, markdown symbols, placeholders, prompt leakage)
   const cleanForBoard = (text) => {
     if (!text) return ''
-    return cleanUnsupportedWords(text)
+    return stripSlidePlaceholders(cleanUnsupportedWords(text))
   }
 
   const sentences = useMemo(() => {
     if (!explanation) return ['Welcome to this lecture. We will explore key concepts step by step.']
-    const lines = explanation
-      .split(/(?<=[.!?])\s+|\n+/)
-      .map(s => cleanForBoard(s))
-      .filter(s => s.length > 3)
+    const cleanExp = stripSlidePlaceholders(cleanUnsupportedWords(explanation))
+    const teacherSentences = buildTeacherLectureSentences(cleanExp, activeLesson?.title || '', course?.title || '')
+    const lines = teacherSentences
+      .map(s => cleanForSpeech(s))
+      .filter(s => s && s.length > 5 && !isNoiseOrHallucination(s))
 
-    return lines.length > 0 ? lines : ['Welcome to this lecture.']
-  }, [explanation])
+    return lines.length > 0 ? lines : ['Welcome to this lecture. Please review the material displayed on screen.']
+  }, [explanation, activeLesson?.title, course?.title])
 
   // Intelligently determine which visual to display for the active spoken sentence/concept
   const activeVisual = useMemo(() => {
@@ -2139,7 +2196,7 @@ const CoursePlayer = ({
 
   const handleTakeChapterAssessmentRef = useRef(null);
 
-  // Speech TTS handler with clean speech text
+  // Speech TTS handler with clean speech text and natural Google Voice human cadence
   useEffect(() => {
     if (playing && !muted && !loadingExplanation && sentences.length > 0) {
       let isCancelled = false;
@@ -2150,6 +2207,7 @@ const CoursePlayer = ({
           setPlaying(false);
           currentSentenceIdxRef.current = 0;
           setCurrentSentenceIdx(0);
+          setActiveSpokenWord('');
           if (activeLesson?.id) {
             markLessonCompleted(activeLesson.id);
           }
@@ -2186,112 +2244,149 @@ const CoursePlayer = ({
 
         const spokenText = cleanForSpeech(sentences[idx]);
         if (!spokenText) {
-          if (idx + 1 < sentences.length) {
-            currentSentenceIdxRef.current = idx + 1;
-            setCurrentSentenceIdx(idx + 1);
-            speak(idx + 1);
-          } else {
-            speak(sentences.length);
-          }
+          const nextIdx = idx + 1;
+          currentSentenceIdxRef.current = nextIdx;
+          setCurrentSentenceIdx(nextIdx);
+          speak(nextIdx);
           return;
         }
 
         try {
           const ttsStartTime = performance.now();
-          console.log(`[PERF:TTS_START] Concept ${idx + 1}/${sentences.length}: "${spokenText.slice(0, 40)}..."`);
+          console.log(`[PERF:TTS_START] Teacher Statement ${idx + 1}/${sentences.length}: "${spokenText.slice(0, 45)}..."`);
 
-          window.speechSynthesis.cancel();
-          window.speechSynthesis.resume();
-
-          // Check if utterance is already pre-warmed in cache pool
-          const poolKey = `${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx}`;
-          let utterance = ttsUtterancePool.get(poolKey);
-          if (!utterance) {
-            utterance = new SpeechSynthesisUtterance(spokenText);
-            const voices = window.speechSynthesis.getVoices();
-            const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
-            if (matchedVoice) {
-              utterance.voice = matchedVoice;
-              utterance.lang = matchedVoice.lang;
-            } else {
-              utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
-            }
-            utterance.rate = aiVoiceConfig?.rate || 0.95;
-            utterance.pitch = aiVoiceConfig?.pitch || 1.0;
-          }
-          utteranceRef.current = utterance; // Prevent GC cancellation bug
-
-          utterance.onstart = () => {
+          // Helper to cleanly advance to the next sentence with teacher pacing
+          const handleSentenceAdvance = () => {
             if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-            voiceManagerRef.current?.noteSpokenText?.(spokenText);
-            voiceManagerRef.current?.setTutorSpeaking?.(true, spokenText);
-            const ttsDuration = Math.round(performance.now() - ttsStartTime);
-            console.log(`[PERF:TTS_END] TTS audio synthesis started in ${ttsDuration}ms`);
-            const startupLatency = lessonOpenTimestampRef.current ? Math.round(performance.now() - lessonOpenTimestampRef.current) : 0;
-            console.log(`[PERF:PLAYBACK_START] Playback active (Concept ${idx + 1}/${sentences.length}, Total Startup Latency: ${startupLatency}ms)`);
-            setIsAriaSpeaking(true);
-            isAriaSpeakingRef.current = true;
-            setPipelineState('PLAYING');
-
-            // Background pre-warming of next concept without blocking current playback
-            if (idx + 1 < sentences.length) {
-              const nextSpoken = cleanForSpeech(sentences[idx + 1]);
-              if (nextSpoken) {
-                const nextUtterance = new SpeechSynthesisUtterance(nextSpoken);
-                const voices = window.speechSynthesis.getVoices();
-                const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
-                if (matchedVoice) {
-                  nextUtterance.voice = matchedVoice;
-                  nextUtterance.lang = matchedVoice.lang;
-                } else {
-                  nextUtterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
-                }
-                nextUtterance.rate = aiVoiceConfig?.rate || 0.95;
-                nextUtterance.pitch = aiVoiceConfig?.pitch || 1.0;
-                ttsUtterancePool.set(`${course?.id}_${activeLesson?.id}_${selectedLanguageCode}_${idx + 1}`, nextUtterance);
-              }
+            if (watchdogRef.current) {
+              clearTimeout(watchdogRef.current);
+              watchdogRef.current = null;
             }
-          };
-
-          utterance.onend = () => {
-            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
             if (utteranceRef.current) {
               utteranceRef.current.onstart = null;
               utteranceRef.current.onend = null;
               utteranceRef.current.onerror = null;
+              utteranceRef.current.onboundary = null;
+              utteranceRef.current = null;
             }
-            voiceManagerRef.current?.setTutorSpeaking?.(false, spokenText);
+            window._activeSpeechUtterance = null;
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
+            setActiveSpokenWord('');
             lastAriaSpokenTimeRef.current = Date.now();
+
             const nextIdx = idx + 1;
             currentSentenceIdxRef.current = nextIdx;
             setCurrentSentenceIdx(nextIdx);
-            speak(nextIdx);
+
+            // Natural Teacher Breathing Cadence: calm pause between points
+            let pauseDurationMs = 600; // Calm natural breath between sentences
+            if (/[?？]\s*$/.test(spokenText)) {
+              pauseDurationMs = 1250; // Deep pause for reflection questions
+            } else if (/[!！]\s*$/.test(spokenText) || /warning|hazard|caution|danger|safety|emergency|ppe|mandatory/i.test(spokenText)) {
+              pauseDurationMs = 950; // Pause for emphasis on critical safety points
+            } else if (/[:;—]\s*$/.test(spokenText)) {
+              pauseDurationMs = 450;
+            }
+
+            if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+            speechTimeoutRef.current = setTimeout(() => {
+              if (!isCancelled && playingRef.current && isMountedRef.current) {
+                speak(nextIdx);
+              }
+            }, pauseDurationMs);
+          };
+
+          // Always instantiate a fresh SpeechSynthesisUtterance (never reuse old instances)
+          const utterance = new SpeechSynthesisUtterance(spokenText);
+          const voices = window.speechSynthesis.getVoices();
+          const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
+          if (matchedVoice) {
+            utterance.voice = matchedVoice;
+            utterance.lang = matchedVoice.lang;
+          } else {
+            utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
+          }
+
+          // Calm, measured, comfortable teacher pace (0.88 - 0.90) so it doesn't sound like a rushed book reader
+          let sentenceRate = aiVoiceConfig?.rate ? Math.min(aiVoiceConfig.rate, 0.90) : 0.89;
+          let sentencePitch = aiVoiceConfig?.pitch || 1.0;
+          if (/[?？]\s*$/.test(spokenText)) {
+            // Conversational upward intonation on questions
+            sentencePitch = Math.min(1.15, sentencePitch * 1.04);
+          } else if (/warning|hazard|caution|danger|safety|emergency|ppe|mandatory/i.test(spokenText)) {
+            // Measured gravity for critical rules
+            sentenceRate = Math.max(0.82, sentenceRate * 0.95);
+          }
+          utterance.rate = sentenceRate;
+          utterance.pitch = sentencePitch;
+
+          // Prevent Chrome V8 garbage collection mid-speech bug
+          utteranceRef.current = utterance;
+          window._activeSpeechUtterance = utterance;
+
+          utterance.onstart = () => {
+            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
+            voiceManagerRef.current?.noteSpokenText?.(spokenText);
+            const ttsDuration = Math.round(performance.now() - ttsStartTime);
+            console.log(`[PERF:TTS_END] Teacher voice active in ${ttsDuration}ms`);
+            setIsAriaSpeaking(true);
+            isAriaSpeakingRef.current = true;
+            setPipelineState('PLAYING');
+
+            // Watchdog timer to automatically recover if browser speech engine stalls
+            const watchdogMs = Math.max(7500, Math.min(25000, spokenText.length * 110 + 3500));
+            if (watchdogRef.current) clearTimeout(watchdogRef.current);
+            watchdogRef.current = setTimeout(() => {
+              if (isCancelled || !playingRef.current || !isMountedRef.current) return;
+              console.warn(`[TTS:WATCHDOG] Statement ${idx + 1} timed out in browser engine. Recovering cleanly...`);
+              try { window.speechSynthesis.resume?.(); } catch (e) {}
+              setTimeout(() => {
+                if (isCancelled || !playingRef.current || !isMountedRef.current) return;
+                if (isAriaSpeakingRef.current) {
+                  handleSentenceAdvance();
+                }
+              }, 1000);
+            }, watchdogMs);
+          };
+
+          // REAL-TIME VISEME LIP-SYNC WORD BOUNDARY
+          utterance.onboundary = (event) => {
+            if (isCancelled || !isMountedRef.current || !playingRef.current) return;
+            if (event.name === 'word') {
+              const word = spokenText.substring(event.charIndex, event.charIndex + (event.charLength || 6)).trim();
+              setActiveSpokenWord(word);
+              setActiveCharIndex(event.charIndex);
+            }
+          };
+
+          utterance.onend = () => {
+            handleSentenceAdvance();
           };
 
           utterance.onerror = (e) => {
             if (e?.error === 'canceled' || e?.error === 'interrupted') return;
             console.warn('Speech synthesis error:', e);
-            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-            if (utteranceRef.current) {
-              utteranceRef.current.onstart = null;
-              utteranceRef.current.onend = null;
-              utteranceRef.current.onerror = null;
-            }
-            voiceManagerRef.current?.setTutorSpeaking?.(false, spokenText);
-            setIsAriaSpeaking(false);
-            isAriaSpeakingRef.current = false;
-            setTimeout(() => {
-              if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-              const nextIdx = idx + 1;
-              currentSentenceIdxRef.current = nextIdx;
-              setCurrentSentenceIdx(nextIdx);
-              speak(nextIdx);
-            }, 300);
+            handleSentenceAdvance();
           };
 
-          window.speechSynthesis.speak(utterance);
+          // Clear any colliding audio before speaking
+          if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+            window.speechSynthesis.cancel();
+          }
+
+          // Short micro-delay ensures browser audio queue is ready
+          setTimeout(() => {
+            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
+            try {
+              window.speechSynthesis.speak(utterance);
+              window.speechSynthesis.resume?.();
+            } catch (err) {
+              console.error('Speech speak failed:', err);
+              handleSentenceAdvance();
+            }
+          }, 40);
+
         } catch (e) {
           console.warn('Speech synthesis failed:', e);
         }
@@ -2302,33 +2397,61 @@ const CoursePlayer = ({
         if (playingRef.current && isAriaSpeakingRef.current && isMountedRef.current) {
           try { window.speechSynthesis.resume?.(); } catch (e) { }
         }
-      }, 2000);
+      }, 1500);
 
       speak(currentSentenceIdxRef.current || 0);
 
       return () => {
         isCancelled = true;
         clearInterval(resumeInterval);
+        if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+        if (watchdogRef.current) clearTimeout(watchdogRef.current);
         if (utteranceRef.current) {
           utteranceRef.current.onstart = null;
           utteranceRef.current.onend = null;
           utteranceRef.current.onerror = null;
+          utteranceRef.current.onboundary = null;
+          utteranceRef.current = null;
         }
-        voiceManagerRef.current?.setTutorSpeaking?.(false);
-        setIsAriaSpeaking(false);
-        isAriaSpeakingRef.current = false;
-        try { window.speechSynthesis.cancel(); } catch (e) { }
+        window._activeSpeechUtterance = null;
+        const isTutorGreetingOrSpeaking = Boolean(
+          voiceManagerRef.current?.state === TutorState.ARIA_GREETING ||
+          voiceManagerRef.current?.state === TutorState.ARIA_SPEAKING ||
+          voiceManagerRef.current?.state === TutorState.PROCESSING ||
+          isAnsweringRef.current
+        );
+        if (!isTutorGreetingOrSpeaking) {
+          setIsAriaSpeaking(false);
+          isAriaSpeakingRef.current = false;
+          try { window.speechSynthesis.cancel(); } catch (e) { }
+        }
+        setActiveSpokenWord('');
       };
     } else {
+      if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+      if (watchdogRef.current) clearTimeout(watchdogRef.current);
       if (utteranceRef.current) {
         utteranceRef.current.onstart = null;
         utteranceRef.current.onend = null;
         utteranceRef.current.onerror = null;
+        utteranceRef.current.onboundary = null;
+        utteranceRef.current = null;
       }
-      voiceManagerRef.current?.setTutorSpeaking?.(false);
-      try { window.speechSynthesis.cancel(); } catch (e) { }
+      window._activeSpeechUtterance = null;
+      const isTutorGreetingOrSpeaking = Boolean(
+        voiceManagerRef.current?.state === TutorState.ARIA_GREETING ||
+        voiceManagerRef.current?.state === TutorState.ARIA_SPEAKING ||
+        voiceManagerRef.current?.state === TutorState.PROCESSING ||
+        isAnsweringRef.current
+      );
+      if (!isTutorGreetingOrSpeaking) {
+        setIsAriaSpeaking(false);
+        isAriaSpeakingRef.current = false;
+        try { window.speechSynthesis.cancel(); } catch (e) { }
+      }
+      setActiveSpokenWord('');
     }
-  }, [playing, muted, sentences, loadingExplanation, activeLesson?.id, selectedLanguageCode]);
+  }, [playing, muted, sentences, loadingExplanation, activeLesson?.id, selectedLanguageCode, preferredVoiceLangCode, aiVoiceConfig]);
 
   useEffect(() => {
     activeLessonRef.current = activeLesson
@@ -2962,7 +3085,7 @@ const CoursePlayer = ({
                   <p className="text-xs sm:text-sm text-white font-medium leading-relaxed italic truncate">
                     {loadingExplanation
                       ? `${aiTutorName}: "Preparing lesson explanation..."`
-                      : (playing ? `${aiTutorName}: "${cleanForBoard(sentences[currentSentenceIdx])}"` : 'Lecture paused.')}
+                      : (playing ? `${aiTutorName}: "${cleanForBoard(sentences[currentSentenceIdx]) || `Focusing on ${cleanForBoard(activeLesson?.title || 'the current topic')}`}"` : 'Lecture paused.')}
                   </p>
                 </div>
               )}

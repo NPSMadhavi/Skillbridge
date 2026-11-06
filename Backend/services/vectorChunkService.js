@@ -5,7 +5,7 @@
  */
 import aiService from './aiService.js';
 import { detectDominantScript } from '../utils/language.js';
-import { isGarbageTitle } from '../utils/contentQuality.js';
+import { isGarbageTitle, stripSlidePlaceholders, cleanUnsupportedWords, isBinaryNoiseText } from '../utils/contentQuality.js';
 
 export class VectorChunkService {
   constructor() {
@@ -281,7 +281,7 @@ export class VectorChunkService {
             const topic = targetChunk.topic || lesson.chapterTitle || courseRecord.title;
             const slides = targetChunk.sourceSlides || lesson.sourceSlides;
 
-            let cleanText = (targetChunk.chunkText || '')
+            let cleanText = stripSlidePlaceholders(targetChunk.chunkText || '')
               .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
               .replace(/Slide\s*\d+:?\s*---*/gi, '')
               .replace(/Slide\s*\d+:\s*/gi, '')
@@ -292,13 +292,15 @@ export class VectorChunkService {
               .trim();
 
             // Rejoin fragmented lines into complete sentences
-            const rawLines = cleanText.split('\n').map(l => l.trim()).filter(Boolean);
+            const rawLines = cleanText.split('\n')
+              .map(l => stripSlidePlaceholders(l.trim()))
+              .filter(l => l && !isBinaryNoiseText(l));
             const cleanBlocks = [];
             let buffer = '';
             for (const line of rawLines) {
               const isBullet = /^[-*•➔\d\.]+\s+/.test(line);
-              const cleanLine = line.replace(/^[-*•➔\d\.]+\s+/, '').trim();
-              if (!cleanLine) continue;
+              const cleanLine = stripSlidePlaceholders(line.replace(/^[-*•➔\d\.]+\s+/, '').trim());
+              if (!cleanLine || isBinaryNoiseText(cleanLine)) continue;
               if (isBullet) {
                 if (buffer) { cleanBlocks.push(buffer); buffer = ''; }
                 buffer = cleanLine;
@@ -309,19 +311,19 @@ export class VectorChunkService {
                 buffer = cleanLine;
               }
             }
-            if (buffer) cleanBlocks.push(buffer);
-            const cleanContentText = cleanBlocks.join('\n\n');
+            if (buffer && !isBinaryNoiseText(buffer)) cleanBlocks.push(buffer);
+            const cleanContentText = cleanUnsupportedWords(cleanBlocks.join('\n\n'));
 
             let keyPoints = targetChunk.keyPoints || [];
             if (typeof keyPoints === 'string') {
               try { keyPoints = JSON.parse(keyPoints); } catch (e) { keyPoints = []; }
             }
             keyPoints = (keyPoints || [])
-              .map(kp => String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())
-              .filter(kp => kp.length > 5);
+              .map(kp => cleanUnsupportedWords(stripSlidePlaceholders(String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())))
+              .filter(kp => kp.length > 5 && !isBinaryNoiseText(kp));
 
             const sections = [];
-            let summary = (targetChunk.semanticSummary || `In this module, we focus on the core principles, operational requirements, and safety protocols for ${concept}.`)
+            let summary = cleanUnsupportedWords(stripSlidePlaceholders(targetChunk.semanticSummary || `In this module, we focus on the core principles, operational requirements, and safety protocols for ${concept}.`))
               .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
               .replace(/Slide\s*\d+:\s*/gi, '')
               .replace(/\s+/g, ' ')
