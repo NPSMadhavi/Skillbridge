@@ -177,12 +177,6 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, generatedCourse);
       console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
 
-      // If created in a company tenant, also mirror into defaultPrisma so all companies have it
-      if (req.tenantCode && req.tenantCode !== 'default') {
-        try {
-          await tenantService.syncDefaultCoursesToTenant(req.tenantCode);
-        } catch (_) {}
-      }
     } catch (vectorErr) {
       console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
     }
@@ -195,7 +189,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         WHERE id = ${newCourse.id};
       `;
     } catch (_) {}
-    invalidateCoursesCatalogCache();
+    invalidateCoursesCatalogCache(req.tenantCode);
 
     res.status(201).json({
       message: 'Course published successfully.',
@@ -426,7 +420,7 @@ router.post('/manual', authenticateToken, requireRole(['ADMIN']), async (req, re
         WHERE id = ${newCourse.id};
       `;
     } catch (_) {}
-    invalidateCoursesCatalogCache();
+    invalidateCoursesCatalogCache(req.tenantCode);
 
     res.status(201).json({
       message: 'Course created successfully.',
@@ -519,14 +513,16 @@ export function generateModulesSummary(curriculum) {
   };
 }
 
-// In-memory catalog cache for sub-millisecond responses
-let catalogCache = null;
-let catalogCacheTime = 0;
+// In-memory catalog cache keyed by tenantCode to ensure strict tenant isolation
+const catalogCacheByTenant = new Map();
 const CATALOG_CACHE_TTL = 30 * 1000; // 30 seconds TTL
 
-export function invalidateCoursesCatalogCache() {
-  catalogCache = null;
-  catalogCacheTime = 0;
+export function invalidateCoursesCatalogCache(tenantCode) {
+  if (tenantCode) {
+    catalogCacheByTenant.delete(tenantCode);
+  } else {
+    catalogCacheByTenant.clear();
+  }
 }
 
 // Helper to format lightweight course object for catalog/listing without massive base64 payloads
@@ -631,17 +627,13 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const targetPrisma = req.prisma || prisma;
 
-    // Ensure shared courses from default catalog are synchronized in background without blocking
-    if (req.tenantCode && req.tenantCode !== 'default') {
-      tenantService.syncDefaultCoursesToTenant(req.tenantCode).catch((syncErr) => {
-        console.warn(`[Courses] Auto-sync to tenant notice:`, syncErr.message);
-      });
-    }
+    const tenantKey = req.tenantCode || 'default';
 
     if (req.user?.role === 'ADMIN') {
       const now = Date.now();
-      if (catalogCache && (now - catalogCacheTime) < CATALOG_CACHE_TTL) {
-        return res.json(catalogCache);
+      const cached = catalogCacheByTenant.get(tenantKey);
+      if (cached && (now - cached.time) < CATALOG_CACHE_TTL) {
+        return res.json(cached.data);
       }
 
       const courses = await targetPrisma.$queryRaw`
@@ -662,8 +654,7 @@ router.get('/', authenticateToken, async (req, res) => {
         ORDER BY c."createdAt" DESC;
       `;
       const formatted = courses.map(formatCourseForCatalog);
-      catalogCache = formatted;
-      catalogCacheTime = now;
+      catalogCacheByTenant.set(tenantKey, { data: formatted, time: now });
       return res.json(formatted);
     }
 
@@ -746,13 +737,9 @@ router.get('/', authenticateToken, async (req, res) => {
 // 3. Get specific course details (verifying assignment for students)
 router.get('/:id', authenticateToken, async (req, res) => {
   try {
-    if (req.tenantCode && req.tenantCode !== 'default') {
-      tenantService.syncDefaultCoursesToTenant(req.tenantCode).catch(() => {});
-    }
-
     const targetPrisma = req.prisma || prisma;
 
-    let course = await targetPrisma.course.findUnique({
+    const course = await targetPrisma.course.findUnique({
       where: { id: req.params.id },
       include: {
         chunks: {
@@ -779,36 +766,6 @@ router.get('/:id', authenticateToken, async (req, res) => {
         },
       },
     });
-
-    if (!course && defaultPrisma && defaultPrisma !== targetPrisma) {
-      course = await defaultPrisma.course.findUnique({
-        where: { id: req.params.id },
-        include: {
-          chunks: {
-            orderBy: { chunkIndex: 'asc' },
-            select: {
-              id: true,
-              chunkIndex: true,
-              chunkText: true,
-              topic: true,
-              subtopic: true,
-              concept: true,
-              chunkType: true,
-              sourcePage: true,
-              sourceSlides: true,
-              sourceSection: true,
-              keyPoints: true,
-              relatedConcepts: true,
-              semanticSummary: true,
-              metadata: true
-            }
-          },
-          _count: {
-            select: { assignments: true },
-          },
-        },
-      });
-    }
 
     if (!course) {
       return res.status(404).json({ error: 'Course not found.' });
@@ -1779,15 +1736,9 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
     const { title, description, curriculum } = req.body;
     const targetPrisma = req.prisma || prisma;
 
-    let existingCourse = await targetPrisma.course.findUnique({
+    const existingCourse = await targetPrisma.course.findUnique({
       where: { id: courseId }
     });
-
-    if (!existingCourse && defaultPrisma && defaultPrisma !== targetPrisma) {
-      existingCourse = await defaultPrisma.course.findUnique({
-        where: { id: courseId }
-      });
-    }
 
     if (!existingCourse) {
       return res.status(404).json({ error: 'Course not found.' });
@@ -1885,7 +1836,7 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
         WHERE id = ${courseId};
       `;
     } catch (_) {}
-    invalidateCoursesCatalogCache();
+    invalidateCoursesCatalogCache(req.tenantCode);
 
     res.json({
       message: 'Course updated successfully.',
@@ -1935,34 +1886,10 @@ router.delete('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res
       }
     };
 
-    // 1. Purge from active tenant or default database
+    // 1. Purge from active tenant database only (strict tenant isolation)
     await purgeCourse(targetPrisma);
 
-    // 2. Also purge from default database if targetPrisma was tenant-specific
-    if (defaultPrisma && defaultPrisma !== targetPrisma) {
-      await purgeCourse(defaultPrisma);
-    }
-
-    // 3. Purge across any other tenant company databases where course might be mirrored
-    try {
-      if (masterPrisma) {
-        const companies = await masterPrisma.company.findMany({ select: { code: true } });
-        for (const comp of companies) {
-          if (comp.code && comp.code !== req.tenantCode) {
-            try {
-              const compClient = await tenantService.getTenantClient(comp.code);
-              if (compClient) {
-                await purgeCourse(compClient);
-              }
-            } catch (_) {}
-          }
-        }
-      }
-    } catch (mErr) {
-      console.warn('[Courses] Multi-company purge notice:', mErr.message);
-    }
-
-    // 4. Remove uploaded original document files from disk
+    // 2. Remove uploaded original document files from disk
     try {
       const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
       if (fs.existsSync(courseUploadDir)) {
@@ -1973,7 +1900,7 @@ router.delete('/:id', authenticateToken, requireRole(['ADMIN']), async (req, res
       console.warn('[Courses] Notice removing course files:', fsErr.message);
     }
 
-    invalidateCoursesCatalogCache();
+    invalidateCoursesCatalogCache(req.tenantCode);
 
     res.json({ message: 'Course module deleted successfully.' });
   } catch (error) {
