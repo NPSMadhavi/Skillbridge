@@ -20,15 +20,79 @@ const tenantClients = new Map();
 const tenantSyncTimestamps = new Map();
 
 /**
- * Extract base connection URL from DATABASE_URL or DB_BASE_URL
+ * Helper to safely mask credentials in database URLs for logging
+ */
+function maskDbUrl(url) {
+  if (!url) return '';
+  try {
+    const parsed = new URL(url);
+    if (parsed.password) {
+      parsed.password = '****';
+    }
+    return parsed.toString();
+  } catch (_) {
+    return url.replace(/:[^:@]*@/, ':****@');
+  }
+}
+
+/**
+ * Extract database configurations:
+ * 1. MASTER_DATABASE_URL exclusively for provisioning connection (rootUrl)
+ * 2. DB_BASE_URL to construct new tenant database connection URLs
+ * 3. DATABASE_URL for normal application database connection
  */
 function getDbBaseConfig() {
-  const dbUrl = (process.env.DATABASE_URL || (() => { throw new Error('[TenantService] Error: DATABASE_URL must be defined in environment.'); })());
-  // Parse postgresql://user:pass@host:port/dbname...
-  const urlObj = new URL(dbUrl);
-  const baseUrl = `${urlObj.protocol}//${urlObj.username ? `${urlObj.username}:${urlObj.password}@` : ''}${urlObj.host}`;
-  const rootUrl = `${baseUrl}/postgres`;
-  return { baseUrl, rootUrl, defaultDbName: urlObj.pathname.replace(/^\//, '').split('?')[0] || 'skillbridge' };
+  // 1. Provisioning URL: exclusively MASTER_DATABASE_URL (with fallback to DATABASE_URL)
+  const masterDbUrl = process.env.MASTER_DATABASE_URL || process.env.DATABASE_URL;
+  if (!masterDbUrl) {
+    throw new Error('[TenantService] Error: MASTER_DATABASE_URL (or DATABASE_URL) must be defined in environment for database provisioning.');
+  }
+
+  const masterUrlObj = new URL(masterDbUrl);
+  const masterBaseUrl = `${masterUrlObj.protocol}//${masterUrlObj.username ? `${masterUrlObj.username}:${masterUrlObj.password}@` : ''}${masterUrlObj.host}`;
+  const rootUrl = `${masterBaseUrl}/postgres`;
+  const provisioningUser = masterUrlObj.username || 'postgres';
+
+  // 2. Base URL for constructing new tenant database connections (from DB_BASE_URL)
+  let baseUrl;
+  let tenantOwner = 'skillbridgenormal';
+
+  if (process.env.DB_BASE_URL) {
+    baseUrl = process.env.DB_BASE_URL.trim().replace(/\/+$/, '');
+    try {
+      const baseObj = new URL(baseUrl);
+      if (baseObj.username) {
+        tenantOwner = baseObj.username;
+      }
+    } catch (_) {}
+  } else if (process.env.DATABASE_URL) {
+    const appUrlObj = new URL(process.env.DATABASE_URL);
+    baseUrl = `${appUrlObj.protocol}//${appUrlObj.username ? `${appUrlObj.username}:${appUrlObj.password}@` : ''}${appUrlObj.host}`;
+    if (appUrlObj.username) {
+      tenantOwner = appUrlObj.username;
+    }
+  } else {
+    baseUrl = masterBaseUrl;
+    tenantOwner = provisioningUser;
+  }
+
+  // 3. Application default database name (kept from DATABASE_URL)
+  let defaultDbName = 'skillbridge';
+  if (process.env.DATABASE_URL) {
+    try {
+      const defaultUrlObj = new URL(process.env.DATABASE_URL);
+      defaultDbName = defaultUrlObj.pathname.replace(/^\//, '').split('?')[0] || 'skillbridge';
+    } catch (_) {}
+  }
+
+  return {
+    baseUrl,
+    rootUrl,
+    masterBaseUrl,
+    provisioningUser,
+    tenantOwner,
+    defaultDbName
+  };
 }
 
 export const tenantService = {
@@ -227,17 +291,35 @@ export const tenantService = {
       throw new Error(`Database slug '${finalSlug}' is already in use. Please generate or enter a unique slug.`);
     }
 
-    const { baseUrl, rootUrl } = getDbBaseConfig();
+    const { baseUrl, rootUrl, masterBaseUrl, provisioningUser, tenantOwner } = getDbBaseConfig();
     const dbName = `skillbridge_tenant_${finalSlug}`;
     const tenantDbUrl = `${baseUrl}/${dbName}?schema=public`;
 
-    console.log(`[Multi-Tenant] Starting database creation for company: ${finalCompanyName} (slug: ${finalSlug})...`);
-    console.log(`[Multi-Tenant] Target database: ${dbName}`);
+    console.log(`[Multi-Tenant] Starting database provisioning for company: "${finalCompanyName}" (slug: ${finalSlug})`);
+    console.log(`[Multi-Tenant] Provisioning connection (rootUrl): ${maskDbUrl(rootUrl)}`);
+    console.log(`[Multi-Tenant] Provisioning User (from MASTER_DATABASE_URL): "${provisioningUser}"`);
+    console.log(`[Multi-Tenant] Tenant Database Target URL (from DB_BASE_URL): ${maskDbUrl(tenantDbUrl)}`);
+    console.log(`[Multi-Tenant] Target Database Name: "${dbName}"`);
+    console.log(`[Multi-Tenant] Assigned Database Owner: "${tenantOwner}"`);
 
-    // Step 1: Connect to Postgres root server to create the new database
+    // Step 1: Connect to Postgres root server using MASTER_DATABASE_URL (outside Prisma transactions)
     const rootClient = new Client({ connectionString: rootUrl });
     try {
       await rootClient.connect();
+
+      // Verify and log provisioning user details without exposing passwords
+      try {
+        const userCheck = await rootClient.query(`
+          SELECT
+              current_user,
+              session_user,
+              (SELECT rolcreatedb FROM pg_roles WHERE rolname = current_user) AS can_create_database
+        `);
+        const row = userCheck.rows[0] || {};
+        console.log(`[Multi-Tenant] Active provisioning session: user="${row.current_user}", session_user="${row.session_user}", can_create_database=${row.can_create_database}`);
+      } catch (checkErr) {
+        console.warn("[Multi-Tenant] Notice checking provisioning user permissions:", checkErr.message);
+      }
 
       // Check if DB already exists
       const checkRes = await rootClient.query(
@@ -246,9 +328,55 @@ export const tenantService = {
       );
 
       if (checkRes.rowCount === 0) {
-        console.log(`[Multi-Tenant] Executing: CREATE DATABASE "${dbName}"...`);
-        await rootClient.query(`CREATE DATABASE "${dbName}"`);
-        console.log(`[Multi-Tenant] Database "${dbName}" created successfully.`);
+        // Check if tenantOwner role exists
+        const roleCheck = await rootClient.query(
+          'SELECT rolname FROM pg_roles WHERE rolname = $1',
+          [tenantOwner]
+        );
+        const roleExists = roleCheck.rowCount > 0;
+
+        if (roleExists && tenantOwner !== provisioningUser) {
+          // Grant tenantOwner role to provisioningUser if needed so PostgreSQL permits setting ownership
+          try {
+            await rootClient.query(`GRANT "${tenantOwner}" TO "${provisioningUser}"`);
+          } catch (_) {}
+        }
+
+        let createdWithOwner = false;
+        if (roleExists) {
+          try {
+            console.log(`[Multi-Tenant] Executing: CREATE DATABASE "${dbName}" OWNER "${tenantOwner}"...`);
+            await rootClient.query(`CREATE DATABASE "${dbName}" OWNER "${tenantOwner}"`);
+            createdWithOwner = true;
+            console.log(`[Multi-Tenant] Database "${dbName}" created successfully with OWNER "${tenantOwner}".`);
+          } catch (createOwnerErr) {
+            console.warn(`[Multi-Tenant] Notice: CREATE DATABASE with OWNER failed (${createOwnerErr.message}). Creating standard database and altering owner...`);
+          }
+        }
+
+        if (!createdWithOwner) {
+          console.log(`[Multi-Tenant] Executing: CREATE DATABASE "${dbName}"...`);
+          await rootClient.query(`CREATE DATABASE "${dbName}"`);
+          console.log(`[Multi-Tenant] Database "${dbName}" created successfully.`);
+
+          if (roleExists) {
+            try {
+              await rootClient.query(`ALTER DATABASE "${dbName}" OWNER TO "${tenantOwner}"`);
+              console.log(`[Multi-Tenant] Database "${dbName}" owner set to "${tenantOwner}".`);
+            } catch (alterErr) {
+              console.warn(`[Multi-Tenant] Notice: Could not ALTER DATABASE OWNER to "${tenantOwner}":`, alterErr.message);
+            }
+          }
+        }
+
+        // Ensure tenantOwner role has connect and all privileges on the new database
+        if (roleExists) {
+          try {
+            await rootClient.query(`GRANT ALL PRIVILEGES ON DATABASE "${dbName}" TO "${tenantOwner}"`);
+          } catch (grantErr) {
+            console.warn(`[Multi-Tenant] Notice: GRANT ALL PRIVILEGES TO "${tenantOwner}":`, grantErr.message);
+          }
+        }
       } else {
         console.log(`[Multi-Tenant] Database "${dbName}" already exists on server.`);
       }
@@ -257,12 +385,30 @@ export const tenantService = {
     }
 
     // Step 2: Connect to the newly created database and run the schema DDL
-    const tenantPgClient = new Client({ connectionString: `${baseUrl}/${dbName}` });
+    // Initialize schema using provisioning user (which has privileges for extensions and DDL)
+    const initPgClient = new Client({ connectionString: `${masterBaseUrl}/${dbName}` });
+    let initConnected = false;
     try {
-      await tenantPgClient.connect();
-      console.log(`[Multi-Tenant] Applying schema and pgvector to "${dbName}"...`);
-      await tenantPgClient.query(tenantSchemaSql);
+      await initPgClient.connect();
+      initConnected = true;
+      console.log(`[Multi-Tenant] Applying schema and pgvector to "${dbName}" using provisioning connection...`);
+      await initPgClient.query(tenantSchemaSql);
       console.log(`[Multi-Tenant] Schema successfully applied to "${dbName}".`);
+
+      // Ensure public schema and all newly created tables/sequences are accessible to tenantOwner
+      if (tenantOwner && tenantOwner !== provisioningUser) {
+        try {
+          await initPgClient.query(`
+            GRANT ALL ON SCHEMA public TO "${tenantOwner}";
+            GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "${tenantOwner}";
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "${tenantOwner}";
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO "${tenantOwner}";
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO "${tenantOwner}";
+          `);
+        } catch (grantErr) {
+          console.warn(`[Multi-Tenant] Notice granting schema privileges to "${tenantOwner}":`, grantErr.message);
+        }
+      }
 
       // Step 3: Insert initial Company Admin with profile details in the tenant database
       const passwordHash = await bcrypt.hash(finalPassword, 10);
@@ -278,7 +424,7 @@ export const tenantService = {
           "department" = EXCLUDED."department",
           "mustChangePassword" = EXCLUDED."mustChangePassword";
       `;
-      await tenantPgClient.query(insertAdminQuery, [
+      await initPgClient.query(insertAdminQuery, [
         finalEmail,
         passwordHash,
         finalFullName,
@@ -288,10 +434,36 @@ export const tenantService = {
         mustChangePassword
       ]);
       console.log(`[Multi-Tenant] Initial admin (${finalEmail}) seeded in "${dbName}" (mustChangePassword: ${mustChangePassword}).`);
+    } catch (initErr) {
+      if (!initConnected) {
+        console.warn(`[Multi-Tenant] Provisioning client could not connect directly to new DB (${initErr.message}). Trying tenant connection...`);
+        const fallbackClient = new Client({ connectionString: `${baseUrl}/${dbName}` });
+        try {
+          await fallbackClient.connect();
+          await fallbackClient.query(tenantSchemaSql);
+          const passwordHash = await bcrypt.hash(finalPassword, 10);
+          await fallbackClient.query(`
+            INSERT INTO "Admin" ("id", "email", "passwordHash", "fullName", "nricFin", "phone", "department", "mustChangePassword", "createdAt")
+            VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, NOW())
+            ON CONFLICT ("email") DO UPDATE SET
+              "passwordHash" = EXCLUDED."passwordHash",
+              "fullName" = EXCLUDED."fullName",
+              "nricFin" = EXCLUDED."nricFin",
+              "phone" = EXCLUDED."phone",
+              "department" = EXCLUDED."department",
+              "mustChangePassword" = EXCLUDED."mustChangePassword";
+          `, [finalEmail, passwordHash, finalFullName, finalNricFin, finalPhone, finalDepartment || null, isGeneratedPassword]);
+        } finally {
+          await fallbackClient.end().catch(() => {});
+        }
+      } else {
+        throw initErr;
+      }
     } finally {
-      await tenantPgClient.end().catch(() => {});
+      if (initConnected) {
+        await initPgClient.end().catch(() => {});
+      }
     }
-
 
     // Step 4: Register Company in Master Database
     const company = await masterPrisma.company.create({
@@ -311,20 +483,24 @@ export const tenantService = {
       }
     });
 
+    console.log(`[Multi-Tenant] Company successfully registered in Master DB with ID: ${company.id}`);
 
-    console.log(`[Multi-Tenant] Company registered in Master DB with ID: ${company.id}`);
+    // Step 5: Verify that the tenant Prisma client connects successfully (Requirement 7)
+    console.log(`[Multi-Tenant] Verifying tenant Prisma client connection at: ${maskDbUrl(tenantDbUrl)}...`);
+    const client = new PrismaClient({ datasources: { db: { url: tenantDbUrl } } });
+    await client.$connect();
 
-    // Step 5: Warm up Prisma client for this tenant
+    // Verify query connectivity using tenant client
+    const probe = await client.$queryRaw`SELECT current_user, session_user`;
+    console.log(`[Multi-Tenant] Verified: Tenant Prisma client connected successfully to "${dbName}". Connection probe:`, probe);
+
+    tenantClients.set(finalSlug, client);
+
+    // Step 6: Automatically sync existing course catalog to newly created tenant
     try {
-      const client = new PrismaClient({ datasources: { db: { url: tenantDbUrl } } });
-      await client.$connect();
-      tenantClients.set(finalSlug, client);
-      console.log(`[Multi-Tenant] Tenant Prisma client connected and cached.`);
-
-      // Step 6: Automatically sync existing course catalog to newly created tenant
       await this.syncDefaultCoursesToTenant(finalSlug);
-    } catch (warmErr) {
-      console.warn(`[Multi-Tenant] Prisma warmup warning:`, warmErr.message);
+    } catch (syncErr) {
+      console.warn(`[Multi-Tenant] Course catalog sync notice for tenant '${finalSlug}':`, syncErr.message);
     }
 
     // Step 6: Dispatch login credentials email to the new Company Administrator
@@ -692,7 +868,7 @@ export const tenantService = {
       company.dbName !== 'skillbridge_master' &&
       company.dbName !== 'postgres'
     ) {
-      const { rootUrl } = getDbBaseConfig();
+      const { rootUrl, provisioningUser } = getDbBaseConfig();
       const rootClient = new Client({ connectionString: rootUrl });
       try {
         await rootClient.connect();
@@ -705,7 +881,7 @@ export const tenantService = {
         `, [company.dbName]);
 
         // Drop the tenant database
-        console.log(`[Multi-Tenant] Dropping database "${company.dbName}"...`);
+        console.log(`[Multi-Tenant] Dropping database "${company.dbName}" via provisioning user "${provisioningUser}" (${maskDbUrl(rootUrl)})...`);
         await rootClient.query(`DROP DATABASE IF EXISTS "${company.dbName}"`);
         console.log(`[Multi-Tenant] Database "${company.dbName}" dropped successfully.`);
       } catch (dbErr) {
@@ -730,10 +906,10 @@ export const tenantService = {
    */
   async ensureDefaultCompany() {
     try {
-      const { baseUrl, rootUrl, defaultDbName } = getDbBaseConfig();
+      const { baseUrl, rootUrl, defaultDbName, provisioningUser, tenantOwner } = getDbBaseConfig();
       const defaultDbUrl = (process.env.DATABASE_URL || (() => { throw new Error('[TenantService] Error: DATABASE_URL must be defined in environment.'); })());
 
-      // 1. Ensure the default database exists on PostgreSQL server
+      // 1. Ensure the default database exists on PostgreSQL server using provisioning connection
       const rootClient = new Client({ connectionString: rootUrl });
       try {
         await rootClient.connect();
@@ -742,8 +918,12 @@ export const tenantService = {
           [defaultDbName]
         );
         if (checkRes.rowCount === 0) {
-          console.log(`[Multi-Tenant] Creating default database "${defaultDbName}"...`);
-          await rootClient.query(`CREATE DATABASE "${defaultDbName}"`);
+          console.log(`[Multi-Tenant] Creating default database "${defaultDbName}" via provisioning user "${provisioningUser}"...`);
+          try {
+            await rootClient.query(`CREATE DATABASE "${defaultDbName}" OWNER "${tenantOwner}"`);
+          } catch (_) {
+            await rootClient.query(`CREATE DATABASE "${defaultDbName}"`);
+          }
           console.log(`[Multi-Tenant] Database "${defaultDbName}" created successfully.`);
         }
       } catch (dbCreateErr) {
