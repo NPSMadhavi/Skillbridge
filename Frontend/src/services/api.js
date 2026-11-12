@@ -44,6 +44,17 @@ const getHeaders = (role = false) => {
 
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+      try {
+        const parts = token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1]));
+          if (payload.role === 'SUPER_ADMIN') {
+            tenantId = 'master';
+          } else if (payload.tenantCode && payload.tenantCode !== 'default') {
+            tenantId = payload.tenantCode;
+          }
+        }
+      } catch (_) {}
     }
 
     // Attach tenant header for multi-database routing
@@ -338,6 +349,20 @@ export const api = {
         const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null');
         const adminSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || 'null');
         code = userSession?.tenant?.code || userSession?.user?.tenantCode || userSession?.user?.tenant || userSession?.tenantCode || adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
+        if (!code || code === 'default') {
+          const token = adminSession?.token || userSession?.token;
+          if (token) {
+            try {
+              const parts = token.split('.');
+              if (parts.length === 3) {
+                const payload = JSON.parse(atob(parts[1]));
+                if (payload.tenantCode && payload.tenantCode !== 'default') {
+                  code = payload.tenantCode;
+                }
+              }
+            } catch (_) {}
+          }
+        }
       } catch (_) {
         code = 'default';
       }

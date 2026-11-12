@@ -145,11 +145,17 @@ const Login = ({ onSuccess }) => {
     setLoading(true)
     try {
       const res = await api.studentLogin(email.trim(), password, cleanCode)
-      const userPayload = JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
+      const effectiveTenant = res.tenantCode || res.tenant?.code || res.user?.tenantCode || cleanCode
+      const userPayload = JSON.stringify({
+        user: { ...res.user, tenantCode: effectiveTenant },
+        tenant: res.tenant || { code: effectiveTenant },
+        token: res.token,
+        loggedInAt: Date.now()
+      })
       sessionStorage.setItem('skillbridge_user', userPayload)
       localStorage.setItem('skillbridge_user', userPayload)
-      sessionStorage.setItem('skillbridge_tenant', cleanCode)
-      localStorage.setItem('skillbridge_tenant', cleanCode)
+      sessionStorage.setItem('skillbridge_tenant', effectiveTenant)
+      localStorage.setItem('skillbridge_tenant', effectiveTenant)
       restoreLanguageAfterLogin(res.user)
       onSuccess?.()
     } catch (err) {
@@ -229,7 +235,12 @@ const Login = ({ onSuccess }) => {
       const res = await api.studentFaceLogin(frames, cleanCode)
 
       const effectiveTenant = res.tenantCode || res.tenant?.code || res.user?.tenantCode || cleanCode
-      const userPayload = JSON.stringify({ user: res.user, token: res.token, loggedInAt: Date.now() })
+      const userPayload = JSON.stringify({
+        user: { ...res.user, tenantCode: effectiveTenant },
+        tenant: res.tenant || { code: effectiveTenant },
+        token: res.token,
+        loggedInAt: Date.now()
+      })
       sessionStorage.setItem('skillbridge_user', userPayload)
       localStorage.setItem('skillbridge_user', userPayload)
       sessionStorage.setItem('skillbridge_tenant', effectiveTenant)

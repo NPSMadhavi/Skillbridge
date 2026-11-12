@@ -138,18 +138,18 @@ export default function AdminLogin() {
       const resolvedTenant = data.tenant?.code || data.tenant?.slug || 'default';
       const companyName = data.tenant?.name || null;
 
-      sessionStorage.setItem(
-        'skillbridge_admin',
-        JSON.stringify({
-          email: data.admin?.email || email.trim(),
-          fullName: data.admin?.fullName || 'Admin',
-          token: data.token,
-          tenant: resolvedTenant,
-          slug: resolvedTenant,
-          companyName: companyName,
-          loggedInAt: Date.now(),
-        })
-      );
+      const adminPayload = JSON.stringify({
+        email: data.admin?.email || email.trim(),
+        fullName: data.admin?.fullName || 'Admin',
+        token: data.token,
+        tenant: resolvedTenant,
+        slug: resolvedTenant,
+        companyName: companyName,
+        loggedInAt: Date.now(),
+      });
+
+      sessionStorage.setItem('skillbridge_admin', adminPayload);
+      localStorage.setItem('skillbridge_admin', adminPayload);
       sessionStorage.setItem('skillbridge_tenant', resolvedTenant);
       localStorage.setItem('skillbridge_tenant', resolvedTenant);
 
@@ -271,18 +271,18 @@ export default function AdminLogin() {
       const resolvedTenant = res.tenant?.code || res.tenant?.slug || 'default';
       const companyName = res.tenant?.name || null;
 
-      sessionStorage.setItem(
-        'skillbridge_admin',
-        JSON.stringify({
-          email: res.admin?.email || email.trim(),
-          fullName: res.admin?.fullName || 'Admin',
-          token: res.token,
-          tenant: resolvedTenant,
-          slug: resolvedTenant,
-          companyName: companyName,
-          loggedInAt: Date.now(),
-        })
-      );
+      const adminPayload = JSON.stringify({
+        email: res.admin?.email || email.trim(),
+        fullName: res.admin?.fullName || 'Admin',
+        token: res.token,
+        tenant: resolvedTenant,
+        slug: resolvedTenant,
+        companyName: companyName,
+        loggedInAt: Date.now(),
+      });
+
+      sessionStorage.setItem('skillbridge_admin', adminPayload);
+      localStorage.setItem('skillbridge_admin', adminPayload);
       sessionStorage.setItem('skillbridge_tenant', resolvedTenant);
       localStorage.setItem('skillbridge_tenant', resolvedTenant);
 

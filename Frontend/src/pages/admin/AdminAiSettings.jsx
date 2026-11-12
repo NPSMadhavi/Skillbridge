@@ -299,12 +299,14 @@ export default function AdminAiSettings() {
         text: res.message || 'AI settings updated successfully.',
       });
 
-      const currentSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || '{}');
-      sessionStorage.setItem('skillbridge_admin', JSON.stringify({
+      const currentSession = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || '{}');
+      const updatedSession = JSON.stringify({
         ...currentSession,
         aiName: cleanName,
         wakeWord: cleanWake,
-      }));
+      });
+      sessionStorage.setItem('skillbridge_admin', updatedSession);
+      localStorage.setItem('skillbridge_admin', updatedSession);
     } catch (err) {
       console.error('Save AI settings error:', err);
       setStatusMessage({

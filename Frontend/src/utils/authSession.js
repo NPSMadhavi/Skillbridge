@@ -24,6 +24,15 @@ function parseSession(raw) {
     );
     if (!hasIdentity) return null;
     if (!data.token) return null;
+    try {
+      const parts = data.token.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1]));
+        if (payload.exp && Date.now() >= payload.exp * 1000) {
+          return null;
+        }
+      }
+    } catch (_) {}
     return data;
   } catch {
     return null;
@@ -35,6 +44,8 @@ export function clearStudentSession() {
   try {
     sessionStorage.removeItem(STUDENT_KEY);
     localStorage.removeItem(STUDENT_KEY);
+    sessionStorage.removeItem('skillbridge_tenant');
+    localStorage.removeItem('skillbridge_tenant');
   } catch {
     /* ignore */
   }
@@ -49,12 +60,26 @@ export function getStudentSession() {
   const localRaw = readRaw(localStorage);
 
   const fromSession = parseSession(sessionRaw);
-  if (fromSession) return fromSession;
+  if (fromSession) {
+    const tenantCode = fromSession.tenant?.code || fromSession.user?.tenantCode;
+    if (tenantCode && tenantCode !== 'default') {
+      try {
+        sessionStorage.setItem('skillbridge_tenant', tenantCode);
+        localStorage.setItem('skillbridge_tenant', tenantCode);
+      } catch (_) {}
+    }
+    return fromSession;
+  }
 
   const fromLocal = parseSession(localRaw);
   if (fromLocal) {
     try {
       sessionStorage.setItem(STUDENT_KEY, JSON.stringify(fromLocal));
+      const tenantCode = fromLocal.tenant?.code || fromLocal.user?.tenantCode;
+      if (tenantCode && tenantCode !== 'default') {
+        sessionStorage.setItem('skillbridge_tenant', tenantCode);
+        localStorage.setItem('skillbridge_tenant', tenantCode);
+      }
     } catch {
       /* ignore */
     }

@@ -93,6 +93,7 @@ export default function SuperAdminDashboard() {
           const payload = JSON.parse(atob(parts[1]));
           if (payload.exp && Date.now() >= payload.exp * 1000) {
             sessionStorage.removeItem('skillbridge_super_admin');
+            localStorage.removeItem('skillbridge_super_admin');
             return null;
           }
           if (payload.role !== 'SUPER_ADMIN') {
@@ -189,6 +190,7 @@ export default function SuperAdminDashboard() {
 
   const handleLogout = () => {
     sessionStorage.removeItem('skillbridge_super_admin');
+    localStorage.removeItem('skillbridge_super_admin');
     navigate('/super-admin/login');
   };
 

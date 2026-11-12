@@ -64,14 +64,13 @@ export default function SuperAdminLogin() {
 
     try {
       const res = await api.superAdminLogin(email.trim(), password);
-      sessionStorage.setItem(
-        'skillbridge_super_admin',
-        JSON.stringify({
-          token: res.token,
-          superAdmin: res.superAdmin,
-          loggedInAt: Date.now()
-        })
-      );
+      const superAdminPayload = JSON.stringify({
+        token: res.token,
+        superAdmin: res.superAdmin,
+        loggedInAt: Date.now()
+      });
+      sessionStorage.setItem('skillbridge_super_admin', superAdminPayload);
+      localStorage.setItem('skillbridge_super_admin', superAdminPayload);
       navigate('/super-admin');
     } catch (err) {
       setError(err.message || 'Invalid Super Admin credentials.');

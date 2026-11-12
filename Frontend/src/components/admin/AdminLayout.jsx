@@ -117,14 +117,20 @@ const AdminLayout = () => {
     api.getAdminMe().then((data) => {
       if (isMounted && data) {
         setProfile(data)
-        if (data.tenant?.code || data.tenant?.slug) {
+        const tenantCode = data.tenant?.code || data.tenant?.slug
+        if (tenantCode) {
           const current = getAdminSession() || {}
-          sessionStorage.setItem('skillbridge_admin', JSON.stringify({
+          const updated = {
             ...current,
-            tenant: data.tenant.code || data.tenant.slug,
-            slug: data.tenant.slug || data.tenant.code,
-            companyName: data.tenant.name
-          }))
+            tenant: tenantCode,
+            slug: data.tenant?.slug || tenantCode,
+            companyName: data.tenant?.name || current.companyName
+          }
+          const serialized = JSON.stringify(updated)
+          sessionStorage.setItem('skillbridge_admin', serialized)
+          localStorage.setItem('skillbridge_admin', serialized)
+          sessionStorage.setItem('skillbridge_tenant', tenantCode)
+          localStorage.setItem('skillbridge_tenant', tenantCode)
         }
       }
     }).catch(() => { })
@@ -139,6 +145,9 @@ const AdminLayout = () => {
 
   const handleLogout = () => {
     sessionStorage.removeItem('skillbridge_admin')
+    localStorage.removeItem('skillbridge_admin')
+    sessionStorage.removeItem('skillbridge_tenant')
+    localStorage.removeItem('skillbridge_tenant')
     navigate('/admin', { replace: true })
   }
 
