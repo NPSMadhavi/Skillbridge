@@ -1696,7 +1696,7 @@ const CoursePlayer = ({
       }
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
       setChatMessages((prev) => [...prev, { sender: 'aria', text: ariaAnswer }])
-      setVoiceStatusText(`🤖 ${aiTutorName} is explaining...`)
+      setVoiceStatusText(`🎓 ${aiTutorName} is explaining...`)
 
       voiceManagerRef.current?.setState(TutorState.ARIA_SPEAKING)
 
@@ -3178,7 +3178,7 @@ const CoursePlayer = ({
         }
         const ariaAnswer = res.text || res.reply || "I'm ready to help with your course questions!"
         setChatMessages(prev => [...prev, { sender: 'aria', text: ariaAnswer }])
-        setVoiceStatusText(`🤖 ${aiTutorName} is answering...`)
+        setVoiceStatusText(`🎓 ${aiTutorName} is answering...`)
         setChatLoading(false)
 
         speakAriaAnswer(ariaAnswer, () => {
@@ -3583,7 +3583,7 @@ const CoursePlayer = ({
                     {loadingExplanation && (
                       <div className="absolute top-2 left-2 right-2 z-30 bg-slate-900/90 border border-[#ff8c21]/40 backdrop-blur-md rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs text-[#ff8c21] shadow-lg animate-fadeIn">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                        <span className="font-semibold text-[11px]">Preparing this lesson in {currentLangObj.native}?</span>
+                        <span className="font-semibold text-[11px]">Preparing this lesson in {currentLangObj.native}...</span>
                       </div>
                     )}
 
@@ -3711,9 +3711,9 @@ const CoursePlayer = ({
                   </div>
                 </div>
 
-                {/* Right ARIA Tutor Circle Avatar with Robot AI Emoji */}
+                {/* Right ARIA Tutor Circle Avatar with Human Educator Avatar */}
                 <div className="md:col-span-5 lg:col-span-4 h-full flex flex-col items-center justify-center text-center border-t md:border-t-0 md:border-l border-white/10 pt-3 md:pt-0 px-2 sm:px-4">
-                  {/* Circular Avatar Frame with Robot Emoji (Clickable to call) */}
+                  {/* Circular Avatar Frame with Human Educator Avatar (Clickable to call) */}
                   <button
                     type="button"
                     onClick={handleAvatarCall}
@@ -3952,13 +3952,14 @@ const CoursePlayer = ({
                   className={`flex items-start gap-2.5 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   {msg.sender === 'aria' && (
-                    <div className="h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] overflow-hidden shrink-0 mt-0.5 shadow-xs select-none">
+                    <div className="relative h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] overflow-hidden shrink-0 mt-0.5 shadow-xs select-none flex items-center justify-center text-xs">
                       <img
                         src={`/avatars/${(aiVoiceConfig?.gender || '').toLowerCase() === 'male' ? 'male' : 'female'}/base.png`}
-                        alt="AI Tutor"
-                        className="w-full h-full object-cover"
+                        alt="Course Tutor"
+                        className="w-full h-full object-cover relative z-10"
                         onError={(e) => { e.target.style.display = 'none'; }}
                       />
+                      <span className="absolute z-0 select-none">🎓</span>
                     </div>
                   )}
 

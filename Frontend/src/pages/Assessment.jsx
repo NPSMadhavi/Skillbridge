@@ -397,7 +397,7 @@ const Assessment = ({ course, lessonTitle, quizQuestions, isFinalAssessment, onE
                   : 'bg-rose-50/90 border-rose-200/80 text-rose-900'
                   }`}>
                   <div className="flex items-center gap-1.5 text-xs sm:text-sm font-bold">
-                    <span className="text-sm">🤖</span>
+                    <span className="text-sm">🎓</span>
                     <span className={selected === question.answer ? 'text-emerald-700' : 'text-rose-700'}>
                       {selected === question.answer ? 'Correct! 🎉' : "Not quite. Here's why:"}
                     </span>
