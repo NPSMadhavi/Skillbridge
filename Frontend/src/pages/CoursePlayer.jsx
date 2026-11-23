@@ -549,6 +549,7 @@ const CoursePlayer = ({
   const [playing, setPlaying] = useState(Boolean(initialAutoPlayNext))
   const [autoplayBlocked, setAutoplayBlocked] = useState(false)
   const isManuallyPausedRef = useRef(false)
+  const autoplayAttemptedRef = useRef(false)
   const [explanation, setExplanation] = useState('')
   const [lessonVisuals, setLessonVisuals] = useState([])
   const [enlargedVisual, setEnlargedVisual] = useState(null)
@@ -1985,6 +1986,7 @@ const CoursePlayer = ({
   useEffect(() => {
     if (course && activeLesson) {
       isManuallyPausedRef.current = false;
+      autoplayAttemptedRef.current = false;
       const request = ++explanationRequest.current;
       setExplanationError(false);
       const langCode = selectedLanguageCode || 'en';
@@ -2115,7 +2117,8 @@ const CoursePlayer = ({
 
   // Autonomous AI Tutor: Automatically activate teaching when course/lesson explanation is ready
   useEffect(() => {
-    if (!loadingExplanation && explanation && sentences.length > 0 && !isManuallyPausedRef.current && !playing) {
+    if (!loadingExplanation && explanation && sentences.length > 0 && !isManuallyPausedRef.current && !autoplayAttemptedRef.current && !playing) {
+      autoplayAttemptedRef.current = true;
       playingRef.current = true;
       setPlaying(true);
     }
@@ -2529,6 +2532,8 @@ const CoursePlayer = ({
   const handleTogglePlay = () => {
     if (!playing) {
       isManuallyPausedRef.current = false;
+      autoplayAttemptedRef.current = true;
+      setAutoplayBlocked(false);
       if (currentSentenceIdx >= sentences.length - 1 && elapsedSeconds >= totalSeconds - 1) {
         setCurrentSentenceIdx(0);
         currentSentenceIdxRef.current = 0;
@@ -2863,14 +2868,18 @@ const CoursePlayer = ({
                 playPromise.catch((playErr) => {
                   console.warn('[VOICE] Neural audio playback deferred:', playErr?.message);
                   if (playErr?.name === 'NotAllowedError') {
+                    if (canplayTimer) { clearTimeout(canplayTimer); canplayTimer = null; }
                     setAutoplayBlocked(true);
+                    playingRef.current = false;
+                    setPlaying(false);
                     const unlockAutoplay = () => {
                       setAutoplayBlocked(false);
                       window.removeEventListener('click', unlockAutoplay);
                       window.removeEventListener('keydown', unlockAutoplay);
                       window.removeEventListener('touchstart', unlockAutoplay);
-                      if (!hasStarted && playingRef.current && isMountedRef.current && !hasAdvanced) {
-                        audio.play().catch(() => triggerAdvance());
+                      if (!hasStarted && isMountedRef.current && !hasAdvanced) {
+                        playingRef.current = true;
+                        setPlaying(true);
                       }
                     };
                     window.addEventListener('click', unlockAutoplay, { once: true });
@@ -3484,12 +3493,12 @@ const CoursePlayer = ({
                 type="button"
                 onClick={() => {
                   setAutoplayBlocked(false);
-                  window.dispatchEvent(new Event('click'));
+                  handleTogglePlay();
                 }}
-                className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-gradient-to-r from-[#ff8c21] to-amber-500 text-white rounded-full font-semibold text-xs sm:text-sm shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all duration-200 animate-bounce border border-white/30 cursor-pointer"
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-5 py-2.5 bg-gradient-to-r from-[#ff8c21] to-amber-500 text-white rounded-full font-bold text-xs sm:text-sm shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all duration-200 animate-bounce border border-white/30 cursor-pointer"
               >
-                <span>👋</span>
-                <span>Click anywhere to start live teaching with {aiTutorName}</span>
+                <span>▶️</span>
+                <span>Click here to start course teaching with {aiTutorName}</span>
                 <span className="bg-white/20 rounded-full px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider">Start</span>
               </button>
             )}
@@ -3710,7 +3719,7 @@ const CoursePlayer = ({
                     onClick={handleAvatarCall}
                     title={`Click to call ${aiTutorName} (or say "${aiWakeWord}")`}
                     className={`relative flex items-center justify-center h-28 w-28 sm:h-36 sm:w-36 md:h-40 md:w-40 lg:h-44 lg:w-44 rounded-full bg-[#182337] border-2 sm:border-[2.5px] cursor-pointer focus:outline-none ${
-                      isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING
+                      isAriaSpeaking || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING
                         ? 'border-[#ff8c21]/90 shadow-[0_0_30px_rgba(245,130,32,0.4)] avatar-active ring-4 ring-[#ff8c21]/20'
                         : tutorVoiceState === TutorState.ACTIVE_LISTENING || tutorVoiceState === TutorState.FOLLOW_UP_LISTENING
                           ? 'border-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.35)] ring-4 ring-emerald-500/20 animate-pulse'
@@ -3720,7 +3729,7 @@ const CoursePlayer = ({
                     <div className="w-full h-full rounded-full overflow-hidden flex items-center justify-center pointer-events-none">
                       <LipSyncAvatar
                         character={(aiVoiceConfig?.gender || '').toLowerCase() === 'male' ? 'male' : 'female'}
-                        isSpeaking={isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING}
+                        isSpeaking={isAriaSpeaking || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING}
                         audioElement={typeof window !== 'undefined' ? window._skillbridgeCurrentAudio : null}
                         size={176}
                         className="w-full h-full object-cover"
