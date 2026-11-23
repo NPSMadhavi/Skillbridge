@@ -368,6 +368,7 @@ const CoursePlayer = ({
       data.lessons[String(lessonId)] = {
         sentenceIdx: Math.max(0, sentenceIdx || 0),
         elapsedSeconds: Math.max(0, elapsedSec || 0),
+        currentSlide: currentPageNum || 1,
         updatedAt: Date.now()
       };
       localStorage.setItem(playbackStorageKey, JSON.stringify(data));
@@ -546,6 +547,8 @@ const CoursePlayer = ({
   }, [course?.id, storageKey])
 
   const [playing, setPlaying] = useState(Boolean(initialAutoPlayNext))
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false)
+  const isManuallyPausedRef = useRef(false)
   const [explanation, setExplanation] = useState('')
   const [lessonVisuals, setLessonVisuals] = useState([])
   const [enlargedVisual, setEnlargedVisual] = useState(null)
@@ -1024,15 +1027,19 @@ const CoursePlayer = ({
     voiceManagerRef.current?.returnToSleep?.()
 
     if (wasLecturePlayingRef.current) {
-      setVoiceStatusText('▶️ Resuming lecture from where you left off...')
-      setCurrentSentenceIdx(savedLecturePositionRef.current)
-      setPlaying(true)
-      wasLecturePlayingRef.current = false
+      const targetPos = Math.max(0, savedLecturePositionRef.current || 0);
+      currentSentenceIdxRef.current = targetPos;
+      setCurrentSentenceIdx(targetPos);
+      isManuallyPausedRef.current = false;
+      playingRef.current = true;
+      setPlaying(true);
+      wasLecturePlayingRef.current = false;
+      setVoiceStatusText('▶️ Resuming lecture from where you left off...');
       setTimeout(() => {
-        setVoiceStatusText('')
-      }, 2500)
+        if (isMountedRef.current) setVoiceStatusText('');
+      }, 2500);
     } else {
-      setVoiceStatusText('')
+      setVoiceStatusText('');
     }
   }
 
@@ -1301,8 +1308,10 @@ const CoursePlayer = ({
 
     const wasPlaying = Boolean(playingRef.current || playing);
     if (wasPlaying) {
-      wasLecturePlayingRef.current = true;
-      savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      if (!wasLecturePlayingRef.current) {
+        wasLecturePlayingRef.current = true;
+        savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      }
 
       // Immediately flag paused in ref & state so lecture loops halt synchronously
       playingRef.current = false;
@@ -1606,8 +1615,10 @@ const CoursePlayer = ({
     // If lecture is playing when question arrives, immediately stop lecture synchronously
     const wasPlaying = Boolean(playingRef.current || playing);
     if (wasPlaying) {
-      wasLecturePlayingRef.current = true;
-      savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      if (!wasLecturePlayingRef.current) {
+        wasLecturePlayingRef.current = true;
+        savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      }
       playingRef.current = false;
       setPlaying(false);
       voiceManagerRef.current?.setLecturePlaying(false);
@@ -1973,6 +1984,7 @@ const CoursePlayer = ({
 
   useEffect(() => {
     if (course && activeLesson) {
+      isManuallyPausedRef.current = false;
       const request = ++explanationRequest.current;
       setExplanationError(false);
       const langCode = selectedLanguageCode || 'en';
@@ -2089,6 +2101,14 @@ const CoursePlayer = ({
 
     return lines
   }, [explanation, activeLesson?.title, course?.title, selectedLanguageCode])
+
+  // Autonomous AI Tutor: Automatically activate teaching when course/lesson explanation is ready
+  useEffect(() => {
+    if (!loadingExplanation && explanation && sentences.length > 0 && !isManuallyPausedRef.current && !playing) {
+      playingRef.current = true;
+      setPlaying(true);
+    }
+  }, [loadingExplanation, explanation, sentences.length, playing])
 
   // Pre-buffer first 3 sentences of the active slide into memory so playback starts instantaneously
   useEffect(() => {
@@ -2497,6 +2517,7 @@ const CoursePlayer = ({
 
   const handleTogglePlay = () => {
     if (!playing) {
+      isManuallyPausedRef.current = false;
       if (currentSentenceIdx >= sentences.length - 1 && elapsedSeconds >= totalSeconds - 1) {
         setCurrentSentenceIdx(0);
         currentSentenceIdxRef.current = 0;
@@ -2516,6 +2537,8 @@ const CoursePlayer = ({
       setChatCollapsed(true);
       requestPlayerFullscreen();
     } else {
+      isManuallyPausedRef.current = true;
+      savedLecturePositionRef.current = currentSentenceIdxRef.current;
       playingRef.current = false;
       if (speechTimeoutRef.current) {
         clearTimeout(speechTimeoutRef.current);
@@ -2602,12 +2625,14 @@ const CoursePlayer = ({
             }, 600);
           } else if (nextLesson) {
             setVoiceStatusText(`✅ Lesson completed! Advancing to: ${nextLesson.title}...`);
+            isManuallyPausedRef.current = false;
             setTimeout(() => {
               setActiveLessonId(nextLesson.id);
               currentSentenceIdxRef.current = 0;
               setCurrentSentenceIdx(0);
               setElapsedSeconds(0);
               elapsedSecondsRef.current = 0;
+              playingRef.current = true;
               setPlaying(true);
             }, 800);
           }
@@ -2621,6 +2646,19 @@ const CoursePlayer = ({
           setCurrentSentenceIdx(nextIdx);
           speak(nextIdx);
           return;
+        }
+
+        // Real-time Presentation Slide Synchronization:
+        // Automatically flip slides to match the sentence topic being taught
+        const sourceSlides = Array.isArray(activeLesson?.sourceSlides) && activeLesson.sourceSlides.length > 0
+          ? activeLesson.sourceSlides
+          : null;
+        if (sourceSlides && sentences.length > 0) {
+          const slidePos = Math.min(sourceSlides.length - 1, Math.floor((idx / sentences.length) * sourceSlides.length));
+          const targetSlide = sourceSlides[slidePos];
+          if (targetSlide && targetSlide !== currentPageNum) {
+            setCurrentPageNum(targetSlide);
+          }
         }
 
         try {
@@ -2813,14 +2851,30 @@ const CoursePlayer = ({
               if (playPromise !== undefined) {
                 playPromise.catch((playErr) => {
                   console.warn('[VOICE] Neural audio playback deferred:', playErr?.message);
-                  setTimeout(() => {
-                    if (!hasStarted && playingRef.current && isMountedRef.current && !hasAdvanced) {
-                      const retry = audio.play();
-                      if (retry !== undefined) {
-                        retry.catch(() => triggerAdvance());
+                  if (playErr?.name === 'NotAllowedError') {
+                    setAutoplayBlocked(true);
+                    const unlockAutoplay = () => {
+                      setAutoplayBlocked(false);
+                      window.removeEventListener('click', unlockAutoplay);
+                      window.removeEventListener('keydown', unlockAutoplay);
+                      window.removeEventListener('touchstart', unlockAutoplay);
+                      if (!hasStarted && playingRef.current && isMountedRef.current && !hasAdvanced) {
+                        audio.play().catch(() => triggerAdvance());
                       }
-                    }
-                  }, 600);
+                    };
+                    window.addEventListener('click', unlockAutoplay, { once: true });
+                    window.addEventListener('keydown', unlockAutoplay, { once: true });
+                    window.addEventListener('touchstart', unlockAutoplay, { once: true });
+                  } else {
+                    setTimeout(() => {
+                      if (!hasStarted && playingRef.current && isMountedRef.current && !hasAdvanced) {
+                        const retry = audio.play();
+                        if (retry !== undefined) {
+                          retry.catch(() => triggerAdvance());
+                        }
+                      }
+                    }, 600);
+                  }
                 });
               }
             };
@@ -3020,8 +3074,10 @@ const CoursePlayer = ({
     // If lecture is playing, immediately stop lecture synchronously
     const wasPlaying = Boolean(playingRef.current || playing);
     if (wasPlaying) {
-      wasLecturePlayingRef.current = true;
-      savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      if (!wasLecturePlayingRef.current) {
+        wasLecturePlayingRef.current = true;
+        savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      }
       playingRef.current = false;
       setPlaying(false);
       voiceManagerRef.current?.setLecturePlaying(false);
@@ -3411,6 +3467,22 @@ const CoursePlayer = ({
 
           {/* ENLARGED CENTER LECTURE SLIDE VIDEO PLAYER UI WITH Sleek CONTROL BAR */}
           <div ref={playerRef} className="flex-1 min-h-0 bg-[#0f172a] text-white rounded-2xl border border-slate-800 shadow-md relative overflow-hidden flex flex-col justify-between">
+            {/* Autonomous AI Tutor Autoplay Activation Banner */}
+            {autoplayBlocked && (
+              <button
+                type="button"
+                onClick={() => {
+                  setAutoplayBlocked(false);
+                  window.dispatchEvent(new Event('click'));
+                }}
+                className="absolute top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-gradient-to-r from-[#ff8c21] to-amber-500 text-white rounded-full font-semibold text-xs sm:text-sm shadow-2xl flex items-center gap-2 hover:scale-105 active:scale-95 transition-all duration-200 animate-bounce border border-white/30 cursor-pointer"
+              >
+                <span>👋</span>
+                <span>Click anywhere to start live teaching with {aiTutorName}</span>
+                <span className="bg-white/20 rounded-full px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider">Start</span>
+              </button>
+            )}
+
             {/* Chapter Completed - Waiting for Assessment Overlay */}
             {loadingQuiz && (
               <div className="absolute inset-0 z-40 bg-[#070d1e]/95 backdrop-blur-md flex flex-col items-center justify-center text-center p-6 select-none animate-fadeIn">
@@ -3720,17 +3792,27 @@ const CoursePlayer = ({
                   const newSeconds = Math.round(pct * totalSeconds)
                   const newIdx = Math.min(sentences.length - 1, Math.max(0, Math.floor(pct * sentences.length)))
                   setElapsedSeconds(newSeconds)
+                  elapsedSecondsRef.current = newSeconds
                   setCurrentSentenceIdx(newIdx)
+                  currentSentenceIdxRef.current = newIdx
                   if (playing) {
                     try {
-      if (window._skillbridgeCurrentAudio) {
-        window._skillbridgeCurrentAudio.pause();
-        window._skillbridgeCurrentAudio.currentTime = 0;
-        window._skillbridgeCurrentAudio = null;
-      }
-      window.speechSynthesis.cancel();
-      preloadedAudioMap.current.clear();
-    } catch (e) { }
+                      if (window._skillbridgeCurrentAudio) {
+                        window._skillbridgeCurrentAudio.pause();
+                        window._skillbridgeCurrentAudio.currentTime = 0;
+                        window._skillbridgeCurrentAudio = null;
+                      }
+                      window.speechSynthesis.cancel();
+                      preloadedAudioMap.current.clear();
+                    } catch (e) { }
+                    playingRef.current = false;
+                    setPlaying(false);
+                    setTimeout(() => {
+                      if (isMountedRef.current && !isManuallyPausedRef.current) {
+                        playingRef.current = true;
+                        setPlaying(true);
+                      }
+                    }, 60);
                   }
                 }}
               >
