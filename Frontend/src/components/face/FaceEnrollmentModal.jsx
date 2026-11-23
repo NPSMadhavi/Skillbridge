@@ -37,8 +37,8 @@ const ENROLLMENT_STEPS = [
   },
 ]
 
-// Rapid hold duration for fast face recognition
-const POSE_HOLD_MS = 300
+// Deliberate hold duration to scan and verify each and every frame
+const POSE_HOLD_MS = 1200
 
 
 
@@ -142,6 +142,7 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
   const stepIndexRef = useRef(0)
   const sessionDataRef = useRef(null)
   const isVerifyingRef = useRef(false)
+  const stepTransitionUntilRef = useRef(0)
 
   stepIndexRef.current = stepIndex
   capturedFramesRef.current = capturedFrames
@@ -303,7 +304,7 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
 
   // Handle detection results for active step
   const handleLandmarkResults = (results) => {
-    if (isVerifyingRef.current) return
+    if (isVerifyingRef.current || performance.now() < stepTransitionUntilRef.current) return
     const currentStep = ENROLLMENT_STEPS[stepIndexRef.current]
     if (!currentStep) return
 
@@ -393,40 +394,11 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
     }
   }
 
-  // Instant 1-Click Snapshot & Complete Enrollment fallback
-  const handleInstantCapture = () => {
-    if (isVerifyingRef.current) return
-    const video = videoRef.current
-    if (!video || !video.videoWidth) return
-
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth
-    canvas.height = video.videoHeight
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-
-    const allPosed = {
-      look_straight: dataUrl,
-      look_up: dataUrl,
-      turn_left: dataUrl,
-      turn_right: dataUrl,
-      look_down: dataUrl
-    }
-    setCompletedSteps({
-      look_straight: true,
-      look_up: true,
-      turn_left: true,
-      turn_right: true,
-      look_down: true
-    })
-    finalizeEnrollment(allPosed)
-  }
-
   // Capture high-resolution JPEG snapshot for the validated step
   const captureStepSnapshot = (stepId, pose) => {
     holdStartTimeRef.current = null
     setHoldProgress(0)
+    stepTransitionUntilRef.current = performance.now() + 500
 
     const video = videoRef.current
     if (!video || !video.videoWidth) return
@@ -722,21 +694,10 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
               stopCamera()
               onClose()
             }}
-            className="cursor-pointer rounded-lg border border-line bg-transparent px-3 py-2 text-xs font-semibold text-muted hover:text-fg transition"
+            className="flex-1 cursor-pointer rounded-lg border border-line bg-transparent px-3 py-2 text-xs font-semibold text-muted hover:text-fg transition"
           >
             Cancel
           </button>
-          {!isVerifying && !isModelLoading && (
-            <button
-              type="button"
-              onClick={handleInstantCapture}
-              className="flex-1 cursor-pointer rounded-lg border-0 bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow transition flex items-center justify-center gap-1.5"
-              title="Capture face right now and complete enrollment"
-            >
-              <span>📸</span>
-              <span>Snap & Enroll Now</span>
-            </button>
-          )}
           {cameraError && (
             <button
               type="button"
