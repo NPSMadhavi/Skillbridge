@@ -270,7 +270,7 @@ class AIService {
     try {
       const response = await axios.post(endpoint, payload, {
         headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
-        timeout: jsonMode ? 180000 : 90000
+        timeout: jsonMode ? 35000 : 25000
       });
 
       const text = response.data?.response;
@@ -1539,14 +1539,14 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
 
     let textSlice = '';
     if (isPpt && sampled.length > 0) {
-      textSlice = this._compactSlideSummaries(sampled, 16000);
+      textSlice = this._compactSlideSummaries(sampled, 8000);
       if (slides.length > sampled.length) {
         textSlice = `This deck has ${slides.length} slides. Summaries below are evenly sampled.\n\n${textSlice}`;
       }
     } else if (pages.length > 0) {
-      textSlice = pages.map(p => `[PAGE ${p.page_number}${p.title && !isGarbageTitle(p.title) ? `: ${p.title}` : ''}]\n${String(p.text || '').slice(0, 600)}`).join('\n\n').slice(0, 16000);
+      textSlice = pages.map(p => `[PAGE ${p.page_number}${p.title && !isGarbageTitle(p.title) ? `: ${p.title}` : ''}]\n${String(p.text || '').slice(0, 400)}`).join('\n\n').slice(0, 8000);
     } else {
-      textSlice = String(fullText || '').slice(0, 16000);
+      textSlice = String(fullText || '').slice(0, 8000);
     }
 
     const systemPrompt = `You are SkillBridge's curriculum architect. Build a training curriculum from the local LLM using the slide/page summaries.
@@ -1594,19 +1594,8 @@ ${textSlice}`;
       const course = this._sanitizeGeneratedCourse(parsed, slides, fileName);
       return this._attachLessonMedia(course, slides, pages);
     } catch (e) {
-      console.warn('generateCourse LLM pass failed, retrying with a shorter prompt:', e.message);
-      try {
-        const retryPrompt = `Create 6-18 readable training lessons from this material. Ignore OCR garbage. Return JSON {title, description, lessons:[{title, moduleTitle, sourceSlides, duration}]}. File: ${fileName}\n\n${textSlice.slice(0, 9000)}`;
-        const retryRaw = await this._callLLM(retryPrompt, 'Return JSON only.', true);
-        const retryParsed = this._parseJsonObject(retryRaw);
-        if (retryParsed?.lessons?.length) {
-          const course = this._sanitizeGeneratedCourse(retryParsed, slides, fileName);
-          return this._attachLessonMedia(course, slides, pages);
-        }
-      } catch (retryErr) {
-        console.warn('generateCourse retry failed:', retryErr.message);
-      }
-      console.warn('Fallback triggered for generateCourse: grouping real slides instead of OCR titles');
+      console.warn('generateCourse LLM pass failed or timed out:', e.message);
+      console.warn('Fast fallback triggered for generateCourse: structuring real slides into curriculum');
       const fallback = this._groupSlidesIntoLessons(slides, fileName);
       return this._attachLessonMedia(fallback, slides, pages);
     }

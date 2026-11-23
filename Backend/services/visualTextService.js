@@ -133,10 +133,9 @@ export async function analyzeImageWithQwen(img, slideNumber) {
   const gateway = gatewayBaseUrl();
   if (!gateway) return null;
 
-  // In production, skip unreachable private LAN addresses (192.168.x.x, 10.x.x.x) to prevent gateway timeouts
+  // Skip unreachable private LAN addresses (192.168.x.x, 10.x.x.x) unless explicitly permitted
   const isPrivateIp = /^https?:\/\/(?:192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/i.test(gateway);
-  const isProd = process.env.NODE_ENV === 'production';
-  if (isProd && isPrivateIp) {
+  if (isPrivateIp && !process.env.ALLOW_PRIVATE_GATEWAY) {
     return null;
   }
 
@@ -180,7 +179,7 @@ export async function analyzeImageWithQwen(img, slideNumber) {
 export async function ocrFallback(images) {
   const pending = images
     .filter(img => !img.ocrText && !img.visionText)
-    .slice(0, 15); // Cap to prevent worker overload
+    .slice(0, 2); // Cap to 2 images max to prevent 504 gateway timeouts
   if (pending.length === 0) return;
 
   let worker = null;
@@ -194,7 +193,10 @@ export async function ocrFallback(images) {
       const buf = img.buffer || dataUrlToBuffer(img.dataUrl);
       if (!buf || buf.length < 500) continue;
       try {
-        const result = await worker.recognize(buf);
+        const result = await Promise.race([
+          worker.recognize(buf),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('OCR recognition timeout (6s)')), 6000))
+        ]);
         const text = cleanOcrText(result?.data?.text);
         if (isUsefulText(text)) {
           img.ocrText = text;
@@ -283,17 +285,25 @@ export async function enrichDocumentVisuals(doc) {
     }
   }
 
+  // Only fallback to OCR if slides/document actually lack meaningful text
   const stillNeedOcr = [];
-  for (const slide of slides) {
-    for (const img of teachingImagesForSlide(slide)) {
+  if (slides.length > 0) {
+    for (const slide of slides) {
+      const txt = ((slide.paragraphs || []).join(' ') + ' ' + (slide.bulletPoints || []).join(' ')).trim();
+      if (txt.length < 50) {
+        for (const img of teachingImagesForSlide(slide)) {
+          if (!img.visionText && !img.ocrText) stillNeedOcr.push(img);
+        }
+      }
+    }
+  } else if ((doc.text || '').trim().length < 50) {
+    for (const img of (doc.images || []).slice(0, 2)) {
       if (!img.visionText && !img.ocrText) stillNeedOcr.push(img);
     }
   }
-  for (const img of doc.images || []) {
-    if (!img.visionText && !img.ocrText) stillNeedOcr.push(img);
-  }
+
   if (stillNeedOcr.length > 0) {
-    await ocrFallback(stillNeedOcr);
+    await ocrFallback(stillNeedOcr.slice(0, 2));
   }
 
   for (const slide of slides) {
