@@ -1,0 +1,261 @@
+{
+ "version": 2,
+ "packVersion": "female-mid-2",
+ "character": "female",
+ "canvas": [
+  1024,
+  1024
+ ],
+ "base": "base.png",
+ "shapes": {
+  "rest": {
+   "file": "patches/n_rest.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.0,
+    "round": 0.0,
+    "teeth": 0.0,
+    "closed": true
+   },
+   "source": "019.webp"
+  },
+  "closed": {
+   "file": "patches/n_closed.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.0,
+    "round": 0.0,
+    "teeth": 0.0,
+    "closed": true
+   },
+   "source": "179.webp"
+  },
+  "gap1": {
+   "file": "patches/n_gap1.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.02,
+    "round": 0.0,
+    "teeth": 0.02,
+    "closed": false
+   },
+   "source": "176.webp"
+  },
+  "gap2": {
+   "file": "patches/n_gap2.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.15,
+    "round": 0.0,
+    "teeth": 0.02,
+    "closed": false
+   },
+   "source": "174.webp"
+  },
+  "gap3": {
+   "file": "patches/n_gap3.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.25,
+    "round": 0.0,
+    "teeth": 0.03,
+    "closed": false
+   },
+   "source": "056.webp"
+  },
+  "teethSmall": {
+   "file": "patches/n_teethsmall.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.12,
+    "round": 0.0,
+    "teeth": 0.08,
+    "closed": false
+   },
+   "source": "271.webp"
+  },
+  "pursed": {
+   "file": "patches/n_pursed.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.0,
+    "round": 1.0,
+    "teeth": 0.0,
+    "closed": false
+   },
+   "source": "150.webp"
+  },
+  "pursedSoft": {
+   "file": "patches/n_pursedsoft.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.0,
+    "round": 0.8,
+    "teeth": 0.0,
+    "closed": false
+   },
+   "source": "153.webp"
+  },
+  "round": {
+   "file": "patches/n_round.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.05,
+    "round": 1.0,
+    "teeth": 0.0,
+    "closed": false
+   },
+   "source": "013.webp"
+  },
+  "teethLip": {
+   "file": "patches/n_teethlip.png",
+   "origin": [
+    368,
+    650
+   ],
+   "size": [
+    390,
+    237
+   ],
+   "params": {
+    "open": 0.05,
+    "round": 0.0,
+    "teeth": 0.1,
+    "closed": false
+   },
+   "source": "295.webp"
+  }
+ },
+ "blink": {
+  "file": "patches/n_blink.png",
+  "origin": [
+   355,
+   517
+  ],
+  "size": [
+   429,
+   109
+  ],
+  "source": "239.webp"
+ },
+ "halfBlink": {
+  "file": "patches/n_halfblink.png",
+  "origin": [
+   355,
+   517
+  ],
+  "size": [
+   429,
+   109
+  ],
+  "source": "250.webp"
+ },
+ "eyes": {
+  "blink": {
+   "file": "patches/n_blink.png",
+   "origin": [
+    355,
+    517
+   ],
+   "size": [
+    429,
+    109
+   ],
+   "source": "239.webp"
+  },
+  "halfBlink": {
+   "file": "patches/n_halfblink.png",
+   "origin": [
+    355,
+    517
+   ],
+   "size": [
+    429,
+    109
+   ],
+   "source": "250.webp"
+  }
+ },
+ "aliases": {
+  "X": "rest",
+  "A": "closed",
+  "B": "gap1",
+  "C": "gap2",
+  "D": "gap3",
+  "E": "round",
+  "F": "pursedSoft",
+  "G": "teethLip",
+  "H": "gap2",
+  "SMILE": "gap1",
+  "EE": "gap1"
+ },
+ "notes": [
+  "MID-2 pack: small and medium-small mouths only. Removed: the wide smile (smileClosed), smileTeeth, every big-open mouth, tongue, spread, midSpread.",
+  "The widest mouth is gap3 (params.open 0.25). Engines must normalise the opening target to the pack's largest params.open.",
+  "params are estimates (open 0..1, round -1 spread..+1 round, teeth 0..1).",
+  "No true f/v frame existed: teethLip is the nearest."
+ ]
+}

@@ -198,7 +198,6 @@ const CoursePlayerRoute = () => {
   const { id } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const fetchedIdRef = useRef(null)
 
   // Initialize course instantly from router state or fast client cache
   const [course, setCourse] = useState(() => {
@@ -212,19 +211,18 @@ const CoursePlayerRoute = () => {
   const [accessError, setAccessError] = useState('');
 
   useEffect(() => {
-    if (!id || fetchedIdRef.current === id) return;
-    fetchedIdRef.current = id;
+    if (!id) return;
 
-    let isMounted = true;
-    api.getCourseDetail(id)
+    const controller = new AbortController();
+    api.getCourseDetail(id, controller.signal)
       .then(res => {
-        if (!isMounted) return;
+        if (controller.signal.aborted) return;
         const mapped = mapRagCourse(res);
         setCourse(mapped);
         setLoading(false);
       })
       .catch(err => {
-        if (!isMounted) return;
+        if (controller.signal.aborted) return;
         console.error("Failed to load course details for player:", err);
         setCourse(prev => {
           if (!prev) {
@@ -236,7 +234,7 @@ const CoursePlayerRoute = () => {
       });
 
     return () => {
-      isMounted = false;
+      controller.abort();
     };
   }, [id]);
 

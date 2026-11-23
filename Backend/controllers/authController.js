@@ -16,8 +16,34 @@ export const passwordLogin = async (req, res) => {
   const cleanEmail = String(email).trim().toLowerCase();
 
   try {
-    const targetPrisma = req.prisma || prisma;
-    const user = await targetPrisma.user.findUnique({ where: { email: cleanEmail } });
+    let targetPrisma = req.prisma || prisma;
+    let effectiveTenantCode = req.tenantCode || 'default';
+    let user = await targetPrisma.user.findUnique({ where: { email: cleanEmail } });
+
+    // Multi-tenant resolution: If not in current tenant, search across active companies
+    if (!user) {
+      try {
+        const companies = await masterPrisma.company.findMany({
+          where: { status: 'ACTIVE' },
+          select: { code: true }
+        }).catch(() => []);
+
+        for (const comp of companies) {
+          if (comp.code === effectiveTenantCode) continue;
+          try {
+            const compClient = await tenantService.getTenantClient(comp.code);
+            const foundUser = await compClient.user.findUnique({ where: { email: cleanEmail } });
+            if (foundUser) {
+              user = foundUser;
+              targetPrisma = compClient;
+              effectiveTenantCode = comp.code;
+              break;
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
@@ -47,14 +73,14 @@ export const passwordLogin = async (req, res) => {
 
     const userRole = user.role || 'STUDENT';
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: userRole, tenantCode: req.tenantCode || 'default' },
+      { id: user.id, email: user.email, role: userRole, tenantCode: effectiveTenantCode },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     res.json({
       token,
-      tenant: { code: req.tenantCode || 'default' },
+      tenant: { code: effectiveTenantCode },
       user: {
         id: user.id,
         fullName: user.fullName,
@@ -144,6 +170,11 @@ export const faceLogin = async (req, res) => {
 
     const matchedUserId = result.user_id || result.id;
     if (!result.matched || !matchedUserId) {
+      if (result.serviceUnavailable) {
+        return res.status(503).json({
+          error: `Face recognition service unavailable: ${result.errorMessage || 'gateway unreachable'}. Please sign in with your email and password.`
+        });
+      }
       console.warn(`[FaceLogin] Verification rejected. Highest similarity confidence: ${result.confidence || 0}`);
       return res.status(401).json({ error: 'Face verification failed. Face not recognized. Look directly into camera with good lighting and try again.' });
     }

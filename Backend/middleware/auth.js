@@ -25,6 +25,32 @@ export const authenticateToken = (req, res, next) => {
   });
 };
 
+export const optionalAuthenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  let token = null;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.slice(7).trim();
+  } else if (req.query && req.query.token && req.method === 'GET') {
+    token = String(req.query.token).trim();
+  }
+
+  if (!token) {
+    req.user = { id: 'guest-student', role: 'STUDENT', tenantCode: req.tenantCode || 'default' };
+    return next();
+  }
+
+  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+    if (err) {
+      // Gracefully fall back to guest student context rather than blocking learning session
+      req.user = { id: 'guest-student', role: 'STUDENT', tenantCode: req.tenantCode || 'default' };
+    } else {
+      req.user = decoded;
+    }
+    next();
+  });
+};
+
 export const requireRole = (allowedRoles) => {
   return (req, res, next) => {
     if (!req.user || !allowedRoles.includes(req.user.role)) {

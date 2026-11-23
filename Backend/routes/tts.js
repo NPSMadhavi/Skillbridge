@@ -1,79 +1,121 @@
 import express from 'express';
-import axios from 'axios';
+import microsoftNeuralTts, { VOICE_CONFIG } from '../services/microsoftNeuralTtsService.js';
+import interactiveCourseService from '../services/interactiveCourseService.js';
 
 const router = express.Router();
-const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
 
 /**
- * Neural Text-to-Speech synthesis proxy to Python AI Service
- * Supports query params: text, voice, gender, rate, pitch
+ * GET /api/v1/tts/voices
+ * Returns full configuration matrix of supported Microsoft Neural voices
+ */
+router.get('/voices', (req, res) => {
+  res.json({
+    provider: 'Microsoft Edge Neural TTS',
+    voices: VOICE_CONFIG
+  });
+});
+
+/**
+ * GET /api/v1/tts/synthesize
+ * Primary neural synthesis endpoint supporting direct audio streaming
+ * Query params: text, voice, language, gender, rate, pitch
  */
 router.get('/synthesize', async (req, res) => {
   try {
-    const { text, voice, gender, rate, pitch } = req.query;
+    const { text, voice, language, gender, rate, pitch } = req.query;
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'Text query parameter is required.' });
     }
 
-    const pyRes = await axios.get(`${PYTHON_SERVICE_URL}/api/tts/speak`, {
-      params: {
-        text: text.trim(),
-        voice: voice || undefined,
-        gender: gender || 'FEMALE',
-        rate: rate ? parseFloat(rate) : 1.0,
-        pitch: pitch ? parseFloat(pitch) : 1.0,
-      },
-      responseType: 'stream',
-      timeout: 15000,
+    const result = await microsoftNeuralTts.synthesizeAudio(text, {
+      language,
+      gender,
+      voice,
+      rate,
+      pitch
     });
 
-    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Type', result.contentType || 'audio/mpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
-    if (pyRes.headers['x-voice-used']) {
-      res.setHeader('X-Voice-Used', pyRes.headers['x-voice-used']);
-    }
-
-    pyRes.data.pipe(res);
+    res.setHeader('X-Voice-Used', result.voice);
+    res.setHeader('X-Cache', result.fromCache ? 'HIT' : 'MISS');
+    return res.end(result.buffer);
   } catch (error) {
-    console.warn('[TTS Proxy] Python neural TTS unavailable:', error.message);
+    console.warn('[TTS Endpoint:GET] Neural synthesis notice:', error.message);
     res.status(502).json({
       error: 'Neural TTS service unavailable',
-      fallback: 'browser_speech_synthesis',
-      details: error.message,
+      details: error.message
     });
   }
 });
 
+/**
+ * POST /api/v1/tts/synthesize
+ * POST variant for longer texts or structured payloads
+ */
 router.post('/synthesize', async (req, res) => {
   try {
-    const { text, voice, gender, rate, pitch } = req.body;
+    const { text, voice, language, gender, rate, pitch } = req.body;
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'Text body field is required.' });
     }
 
-    const pyRes = await axios.post(`${PYTHON_SERVICE_URL}/api/tts/speak`, {
-      text: text.trim(),
-      voice: voice || undefined,
-      gender: gender || 'FEMALE',
-      rate: rate ? parseFloat(rate) : 1.0,
-      pitch: pitch ? parseFloat(pitch) : 1.0,
-    }, {
-      responseType: 'stream',
-      timeout: 15000,
+    const result = await microsoftNeuralTts.synthesizeAudio(text, {
+      language,
+      gender,
+      voice,
+      rate,
+      pitch
     });
 
-    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Type', result.contentType || 'audio/mpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
-    pyRes.data.pipe(res);
+    res.setHeader('X-Voice-Used', result.voice);
+    res.setHeader('X-Cache', result.fromCache ? 'HIT' : 'MISS');
+    return res.end(result.buffer);
   } catch (error) {
-    console.warn('[TTS Proxy] Python neural TTS post unavailable:', error.message);
+    console.warn('[TTS Endpoint:POST] Neural synthesis notice:', error.message);
     res.status(502).json({
       error: 'Neural TTS service unavailable',
-      fallback: 'browser_speech_synthesis',
-      details: error.message,
+      details: error.message
     });
+  }
+});
+
+/**
+ * POST /api/v1/tts/ssml
+ * Generates Microsoft Neural SSML with pedagogical teacher pauses and prosody
+ */
+router.post('/ssml', (req, res) => {
+  try {
+    const { text, language, voice, gender, rate, pitch, volume } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Text field is required.' });
+    }
+
+    const cleanSpoken = microsoftNeuralTts.prepareTeacherNarration(text, language);
+    const sentences = microsoftNeuralTts.segmentSentences(cleanSpoken);
+    const targetVoice = microsoftNeuralTts.resolveVoice(voice, language, gender, cleanSpoken);
+    const ssml = microsoftNeuralTts.generateSSML(sentences, {
+      voiceName: targetVoice,
+      language,
+      gender,
+      rate,
+      pitch,
+      volume
+    });
+
+    res.json({
+      ssml,
+      sentences,
+      cleanSpoken,
+      voice: targetVoice,
+      prosody: microsoftNeuralTts.calculateProsody({ language, gender, rate, pitch, volume })
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

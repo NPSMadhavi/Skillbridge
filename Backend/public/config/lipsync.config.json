@@ -1,0 +1,21 @@
+{
+  "gateStartDbfs": -46,
+  "gateEndDbfs": -52,
+  "gateHoldMs": 120,
+  "peakRangeDb": 25,
+  "peakTrackWindowMs": 3000,
+  "attackMs": 30,
+  "releaseMs": 80,
+  "shapeIntervalMinMs": 90,
+  "shapeIntervalMaxMs": 150,
+  "openTolerance": 0.15,
+  "specialRoundProb": 0.1667,
+  "crossFadeMs": 60,
+  "silenceTransitionMs": 150,
+  "blinkMinGapMs": 2500,
+  "blinkMaxGapMs": 6000,
+  "blinkDurationMs": 140,
+  "halfBlinkMs": 40,
+  "minBlinkCooldownMs": 1200,
+  "headMotion": false
+}

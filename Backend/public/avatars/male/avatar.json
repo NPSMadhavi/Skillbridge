@@ -1,0 +1,202 @@
+{
+  "version": 2,
+  "size": [
+    1024,
+    1024
+  ],
+  "base": "base.png",
+  "blink": {
+    "file": "patches/BLINK_CLOSED.png",
+    "origin": [
+      407,
+      494
+    ],
+    "size": [
+      429,
+      188
+    ]
+  },
+  "halfBlink": {
+    "file": "patches/BLINK_HALF_CLOSING.png",
+    "origin": [
+      407,
+      494
+    ],
+    "size": [
+      429,
+      188
+    ]
+  },
+  "shapes": {
+    "X": {
+      "file": "patches/CLOSED_SOFT.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.0,
+        "round": 0.0,
+        "teeth": 0.0,
+        "closed": true
+      }
+    },
+    "A": {
+      "file": "patches/CLOSED_PRESSED.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.0,
+        "round": 0.0,
+        "teeth": 0.0,
+        "closed": true
+      }
+    },
+    "B": {
+      "file": "patches/GAP_M.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.25,
+        "round": 0.0,
+        "teeth": 0.5,
+        "closed": false
+      }
+    },
+    "C": {
+      "file": "patches/EH_50.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.5,
+        "round": -0.2,
+        "teeth": 0.6,
+        "closed": false
+      }
+    },
+    "D": {
+      "file": "patches/AH_100.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.85,
+        "round": -0.1,
+        "teeth": 0.3,
+        "closed": false
+      }
+    },
+    "E": {
+      "file": "patches/EH_25.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.4,
+        "round": 0.8,
+        "teeth": 0.0,
+        "closed": false
+      }
+    },
+    "F": {
+      "file": "patches/GAP_S.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.2,
+        "round": 1.0,
+        "teeth": 0.0,
+        "closed": false
+      }
+    },
+    "G": {
+      "file": "patches/FV_M.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.15,
+        "round": -0.3,
+        "teeth": 0.9,
+        "closed": false
+      }
+    },
+    "H": {
+      "file": "patches/TONGUE_M.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.6,
+        "round": -0.1,
+        "teeth": 0.4,
+        "closed": false
+      }
+    },
+    "EE": {
+      "file": "patches/EE_50.png",
+      "origin": [
+        436,
+        702
+      ],
+      "size": [
+        357,
+        217
+      ],
+      "params": {
+        "open": 0.3,
+        "round": -0.9,
+        "teeth": 0.8,
+        "closed": false
+      }
+    }
+  }
+}

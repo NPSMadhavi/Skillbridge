@@ -6,6 +6,7 @@ import { persistLanguageSelection, readStoredLanguageCode, textMatchesLanguage }
 import { cleanUnsupportedWords, cleanForSpeech as cleanSpeechUtil, stripSlidePlaceholders } from '../utils/textCleaner'
 import { buildTeacherLectureSentences } from '../utils/teacherNarrator'
 import { getStudentUser } from '../utils/authSession'
+import LipSyncAvatar from '../components/avatar/LipSyncAvatar'
 
 const CourseBookIcon = ({ className = "h-5 w-5" }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -21,6 +22,7 @@ const LANGUAGES = [
   { value: 'ta', label: 'Tamil (தமிழ்)', code: 'TA', native: 'தமிழ்' },
   { value: 'bn', label: 'Bangla (বাংলা)', code: 'BN', native: 'বাংলা' },
   { value: 'te', label: 'Telugu (తెలుగు)', code: 'TE', native: 'తెలుగు' },
+  { value: 'hi', label: 'Hindi (हिन्दी)', code: 'HI', native: 'हिन्दी' },
 ];
 
 const SPEECH_LANGUAGES = {
@@ -30,6 +32,7 @@ const SPEECH_LANGUAGES = {
   ta: 'ta-IN',
   bn: 'bn-BD',
   te: 'te-IN',
+  hi: 'hi-IN',
 };
 
 const GREETINGS = {
@@ -39,6 +42,7 @@ const GREETINGS = {
   ta: "வணக்கம்! நான் ARIA, உங்கள் தனிப்பட்ட AI ஆசிரியர். இந்த பாடம் குறித்த எந்த கேள்வியையும் என்னிடம் கேளுங்கள், நான் உங்களுக்கு விளக்குகிறேன்!",
   bn: "হ্যালো! আমি ARIA, আপনার ব্যক্তিগত AI টিউটর। এই পাঠ সম্পর্কে যে কোনো প্রশ্ন আমাকে জিজ্ঞাসা করুন, আমি আপনাকে বুঝিয়ে দেব!",
   te: "నమస్కారం! నేను ARIA, మీ వ్యక్తిగత AI ట్యూటర్. ఈ పాఠం గురించి ఏ ప్రశ్నైనా నన్ను అడగండి, నేను మీకు వివరిస్తాను!",
+  hi: "नमस्ते! मैं ARIA हूँ, आपकी व्यक्तिगत AI शिक्षक। इस पाठ के बारे में कोई भी प्रश्न पूछें, मैं आपको समझाऊँगी!",
 };
 
 const normalizeLanguageCode = (pref) => {
@@ -46,9 +50,10 @@ const normalizeLanguageCode = (pref) => {
   const l = String(pref).toLowerCase().trim();
   if (l === 'zh' || l.includes('chinese') || l.includes('中文') || l === 'cn') return 'zh';
   if (l === 'ms' || l.includes('malay') || l.includes('melayu') || l === 'my') return 'ms';
-  if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்') || l === 'in') return 'ta';
+  if (l === 'ta' || l.includes('tamil') || l.includes('தமிழ்')) return 'ta';
   if (l === 'bn' || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা') || l === 'bd') return 'bn';
   if (l === 'te' || l.includes('telugu') || l.includes('తెలుగు')) return 'te';
+  if (l === 'hi' || l.includes('hindi') || l.includes('हिन्दी')) return 'hi';
   if (l === 'en' || l.includes('english')) return 'en';
   return null;
 };
@@ -88,12 +93,22 @@ export const haltAllSkillBridgeAudio = () => {
       window._skillbridgeCurrentUtterance.onresume = null;
       window._skillbridgeCurrentUtterance = null;
     }
+    if (window._skillbridgeCurrentAudio) {
+      try {
+        window._skillbridgeCurrentAudio.onplay = null;
+        window._skillbridgeCurrentAudio.ontimeupdate = null;
+        window._skillbridgeCurrentAudio.onended = null;
+        window._skillbridgeCurrentAudio.onerror = null;
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio.src = '';
+      } catch (_) {}
+      window._skillbridgeCurrentAudio = null;
+    }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.pause();
-      window.speechSynthesis.cancel();
-      try { window.speechSynthesis.resume(); } catch (_) { }
-      window.speechSynthesis.cancel();
+      try {
+        window.speechSynthesis.cancel();
+      } catch (_) {}
     }
   } catch (e) { }
 };
@@ -114,24 +129,11 @@ const CoursePlayer = ({
 
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef(null)
-  const lessonOpenTimestampRef = useRef(performance.now())
   const [pipelineState, setPipelineState] = useState('PREPARING') // 'PREPARING' | 'READY' | 'PLAYING'
 
   // Pre-warm browser Web Speech synthesis voices on component mount
   useEffect(() => {
-    const voiceInitStartTime = performance.now();
-    console.log('[PERF:TTS_START] Initializing and pre-warming Web Speech synthesis voices');
-    const handleVoices = () => {
-      const voices = window.speechSynthesis?.getVoices() || [];
-      if (voices.length > 0) {
-        const duration = Math.round(performance.now() - voiceInitStartTime);
-        console.log(`[PERF:TTS_END] Web Speech synthesis ready with ${voices.length} voices in ${duration}ms`);
-      }
-    };
-    handleVoices();
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.onvoiceschanged = handleVoices;
-    }
+    window.speechSynthesis?.getVoices()
   }, [])
 
   useEffect(() => {
@@ -149,7 +151,6 @@ const CoursePlayer = ({
     isMountedRef.current = true;
 
     const handlePopState = () => {
-      console.log('[CoursePlayer] Browser popstate/back navigation detected: immediately halting audio');
       isMountedRef.current = false;
       playingRef.current = false;
       isAriaSpeakingRef.current = false;
@@ -169,7 +170,6 @@ const CoursePlayer = ({
     window.addEventListener('beforeunload', handlePopState);
 
     return () => {
-      console.log('[CoursePlayer] Unmounting player: completely canceling speech synthesis and releasing audio resources.');
       isMountedRef.current = false;
       playingRef.current = false;
       isAriaSpeakingRef.current = false;
@@ -258,20 +258,56 @@ const CoursePlayer = ({
   const preferredLanguage = currentLangObj.label
   const preferredVoiceLangCode = currentLangObj.value
   const speechRecognitionLang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US'
-  const selectedLanguageCodeRef = useRef(selectedLanguageCode)
-  selectedLanguageCodeRef.current = selectedLanguageCode
+
+  const explanationRequest = useRef(0)
+  const [retryCount, setRetryCount] = useState(0)
+  const [explanationError, setExplanationError] = useState(false)
 
   const handleLanguageChange = (newLangCode) => {
     const langObj = LANGUAGES.find(l => l.value === newLangCode) || LANGUAGES[0]
+    if (langObj.value === selectedLanguageCode) return
+    explanationRequest.current++
     setSelectedLanguageCode(langObj.value)
     ttsUtterancePool.clear()
+    lessonExplanationClientCache.clear()
     persistLanguageSelection(langObj.value)
 
-    window.speechSynthesis.cancel()
+    // Halt playback and remain cleanly paused on language switch
+    playingRef.current = false;
+    setPlaying(false);
+    setIsAriaSpeaking(false);
+    isAriaSpeakingRef.current = false;
+    setActiveSpokenWord('');
+
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+
+    try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.onended = null;
+        window._skillbridgeCurrentAudio.onerror = null;
+        window._skillbridgeCurrentAudio.onplay = null;
+        window._skillbridgeCurrentAudio.ontimeupdate = null;
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio.src = '';
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
     setCurrentSentenceIdx(0)
+    currentSentenceIdxRef.current = 0
     setElapsedSeconds(0)
+    elapsedSecondsRef.current = 0
     setExplanation('')
-    setLoadingExplanation(true)
+    setExplanationError(false)
     setPipelineState('PREPARING')
 
     setChatMessages((prev) => {
@@ -498,7 +534,6 @@ const CoursePlayer = ({
               const completedSet = new Set(res.completedLessonIds.map(String))
               const nextUncompleted = course.lessons.find(l => !completedSet.has(String(l.id)) && l.status !== 'done')
               if (nextUncompleted && completedSet.has(String(activeLessonId))) {
-                console.log('[CoursePlayer] Auto-advancing active lesson to next uncompleted lesson:', nextUncompleted.title)
                 setActiveLessonId(nextUncompleted.id)
               }
             }
@@ -568,14 +603,77 @@ const CoursePlayer = ({
   const [handsFreeVoice, setHandsFreeVoice] = useState(true)
   const [voiceStatusText, setVoiceStatusText] = useState('')
   const [isAriaSpeaking, setIsAriaSpeaking] = useState(false)
-  const [aiTutorName, setAiTutorName] = useState('ARIA')
-  const [aiWakeWord, setAiWakeWord] = useState('Hey ARIA')
-  const [aiVoiceConfig, setAiVoiceConfig] = useState({
-    gender: 'female',
-    voiceName: '',
-    rate: 0.95,
-    pitch: 1.0
+  const [aiTutorName, setAiTutorName] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('skillbridge_ai_settings') || sessionStorage.getItem('skillbridge_ai_settings') || '{}');
+      if (saved.aiName) return saved.aiName;
+      const admin = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || '{}');
+      if (admin.aiName) return admin.aiName;
+      const user = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || '{}');
+      if (user.aiName) return user.aiName;
+    } catch (_) {}
+    return 'ARIA';
   })
+  const [aiWakeWord, setAiWakeWord] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('skillbridge_ai_settings') || sessionStorage.getItem('skillbridge_ai_settings') || '{}');
+      if (saved.wakeWord) return saved.wakeWord;
+      const admin = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || '{}');
+      if (admin.wakeWord) return admin.wakeWord;
+      const user = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || '{}');
+      if (user.wakeWord) return user.wakeWord;
+    } catch (_) {}
+    return 'Hey ARIA';
+  })
+  const [aiVoiceConfig, setAiVoiceConfig] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('skillbridge_ai_settings') || sessionStorage.getItem('skillbridge_ai_settings') || '{}');
+      if (saved.aiVoiceGender || saved.gender) {
+        const isM = (saved.aiVoiceGender || saved.gender || '').toLowerCase() === 'male';
+        return {
+          gender: isM ? 'male' : 'female',
+          voiceName: saved.aiVoiceName || saved.voiceName || (isM ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural'),
+          rate: typeof saved.aiVoiceRate === 'number' ? saved.aiVoiceRate : 0.95,
+          pitch: typeof saved.aiVoicePitch === 'number' ? saved.aiVoicePitch : 1.0
+        };
+      }
+      const admin = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || '{}');
+      if (admin.aiVoiceGender) {
+        const isM = admin.aiVoiceGender.toLowerCase() === 'male';
+        return {
+          gender: isM ? 'male' : 'female',
+          voiceName: admin.aiVoiceName || (isM ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural'),
+          rate: typeof admin.aiVoiceRate === 'number' ? admin.aiVoiceRate : 0.95,
+          pitch: typeof admin.aiVoicePitch === 'number' ? admin.aiVoicePitch : 1.0
+        };
+      }
+      const user = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || '{}');
+      if (user.aiVoiceGender) {
+        const isM = user.aiVoiceGender.toLowerCase() === 'male';
+        return {
+          gender: isM ? 'male' : 'female',
+          voiceName: user.aiVoiceName || (isM ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural'),
+          rate: typeof user.aiVoiceRate === 'number' ? user.aiVoiceRate : 0.95,
+          pitch: typeof user.aiVoicePitch === 'number' ? user.aiVoicePitch : 1.0
+        };
+      }
+    } catch (_) {}
+    return {
+      gender: 'female',
+      voiceName: 'en-US-JennyNeural',
+      rate: 0.95,
+      pitch: 1.0
+    };
+  })
+
+  // Professional studio neural teacher acoustics: smooth, human-like voice with natural warmth
+  const tutorRate = aiVoiceConfig.rate || 0.92
+  const tutorPitch = typeof aiVoiceConfig.pitch === 'number' ? aiVoiceConfig.pitch : 1.0
+  const preloadedAudioMap = useRef(new Map())
+  const activeCourseIdRef = useRef(course?.id || '')
+  if (course?.id && activeCourseIdRef.current !== course.id) {
+    activeCourseIdRef.current = course.id;
+  }
 
   // Dynamic Viseme Lip-Sync and Google Voice Pacing states
   const [activeSpokenWord, setActiveSpokenWord] = useState('')
@@ -583,19 +681,44 @@ const CoursePlayer = ({
   const speechTimeoutRef = useRef(null)
   const watchdogRef = useRef(null)
 
+  // Live listener for real-time voice settings updates across tabs and AI Tutor Settings page
+  useEffect(() => {
+    const handleVoiceUpdate = (e) => {
+      const data = e.detail;
+      if (!data) return;
+      if (data.aiName) setAiTutorName(data.aiName);
+      if (data.wakeWord) setAiWakeWord(data.wakeWord);
+      if (data.aiVoiceGender) {
+        const isM = data.aiVoiceGender.toLowerCase() === 'male';
+        setAiVoiceConfig({
+          gender: isM ? 'male' : 'female',
+          voiceName: data.aiVoiceName || (isM ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural'),
+          rate: typeof data.aiVoiceRate === 'number' ? data.aiVoiceRate : 0.95,
+          pitch: typeof data.aiVoicePitch === 'number' ? data.aiVoicePitch : 1.0
+        });
+      }
+      preloadedAudioMap.current.clear();
+    };
+
+    window.addEventListener('skillbridge_ai_settings_updated', handleVoiceUpdate);
+    return () => window.removeEventListener('skillbridge_ai_settings_updated', handleVoiceUpdate);
+  }, []);
+
   // Fetch company AI Tutor and custom wake word configuration
   useEffect(() => {
     let isMounted = true
-    api.getCompanyAiSettings().then((settings) => {
+    const tenantCode = course?.tenantCode || course?.tenant?.code || null
+    api.getCompanyAiSettings(tenantCode).then((settings) => {
       if (isMounted && settings?.aiName) {
         setAiTutorName(settings.aiName)
         setAiWakeWord(settings.wakeWord || `Hey ${settings.aiName}`)
         if (settings.aiVoiceGender || settings.aiVoiceName || settings.aiVoiceRate) {
+          const isMale = (settings.aiVoiceGender || '').toLowerCase() === 'male'
           setAiVoiceConfig({
-            gender: (settings.aiVoiceGender || 'female').toLowerCase(),
-            voiceName: settings.aiVoiceName || '',
+            gender: isMale ? 'male' : 'female',
+            voiceName: settings.aiVoiceName || (isMale ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural'),
             rate: typeof settings.aiVoiceRate === 'number' ? settings.aiVoiceRate : 0.95,
-            pitch: typeof settings.aiVoicePitch === 'number' ? settings.aiVoicePitch : 1.0
+            pitch: typeof settings.aiVoicePitch === 'number' ? settings.aiVoicePitch : (isMale ? 0.78 : 1.0)
           })
         }
         setChatMessages(prev => {
@@ -608,7 +731,7 @@ const CoursePlayer = ({
       }
     }).catch(() => {})
     return () => { isMounted = false }
-  }, [selectedLanguageCode])
+  }, [selectedLanguageCode, course?.id, course?.tenantCode])
 
 
   const requestPlayerFullscreen = () => {
@@ -676,7 +799,6 @@ const CoursePlayer = ({
   const isMountedRef = useRef(true)
   const playingRef = useRef(Boolean(initialAutoPlayNext))
   const micStreamRef = useRef(null)
-  const lastAriaSpokenTimeRef = useRef(0)
 
   // Scroll references for transcripts / chalkboard notes
   const activeSentenceRef = useRef(null)
@@ -774,19 +896,23 @@ const CoursePlayer = ({
     // 0. If company admin set a specific preferred voice name
     if (aiVoiceConfig?.voiceName) {
       const keyword = aiVoiceConfig.voiceName.toLowerCase().replace(/^en-us-/, '').replace(/neural$/, '')
-      const explicit = voices.find(v => v.name.toLowerCase().includes(keyword))
+      const explicit = voices.find(v => v.lang.toLowerCase().split('-')[0] === l && v.name.toLowerCase().includes(keyword))
       if (explicit) return explicit
     }
 
-    // Explicitly exclude robotic David, Zira and legacy desktop voices
+    // Exclude male voices when female is desired (ARIA is female AI tutor)
     const isDisallowed = (name) => {
       const n = (name || '').toLowerCase()
-      return n.includes('david') || n.includes('zira') || n.includes('desktop')
+      const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male'
+      if (isMale) {
+        return n.includes('zira') || n.includes('female') || n.includes('jenny') || n.includes('ava')
+      }
+      return n.includes('david') || n.includes('george') || n.includes('mark') || n.includes('guy') || n.includes('brian') || n.includes('christopher') || n.includes('ryan') || n.includes('eric') || n.includes('male') || n.includes('james') || n.includes('richard')
     }
 
     if (l === 'en') {
-      const enVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en') && !isDisallowed(v.name))
       const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male'
+      const enVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en') && !isDisallowed(v.name))
 
       if (isMale) {
         const maleVoice = enVoices.find(v => {
@@ -797,19 +923,17 @@ const CoursePlayer = ({
           || enVoices.find(v => (v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('neural')) && !v.name.toLowerCase().includes('female'))
           || enVoices.find(v => v.name.toLowerCase().includes('male'))
         if (maleVoice) {
-          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen male voice: ${maleVoice.name} (${maleVoice.lang})`)
           return maleVoice
         }
       } else {
         // Female:
-        // 1. Microsoft Jenny (Natural) / Ava / Emma / Aria / Sonia
+        // 1. Microsoft Jenny (Natural) / Ava / Emma / Aria / Sonia / Microsoft Zira
         const naturalFemale = enVoices.find(v => {
           const n = v.name.toLowerCase()
           return (n.includes('natural') || n.includes('neural') || n.includes('online')) &&
             (n.includes('jenny') || n.includes('ava') || n.includes('emma') || n.includes('aria') || n.includes('sonia') || n.includes('neerja'))
         })
         if (naturalFemale) {
-          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${naturalFemale.name} (${naturalFemale.lang})`)
           return naturalFemale
         }
 
@@ -819,17 +943,21 @@ const CoursePlayer = ({
           return n.includes('google us english') || n.includes('google uk english female') || (n.includes('google') && !n.includes('male'))
         })
         if (googleVoice) {
-          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${googleVoice.name} (${googleVoice.lang})`)
           return googleVoice
         }
 
-        // 3. Any other natural female voice
+        // 3. Microsoft Zira Desktop (Built-in Windows female voice)
+        const ziraVoice = enVoices.find(v => v.name.toLowerCase().includes('zira'))
+        if (ziraVoice) {
+          return ziraVoice
+        }
+
+        // 4. Any other natural female voice
         const anyNatural = enVoices.find(v => {
           const n = v.name.toLowerCase()
           return (n.includes('natural') || n.includes('neural') || n.includes('online')) && !n.includes('guy') && !n.includes('male')
         })
         if (anyNatural) {
-          console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${anyNatural.name} (${anyNatural.lang})`)
           return anyNatural
         }
       }
@@ -840,16 +968,15 @@ const CoursePlayer = ({
         return n.includes('samantha') || n.includes('karen') || n.includes('victoria')
       })
       if (appleVoice) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${appleVoice.name} (${appleVoice.lang})`)
         return appleVoice
       }
 
-      // 7. Any other non-disallowed English voice (preferring female or neutral)
-      const fallbackEn = enVoices.find(v => !v.name.toLowerCase().includes('male')) || enVoices[0]
+      // 7. Any other female/non-male English voice
+      const fallbackEn = enVoices.find(v => !isDisallowed(v.name))
       if (fallbackEn) {
-        console.log(`[VOICE:TTS_VOICE_SELECTED] Chosen voice: ${fallbackEn.name} (${fallbackEn.lang})`)
         return fallbackEn
       }
+      return null
     } else if (l === 'zh') {
       const zhVoices = voices.filter(v => v.lang.toLowerCase().startsWith('zh') || v.lang.toLowerCase().includes('chinese') || v.lang.toLowerCase().includes('cmn'))
       const bestZh = zhVoices.find(v => v.name.toLowerCase().includes('natural') || v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('xiaoxiao'))
@@ -878,7 +1005,7 @@ const CoursePlayer = ({
     }
 
     const match = voices.find(v => v.lang.toLowerCase().startsWith(l) && !isDisallowed(v.name))
-    return match || voices.find(v => v.lang.startsWith('en') && !isDisallowed(v.name)) || voices[0]
+    return match || voices.find(v => v.lang.toLowerCase().startsWith(l)) || null
   }
 
   // Auto-resume lecture from the exact saved concept/sentence position
@@ -897,7 +1024,6 @@ const CoursePlayer = ({
     voiceManagerRef.current?.returnToSleep?.()
 
     if (wasLecturePlayingRef.current) {
-      console.log(`[LiveTutor] Auto-resuming lecture at Concept ${savedLecturePositionRef.current + 1}...`)
       setVoiceStatusText('▶️ Resuming lecture from where you left off...')
       setCurrentSentenceIdx(savedLecturePositionRef.current)
       setPlaying(true)
@@ -915,7 +1041,8 @@ const CoursePlayer = ({
     zh: "我在听，请问有什么可以帮您？",
     ms: "Ya, saya mendengar.",
     ta: "சொல்லுங்கள், நான் கேட்கிறேன்.",
-    bn: "হ্যাঁ, বলুন আমি শুনছি।"
+    bn: "হ্যাঁ, বলুন আমি শুনছি।",
+    te: "చెప్పండి, నేను వింటున్నాను."
   }
 
   const RESUME_COURSE_PHRASES = {
@@ -923,164 +1050,250 @@ const CoursePlayer = ({
     zh: "正在继续课程。",
     ms: "Menyambung semula kursus.",
     ta: "பாடத்தைத் தொடர்கிறேன்.",
-    bn: "কোর্সে ফিরে যাচ্ছি।"
+    bn: "কোর্সে ফিরে যাচ্ছি।",
+    te: "పాఠాన్ని కొనసాగిస్తున్నాను."
   }
+
+  // Pre-load multilingual wake acknowledgement audio so ARIA responds in 50ms upon saying "Hey ARIA"
+  const wakeAckAudioRef = useRef(null);
+
+  useEffect(() => {
+    const ack = ACKNOWLEDGMENTS[selectedLanguageCode] || ACKNOWLEDGMENTS.en;
+    const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male';
+    try {
+      const url = api.getTtsAudioUrl(ack, {
+        language: selectedLanguageCode,
+        gender: isMale ? 'MALE' : 'FEMALE',
+        rate: tutorRate,
+        pitch: tutorPitch
+      });
+      const audio = new Audio();
+      audio.preload = 'auto';
+      audio.src = url;
+      audio.load();
+      wakeAckAudioRef.current = audio;
+    } catch (_) {
+      wakeAckAudioRef.current = null;
+    }
+  }, [selectedLanguageCode, tutorRate, tutorPitch, aiVoiceConfig?.gender]);
 
   const speakAriaAnswer = (text, onEndCallback) => {
     if (!isMountedRef.current || !text) {
-      setIsAriaSpeaking(false)
-      isAriaSpeakingRef.current = false
-      voiceManagerRef.current?.setTutorSpeaking(false)
-      if (isMountedRef.current) onEndCallback?.()
-      return
+      setIsAriaSpeaking(false);
+      isAriaSpeakingRef.current = false;
+      voiceManagerRef.current?.setTutorSpeaking(false);
+      if (isMountedRef.current) onEndCallback?.();
+      return;
     }
+
     try {
-      window.speechSynthesis.cancel()
-      try { window.speechSynthesis.resume?.() } catch (e) { }
-      setIsAriaSpeaking(true)
-      isAriaSpeakingRef.current = true
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.onended = null;
+        window._skillbridgeCurrentAudio.onerror = null;
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
 
-      const cleanText = text
-        .replace(/###/g, '')
-        .replace(/####/g, '')
-        .replace(/\*\*/g, '')
-        .replace(/- /g, '')
-        .replace(/---/g, '')
-        .trim()
+    const cleanText = text
+      .replace(/###/g, '')
+      .replace(/####/g, '')
+      .replace(/\*\*/g, '')
+      .replace(/- /g, '')
+      .replace(/---/g, '')
+      .trim();
 
-      voiceManagerRef.current?.setTutorSpeaking(true, cleanText)
-      console.log(`[VOICE:TTS_START] Spoken response in ${preferredLanguage}: "${cleanText.slice(0, 60)}..."`)
+    if (!cleanText) {
+      setIsAriaSpeaking(false);
+      isAriaSpeakingRef.current = false;
+      voiceManagerRef.current?.setTutorSpeaking(false);
+      if (isMountedRef.current) onEndCallback?.();
+      return;
+    }
 
-      const utterance = new SpeechSynthesisUtterance(cleanText)
-      utterance.lang = speechRecognitionLang
-      const voices = window.speechSynthesis.getVoices()
-      const matchedVoice = selectVoiceForLanguage(voices, selectedLanguageCode)
-      if (matchedVoice) utterance.voice = matchedVoice
-      utterance.rate = aiVoiceConfig?.rate || 0.95
-      utterance.pitch = aiVoiceConfig?.pitch || 1.0
+    // Immediately mark tutor speaking to prevent microphone echo capture during buffer phase
+    setIsAriaSpeaking(true);
+    isAriaSpeakingRef.current = true;
+    voiceManagerRef.current?.setTutorSpeaking(true, cleanText);
 
-      // Hook boundary for avatar lip-sync during Q&A answers
-      utterance.onboundary = (event) => {
-        if (!isMountedRef.current) return;
-        if (event.name === 'word') {
-          const word = cleanText.substring(event.charIndex, event.charIndex + (event.charLength || 6)).trim();
-          setActiveSpokenWord(word);
-          setActiveCharIndex(event.charIndex);
+    // Split answer into sentences for instant <150ms streaming playback
+    const rawSentences = cleanText.split(/(?<=[.?!;।\n]+[\s\u200B]+)|(?<=[。！？\n])/g)
+      .map(s => s.trim())
+      .filter(s => s.length > 0);
+
+    const sentences = rawSentences.length > 0 ? rawSentences : [cleanText];
+    let hasFinished = false;
+    let isCancelled = false;
+    const answerPreloadMap = new Map();
+
+    const finishTTS = () => {
+      if (hasFinished) return;
+      hasFinished = true;
+      isCancelled = true;
+      answerPreloadMap.clear();
+      setActiveSpokenWord('');
+      setIsAriaSpeaking(false);
+      isAriaSpeakingRef.current = false;
+      voiceManagerRef.current?.setTutorSpeaking(false, cleanText);
+      if (isMountedRef.current) {
+        onEndCallback?.();
+      }
+    };
+
+    const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male';
+    const effectiveGender = isMale ? 'MALE' : 'FEMALE';
+
+    // Pre-fetch helper: buffer upcoming sentences into memory while current sentence plays
+    const prefetchSentence = (idx) => {
+      if (idx >= sentences.length || answerPreloadMap.has(idx)) return;
+      try {
+        const nextUrl = api.getTtsAudioUrl(sentences[idx], {
+          language: selectedLanguageCode,
+          gender: effectiveGender,
+          rate: tutorRate,
+          pitch: tutorPitch,
+        });
+        const preAudio = new Audio(nextUrl);
+        preAudio.preload = 'auto';
+        preAudio.load();
+        answerPreloadMap.set(idx, preAudio);
+      } catch (_) { }
+    };
+
+    const playSentenceAt = (idx) => {
+      if (isCancelled || !isMountedRef.current || idx >= sentences.length) {
+        finishTTS();
+        return;
+      }
+
+      const sentenceText = sentences[idx];
+
+      let audio = answerPreloadMap.get(idx);
+      if (!audio || audio.error) {
+        const audioUrl = api.getTtsAudioUrl(sentenceText, {
+          language: selectedLanguageCode,
+          gender: effectiveGender,
+          rate: tutorRate,
+          pitch: tutorPitch,
+        });
+        audio = new Audio(audioUrl);
+        audio.preload = 'auto';
+      }
+      answerPreloadMap.delete(idx);
+      window._skillbridgeCurrentAudio = audio;
+
+      // Pipeline pre-fetch: buffer NEXT sentence into memory cache immediately
+      if (idx + 1 < sentences.length) {
+        prefetchSentence(idx + 1);
+      }
+
+      let sentenceWatchdog = null;
+      let hasAdvanced = false;
+
+      const advanceOrFinish = (nextIdx) => {
+        if (hasAdvanced) return;
+        hasAdvanced = true;
+        if (sentenceWatchdog) {
+          clearTimeout(sentenceWatchdog);
+          sentenceWatchdog = null;
+        }
+        if (audio) {
+          audio.onplay = null;
+          audio.ontimeupdate = null;
+          audio.onended = null;
+          audio.onerror = null;
+          try {
+            audio.pause();
+            audio.currentTime = 0;
+            audio.src = '';
+          } catch (_) {}
+        }
+        try { window.speechSynthesis.cancel(); } catch (_) {}
+        if (nextIdx < sentences.length) {
+          playSentenceAt(nextIdx);
+        } else {
+          finishTTS();
         }
       };
 
-      // Global reference to prevent browser GC bug
-      window._skillbridgeCurrentUtterance = utterance
+      // Watchdog: If audio does not start playing within 8s, advance cleanly to next segment
+      sentenceWatchdog = setTimeout(() => {
+        console.warn(`[VOICE] Sentence ${idx} audio load watchdog timed out; advancing cleanly.`);
+        advanceOrFinish(idx + 1);
+      }, 8000);
 
-      let hasFinished = false
-      let safetyTimer = null
-      const finishTTS = () => {
-        if (hasFinished) return
-        hasFinished = true
-        setActiveSpokenWord('')
-        if (safetyTimer) {
-          clearTimeout(safetyTimer)
-          safetyTimer = null
+      audio.onplay = () => {
+        if (sentenceWatchdog) {
+          clearTimeout(sentenceWatchdog);
+          sentenceWatchdog = null;
         }
-        if (window._skillbridgeResumeInterval) {
-          clearInterval(window._skillbridgeResumeInterval)
-          window._skillbridgeResumeInterval = null
+        try { window.speechSynthesis.cancel(); } catch (_) {}
+        if (isCancelled || !isMountedRef.current) return;
+        setIsAriaSpeaking(true);
+        isAriaSpeakingRef.current = true;
+        voiceManagerRef.current?.setTutorSpeaking(true, sentenceText);
+      };
+
+      audio.ontimeupdate = () => {
+        if (audio.duration > 0) {
+          const ratio = audio.currentTime / audio.duration;
+          const words = sentenceText.split(/\s+/);
+          const wordIdx = Math.min(words.length - 1, Math.floor(ratio * words.length));
+          setActiveSpokenWord(words[wordIdx] || '');
         }
-        setIsAriaSpeaking(false)
-        isAriaSpeakingRef.current = false
-        lastAriaSpokenTimeRef.current = Date.now()
-        voiceManagerRef.current?.setTutorSpeaking(false, cleanText)
-        if (isMountedRef.current) {
-          onEndCallback?.()
+      };
+
+      audio.onended = () => {
+        advanceOrFinish(idx + 1);
+      };
+
+      audio.onerror = (e) => {
+        console.warn(`[VOICE] Studio audio error on sentence ${idx}:`, e);
+        advanceOrFinish(idx + 1);
+      };
+
+      const doPlay = () => {
+        if (isCancelled || !isMountedRef.current || hasAdvanced) return;
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((playErr) => {
+            console.warn('[VOICE] Neural audio play deferred:', playErr?.message);
+            setTimeout(() => {
+              if (!hasAdvanced && isMountedRef.current && !isCancelled) {
+                const retry = audio.play();
+                if (retry !== undefined) {
+                  retry.catch(() => advanceOrFinish(idx + 1));
+                }
+              }
+            }, 600);
+          });
         }
+      };
+
+      if (audio.readyState >= 2) {
+        doPlay();
+      } else {
+        const onReady = () => {
+          audio.removeEventListener('canplay', onReady);
+          audio.removeEventListener('canplaythrough', onReady);
+          audio.removeEventListener('loadeddata', onReady);
+          doPlay();
+        };
+        audio.addEventListener('canplay', onReady, { once: true });
+        audio.addEventListener('canplaythrough', onReady, { once: true });
+        audio.addEventListener('loadeddata', onReady, { once: true });
+        audio.load();
       }
+    };
 
-      utterance.onend = finishTTS
-      utterance.onerror = (err) => {
-        console.warn('[VOICE] Speech utterance error:', err)
-        finishTTS()
-      }
+    // Instant launch: Sentence 0 audio takes only ~120ms to synthesize and begins playing immediately!
+    playSentenceAt(0);
+  };
 
-      // Keep Chrome TTS alive during playback
-      if (window._skillbridgeResumeInterval) clearInterval(window._skillbridgeResumeInterval)
-      window._skillbridgeResumeInterval = setInterval(() => {
-        if (isAriaSpeakingRef.current) {
-          try { window.speechSynthesis.resume?.() } catch (e) { }
-        } else {
-          clearInterval(window._skillbridgeResumeInterval)
-        }
-      }, 2500)
-
-      // Safety timeout: ~12 chars/sec + buffer (min 8s, max 90s) — old 25s cap cut off long answers
-      const safetyTimeoutMs = Math.min(90000, Math.max(8000, Math.ceil(cleanText.length / 12) * 1000 + 4000))
-      safetyTimer = setTimeout(() => {
-        if (!hasFinished) {
-          console.warn('[VOICE] TTS safety timeout reached. Resetting ARIA speaking state.')
-          finishTTS()
-        }
-      }, safetyTimeoutMs)
-
-      // Try Studio Neural AI voice first, with automatic browser Web Speech fallback
-      try {
-        const audioUrl = api.getTtsAudioUrl(cleanText, {
-          gender: (aiVoiceConfig?.gender || 'female').toUpperCase(),
-          voice: aiVoiceConfig?.voiceName,
-          rate: aiVoiceConfig?.rate || 1.0,
-          pitch: aiVoiceConfig?.pitch || 1.0,
-        })
-
-        const audio = new Audio(audioUrl)
-        if (window._skillbridgeCurrentAudio) {
-          try {
-            window._skillbridgeCurrentAudio.pause()
-            window._skillbridgeCurrentAudio.currentTime = 0
-          } catch (_) { }
-        }
-        window._skillbridgeCurrentAudio = audio
-
-        audio.onended = () => {
-          if (!isMountedRef.current) return;
-          finishTTS()
-        }
-        audio.onerror = () => {
-          if (!isMountedRef.current) return;
-          console.warn('[VOICE] Studio neural stream unavailable, using natural browser speech')
-          try {
-            window.speechSynthesis.speak(utterance)
-          } catch (speakErr) {
-            finishTTS()
-          }
-        }
-
-        audio.play().catch(() => {
-          try {
-            window.speechSynthesis.speak(utterance)
-          } catch (speakErr) {
-            finishTTS()
-          }
-        })
-      } catch (err) {
-        console.warn('[VOICE] Studio audio init failed, falling back to Web Speech:', err)
-        setTimeout(() => {
-          try {
-            window.speechSynthesis.speak(utterance)
-          } catch (speakErr) {
-            console.warn('[VOICE] Speech synthesis speak error:', speakErr)
-            finishTTS()
-          }
-        }, 60)
-      }
-    } catch (e) {
-      console.warn('[VOICE] Speech synthesis failed:', e)
-      setIsAriaSpeaking(false)
-      isAriaSpeakingRef.current = false
-      voiceManagerRef.current?.setTutorSpeaking(false)
-      onEndCallback?.()
-    }
-  }
-
-  const interruptLectureAndWake = () => {
-    console.log('[VOICE:INTERRUPT] Wake command detected - interrupting lecture and greeting');
+  const interruptLectureAndWake = (question = null) => {
 
     // ==========================================================
     // 1. SAVE COURSE POSITION + STOP COURSE
@@ -1090,14 +1303,12 @@ const CoursePlayer = ({
     if (wasPlaying) {
       wasLecturePlayingRef.current = true;
       savedLecturePositionRef.current = currentSentenceIdxRef.current;
-      console.log(`[VOICE:INTERRUPT] Pausing course at Concept ${currentSentenceIdxRef.current + 1}`);
 
       // Immediately flag paused in ref & state so lecture loops halt synchronously
       playingRef.current = false;
       setPlaying(false);
       voiceManagerRef.current?.setLecturePlaying(false);
     } else if (isAriaSpeakingRef.current) {
-      console.log('[VOICE:INTERRUPT] User interrupted ARIA answer');
       setIsAriaSpeaking(false);
       isAriaSpeakingRef.current = false;
     }
@@ -1130,8 +1341,15 @@ const CoursePlayer = ({
         window._skillbridgeCurrentAudio.currentTime = 0;
         window._skillbridgeCurrentAudio = null;
       }
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.resume?.();
+      try {
+        if (window._skillbridgeCurrentAudio) {
+          window._skillbridgeCurrentAudio.pause();
+          window._skillbridgeCurrentAudio.currentTime = 0;
+          window._skillbridgeCurrentAudio = null;
+        }
+        window.speechSynthesis.cancel();
+        preloadedAudioMap.current.clear();
+      } catch (e) { }
     } catch (e) { }
 
     setIsAriaSpeaking(false);
@@ -1141,6 +1359,13 @@ const CoursePlayer = ({
     // ==========================================================
     // 3. ENTER GREETING & SPEAK "Yes, I'm listening."
     // ==========================================================
+
+    if (question) {
+      voiceManagerRef.current?.setState(TutorState.ACTIVE_LISTENING);
+      voiceManagerRef.current?.resetFollowUpTimeout();
+      handleVoiceQuestion(question);
+      return;
+    }
 
     voiceManagerRef.current?.setState(
       TutorState.ARIA_GREETING
@@ -1154,37 +1379,71 @@ const CoursePlayer = ({
       `👋 ${aiTutorName}: "${ack}"`
     );
 
-    // Defer speakAriaAnswer by 80ms to let React flush setPlaying(false)
-    // and ensure the browser synthesis engine has finished cancellation
-    setTimeout(() => {
-      if (!isMountedRef.current) return;
-      speakAriaAnswer(
-        ack,
-        () => {
-          console.log(
-            '[VOICE] Wake acknowledgement finished. Listening for question.'
-          );
-          const vm = voiceManagerRef.current;
-          if (vm) {
-            vm.ttsMutedUntil = 0;
-            vm.setState(TutorState.ACTIVE_LISTENING);
-            vm.resetFollowUpTimeout();
-            try {
-              vm.restartSpeechRecognition?.(true);
-            } catch (e) { }
-          }
-          setVoiceStatusText(`👂 Listening for your question…`);
+    let ackCompleted = false;
+    let ackWatchdog = null;
+
+    const onAckEnd = () => {
+      if (ackCompleted) return;
+      ackCompleted = true;
+      if (ackWatchdog) {
+        clearTimeout(ackWatchdog);
+        ackWatchdog = null;
+      }
+      setIsAriaSpeaking(false);
+      isAriaSpeakingRef.current = false;
+      voiceManagerRef.current?.setTutorSpeaking(false);
+      const vm = voiceManagerRef.current;
+      if (vm) {
+        vm.ttsMutedUntil = 0;
+        vm.setState(TutorState.ACTIVE_LISTENING);
+        vm.resetFollowUpTimeout();
+        try {
+          vm.restartSpeechRecognition?.(true);
+        } catch (e) { }
+      }
+      setVoiceStatusText(`👂 Listening for your question…`);
+    };
+
+    // 2.2s Watchdog guarantees onAckEnd ALWAYS fires even if audio glitches or onended drops
+    ackWatchdog = setTimeout(() => {
+      console.warn('[VOICE] Wake acknowledgment audio watchdog fired; auto-transitioning to ACTIVE_LISTENING');
+      onAckEnd();
+    }, 2200);
+
+    // Fast-path: If pre-buffered audio is ready, play instantly (< 50ms latency)
+    if (wakeAckAudioRef.current?.readyState >= 3) {
+      try {
+        const audio = wakeAckAudioRef.current;
+        audio.currentTime = 0;
+        setIsAriaSpeaking(true);
+        isAriaSpeakingRef.current = true;
+        voiceManagerRef.current?.setTutorSpeaking(true, ack);
+        audio.onended = onAckEnd;
+        audio.onerror = () => {
+          speakAriaAnswer(ack, onAckEnd);
+        };
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((err) => {
+            console.warn('[VOICE] Fast-path audio play notice:', err);
+            speakAriaAnswer(ack, onAckEnd);
+          });
         }
-      );
-    }, 80);
+        return;
+      } catch (err) {
+        console.warn('[VOICE] Pre-buffered wake audio error:', err);
+      }
+    }
+
+    // Always speak greeting audibly so ARIA responds immediately with full avatar voice
+    speakAriaAnswer(ack, onAckEnd);
   };
 
-  const handleAvatarCall = () => {
-    console.log(`[VOICE] AI Avatar clicked to call ${aiTutorName}`);
+  const handleAvatarCall = async () => {
     // If audioContext was suspended due to browser autoplay policy, resume it with this user gesture
     try {
       if (voiceManagerRef.current?.audioContext?.state === 'suspended') {
-        voiceManagerRef.current.audioContext.resume().catch(() => {});
+        await voiceManagerRef.current.audioContext.resume().catch(() => {});
       }
     } catch (e) { }
 
@@ -1194,15 +1453,36 @@ const CoursePlayer = ({
       handsFreeVoiceRef.current = true;
     }
 
+    // Check / prompt microphone permission directly within user gesture
+    if (navigator?.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((track) => track.stop());
+      } catch (micErr) {
+        console.warn('[VOICE] Microphone permission notice on avatar call:', micErr);
+        if (micErr.name === 'NotAllowedError' || micErr.name === 'PermissionDeniedError') {
+          setVoiceStatusText('⚠️ Microphone access was denied. Please allow microphone permissions in your browser.');
+          return;
+        }
+      }
+    }
+
     interruptLectureAndWake();
   };
 
   const isLectureEcho = (text) => {
     if (!text) return false
     if (voiceManagerRef.current?.isTranscriptSelfEcho?.(text)) return true
+
+    // NEVER drop genuine student questions that contain interrogatives or question marks
+    const isExplicitQuestion = /\b(what|why|how|when|where|who|which|can|could|would|should|is|are|do|does|did|tell|explain|clarify|mean|help|define|elaborate)\b/i.test(text)
+      || text.includes('?')
+      || /(?:什么是|为什么|怎么|如何|请问|apa|mengapa|bagaimana|bila|என்ன|ஏன்|எப்படி|কী|কেন|কিভাবে|ఎందుకు|ఏమిటి|ఎలా|क्या|क्यों|कैसे)/iu.test(text);
+    if (isExplicitQuestion) return false
+
     const captured = String(text).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
     const capturedWords = captured.split(/\s+/).filter(w => w.length > 3)
-    if (capturedWords.length < 4) return false
+    if (capturedWords.length < 5) return false
 
     const candidates = []
     const sentences = sentencesRef.current || []
@@ -1216,13 +1496,12 @@ const CoursePlayer = ({
 
     for (const candidate of candidates) {
       const n = String(candidate).toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, ' ').replace(/\s+/g, ' ').trim()
-      if (!n || n.length < 12) continue
-      if (n.includes(captured) || captured.includes(n.slice(0, 80))) return true
+      if (!n || n.length < 25) continue
       const sourceWords = n.split(/\s+/).filter(w => w.length > 3)
-      if (sourceWords.length < 4) continue
+      if (sourceWords.length < 5) continue
       const sourceSet = new Set(sourceWords)
       const overlap = capturedWords.filter(w => sourceSet.has(w)).length / capturedWords.length
-      if (overlap >= 0.45) return true
+      if (overlap >= 0.88 && n.includes(captured)) return true
     }
     return false
   }
@@ -1234,13 +1513,7 @@ const CoursePlayer = ({
       return
     }
 
-    // Guard against microphone hearing speaker audio right after TTS finishes (reverberation)
-    if (Date.now() - (lastAriaSpokenTimeRef.current || 0) < 1800) {
-      console.log(`[VOICE:ECHO_REJECTED] Ignored speech captured during/right after TTS playback: "${rawSpeech}"`)
-      return
-    }
     if (isLectureEcho(rawSpeech)) {
-      console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/ARIA echo: "${rawSpeech.slice(0, 80)}..."`)
       return
     }
 
@@ -1263,10 +1536,10 @@ const CoursePlayer = ({
       '我在听', '请问有什么可以帮您', '我在听请问', '请问', '正在继续课程', '我没有听清您的提问', '请再问一次',
       'ya saya mendengar', 'sila beritahu saya', 'saya mendengar', 'menyambung semula kursus', 'sila tanya semula',
       'சொல்லுங்கள் நான் கேட்கிறேன்', 'நான் கேட்கிறேன்', 'சொல்லுங்கள்', 'பாடத்தைத் தொடர்கிறேன்', 'மீண்டும் கேளுங்கள்',
-      'বলুন আমি শুনছি', 'আমি শুনছি', 'হ্যাঁ বলুন', 'কোর্সে ফিরে যাচ্ছি', 'আবার জিজ্ঞাসা করুন'
+      'বলুন আমি শুনছি', 'আমি শুনছি', 'হ্যাঁ বলুন', 'কোর্সে ফিরে যাচ্ছি', 'আবার জিজ্ঞাসা করুন',
+      'చెప్పండి నేను వింటున్నాను', 'నేను వింటున్నాను', 'చెప్పండి', 'పాఠాన్ని కొనసాగిస్తున్నాను'
     ]
-    if (selfEchoPhrases.some(e => norm === e || (norm.length < 35 && (norm.includes(e) || e.includes(norm))))) {
-      console.log(`[VOICE:ECHO_REJECTED] Ignored self-greeting echo in handleVoiceQuestion: "${rawSpeech}"`)
+    if (selfEchoPhrases.some(e => norm === e)) {
       return
     }
 
@@ -1274,11 +1547,9 @@ const CoursePlayer = ({
     const words = norm.split(/\s+/).filter(Boolean)
     const unique = new Set(words)
     if (words.length >= 3 && unique.size <= 1) {
-      console.log(`[VOICE:REJECT] Repetitive phrase rejected: "${rawSpeech}"`)
       return
     }
     if (words.length >= 4 && unique.size <= 2) {
-      console.log(`[VOICE:REJECT] Low-variety repetitive phrase rejected: "${rawSpeech}"`)
       return
     }
 
@@ -1295,7 +1566,15 @@ const CoursePlayer = ({
       return
     }
     if (lower === 'pause' || lower === 'pause lecture' || lower === 'stop' || lower === 'never mind' || lower === 'goodbye' || lower === 'bye') {
-      window.speechSynthesis.cancel()
+      try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
       setPlaying(false)
       wasLecturePlayingRef.current = false
       setVoiceStatusText('⏸️ Standing by.')
@@ -1304,50 +1583,79 @@ const CoursePlayer = ({
       return
     }
 
-    const cleanQuestion = extractQuestionFromWakeWord(rawSpeech) || rawSpeech
+    const cleanQuestion = extractQuestionFromWakeWord(rawSpeech, aiWakeWord, aiTutorName) || rawSpeech
     if (!cleanQuestion || cleanQuestion.length < 3 || isNoiseOrHallucination(cleanQuestion)) {
       return
     }
 
     if (isDanglingFragment(cleanQuestion)) {
-      console.log(`[VOICE:REJECT] Incomplete dangling fragment rejected in handleVoiceQuestion: "${cleanQuestion}"`)
       voiceManagerRef.current?.setState(TutorState.ACTIVE_LISTENING)
       voiceManagerRef.current?.resetFollowUpTimeout()
       setVoiceStatusText('👂 Still listening… please finish your question')
       return
     }
 
-    // Require substance: questions must have at least 2 distinct words or a direct inquiry word
-    const cleanWords = cleanQuestion.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean)
-    const cleanUnique = new Set(cleanWords)
-    if (cleanWords.length < 2 && !['why', 'how', 'what', 'who', 'when', 'where', 'help', 'explain'].includes(cleanWords[0])) {
-      console.log(`[VOICE:REJECT] Single-word non-question rejected: "${cleanQuestion}"`)
-      return
-    }
-    if (cleanWords.length >= 3 && cleanUnique.size <= 1) {
-      console.log(`[VOICE:REJECT] Repetitive question rejected: "${cleanQuestion}"`)
-      return
-    }
-
     // Deduplication check: prevent duplicate triggers for identical utterance within 2.5s
     const now = Date.now()
     if (lastProcessedTextRef.current === cleanQuestion.toLowerCase() && (now - lastProcessedTimeRef.current < 2500)) {
-      console.log(`[VOICE] Duplicate question ignored: "${cleanQuestion}"`)
       return
     }
     lastProcessedTextRef.current = cleanQuestion.toLowerCase()
     lastProcessedTimeRef.current = now
 
-    // If lecture is playing when question arrives, bookmark position
-    if (playingRef.current) {
-      wasLecturePlayingRef.current = true
-      savedLecturePositionRef.current = currentSentenceIdxRef.current
-      window.speechSynthesis.cancel()
-      setPlaying(false)
+    // If lecture is playing when question arrives, immediately stop lecture synchronously
+    const wasPlaying = Boolean(playingRef.current || playing);
+    if (wasPlaying) {
+      wasLecturePlayingRef.current = true;
+      savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      playingRef.current = false;
+      setPlaying(false);
+      voiceManagerRef.current?.setLecturePlaying(false);
     }
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+    if (utteranceRef.current) {
+      utteranceRef.current.onstart = null;
+      utteranceRef.current.onend = null;
+      utteranceRef.current.onerror = null;
+      utteranceRef.current.onboundary = null;
+      utteranceRef.current = null;
+    }
+    window._activeSpeechUtterance = null;
+    if (window._skillbridgeCurrentAudio) {
+      try {
+        window._skillbridgeCurrentAudio.onended = null;
+        window._skillbridgeCurrentAudio.onerror = null;
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      } catch (e) { }
+    }
+    try {
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
 
     isAnsweringRef.current = true
     voiceManagerRef.current?.setState(TutorState.PROCESSING)
+
+    // 40s Safety Watchdog prevents permanent locking if network or LLM times out
+    const answeringWatchdog = setTimeout(() => {
+      if (isAnsweringRef.current) {
+        console.warn('[VOICE] Question answering watchdog timed out (40s); recovering state.');
+        isAnsweringRef.current = false;
+        setChatLoading(false);
+        if (voiceManagerRef.current?.state === TutorState.PROCESSING || voiceManagerRef.current?.state === TutorState.ARIA_SPEAKING) {
+          voiceManagerRef.current?.returnToSleep();
+        }
+      }
+    }, 40000);
 
     // Get current concept being explained on chalkboard
     const currentConceptText = (sentencesRef.current && sentencesRef.current[savedLecturePositionRef.current]) ||
@@ -1357,31 +1665,34 @@ const CoursePlayer = ({
     setVoiceStatusText(`✨ Question: "${cleanQuestion}"`)
     setChatMessages((prev) => [...prev, { sender: 'user', text: cleanQuestion }])
     setChatLoading(true)
-    console.log(`[VOICE:LLM_REQUEST] Sending question to ${aiTutorName} AI Tutor: "${cleanQuestion}" (Concept: "${currentConceptText.slice(0, 40)}...", Lang: ${preferredLanguage})`)
 
     try {
       const historyToSend = (chatMessagesRef.current || []).slice(-8)
-      const chatRes = await api.chatWithTutor(course.id, {
+      const courseIdToUse = course?.id || activeCourseIdRef.current || 'active-course';
+      const chatRes = await api.chatWithTutor(courseIdToUse, {
         message: cleanQuestion,
+        courseTitle: course?.title || 'Safety & Operations Course',
         lessonTitle: activeLessonRef.current?.title,
         currentConcept: currentConceptText,
         language: selectedLanguageCode,
         conversationHistory: historyToSend,
         aiName: aiTutorName
       })
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) {
+        clearTimeout(answeringWatchdog);
+        return;
+      }
       const ariaAnswer = chatRes.text || chatRes.reply || "I'm ready to help with your course questions!"
       setChatMessages((prev) => [...prev, { sender: 'aria', text: ariaAnswer }])
       setVoiceStatusText(`🤖 ${aiTutorName} is explaining...`)
-      console.log(`[VOICE] AI response received: "${ariaAnswer.substring(0, 60)}..."`)
 
       voiceManagerRef.current?.setState(TutorState.ARIA_SPEAKING)
 
       // Speak ARIA answer with 100% microphone suppression and echo recording
       speakAriaAnswer(ariaAnswer, () => {
+        clearTimeout(answeringWatchdog);
         isAnsweringRef.current = false
         if (wasLecturePlayingRef.current) {
-          console.log('[VOICE] ARIA answer complete. Speaking continuation notice and resuming course...')
           const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en
           setVoiceStatusText(`▶️ ${resumePhrase}`)
           setTimeout(() => {
@@ -1390,9 +1701,22 @@ const CoursePlayer = ({
               voiceManagerRef.current?.returnToSleep()
             })
           }, 400)
+        } else {
+          // Lecture was paused or idle: transition to follow-up listening so student can ask another question!
+          const vm = voiceManagerRef.current;
+          if (vm) {
+            vm.ttsMutedUntil = 0;
+            vm.setState(TutorState.FOLLOW_UP_LISTENING);
+            vm.resetFollowUpTimeout();
+            try {
+              vm.restartSpeechRecognition?.(true);
+            } catch (e) { }
+          }
+          setVoiceStatusText(`💬 ${aiTutorName} is listening for your next question...`);
         }
       })
     } catch (err) {
+      clearTimeout(answeringWatchdog);
       console.error('[VOICE] ARIA AI Tutor chat error:', err)
       setChatMessages((prev) => [...prev, { sender: 'aria', text: `⚠️ ${err.message || 'The AI tutor is temporarily unavailable. Please try again in a moment.'}` }])
       isAnsweringRef.current = false
@@ -1424,43 +1748,29 @@ const CoursePlayer = ({
       return
     }
 
-    console.log(`[VOICE] Initializing 8-State ${aiTutorName} voice manager in ${preferredLanguage} (${speechRecognitionLang})...`)
     setVoiceStatusText(`🎙️ Always-On Mic Active (${currentLangObj.native}) — Say "${aiWakeWord}" anytime!`)
 
+    const onWake = transcript => {
+      if (!isMountedRef.current || isAnsweringRef.current) return
+      const question = extractQuestionFromWakeWord(transcript, aiWakeWord, aiTutorName)
+      const complete = question && !isDanglingFragment(question) && !isNoiseOrHallucination(question)
+      interruptLectureAndWake(complete ? question : null)
+    }
+
     const manager = new VoiceTutorManager({
-      debug: true,
+      debug: false,
       followUpTimeoutMs: 12000,
       aiName: aiTutorName,
       wakeWord: aiWakeWord,
-      onWakeWordDetected: (wakePhrase) => {
-        if (!isMountedRef.current) return;
-        console.log(`[VOICE:WAKE_MATCH] Wake phrase received: "${wakePhrase}". Transitioning to greeting...`)
-        interruptLectureAndWake()
-        const cleanQuestion = extractQuestionFromWakeWord(wakePhrase, aiWakeWord, aiTutorName)
-        const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
-        if (
-          cleanQuestion &&
-          wordCount >= 3 &&
-          !isDanglingFragment(cleanQuestion) &&
-          !isNoiseOrHallucination(cleanQuestion) &&
-          !isLectureEcho(cleanQuestion)
-        ) {
-          console.log(`[VOICE] Web Speech wake phrase included complete question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
-          setTimeout(() => {
-            handleVoiceQuestion(cleanQuestion)
-          }, 1600)
-        }
-      },
+      onWakeWordDetected: onWake,
       onAudioCaptured: async (audioBlob, context = {}) => {
         if (!isMountedRef.current || isTranscribingRef.current) return
         isTranscribingRef.current = true
         try {
           const isWakeDetection = context.isWakeDetection || manager.state === TutorState.SLEEPING
-          console.log(`[VOICE:TRANSCRIPTION] Transcribing user audio with faster-whisper (${selectedLanguageCode}, size: ${audioBlob.size}B, isWakeDetection: ${isWakeDetection})...`)
           const res = await api.transcribeSpeech(audioBlob, selectedLanguageCode)
-          if (!isMountedRef.current) return;
+          if (!isMountedRef.current || voiceManagerRef.current !== manager || isAnsweringRef.current) return;
           const transcription = (res?.text || '').trim()
-          console.log(`[VOICE:TRANSCRIPTION] Result: "${transcription}"`)
 
           if (!transcription || isNoiseOrHallucination(transcription) || transcription.length < 3) {
             const recordedState = context.state
@@ -1473,7 +1783,6 @@ const CoursePlayer = ({
               manager.state === TutorState.PROCESSING
             ) {
               if (!isWakeDetection && recordedState !== TutorState.SLEEPING) {
-                console.log('[VOICE] Empty/noise transcription while awake — re-listening for question')
                 manager.setState(TutorState.ACTIVE_LISTENING)
                 manager.resetFollowUpTimeout()
                 setVoiceStatusText(`👂 Still listening… ask your question (or say "${aiWakeWord}")`)
@@ -1487,24 +1796,11 @@ const CoursePlayer = ({
           }
 
           if (containsWakeWord(transcription, aiWakeWord, aiTutorName)) {
-            console.log(`[VOICE:WAKE_MATCH] Whisper wake word detected: "${transcription}". Interrupting course lecture...`)
-            interruptLectureAndWake()
-            const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
-            const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
-            if (
-              cleanQuestion &&
-              wordCount >= 3 &&
-              !isDanglingFragment(cleanQuestion) &&
-              !isNoiseOrHallucination(cleanQuestion) &&
-              !isLectureEcho(cleanQuestion)
-            ) {
-              setTimeout(() => handleVoiceQuestion(cleanQuestion), 1600)
-            }
+            onWake(transcription)
             return
           }
 
           if (playingRef.current || isAriaSpeakingRef.current || isLectureEcho(transcription)) {
-            console.log(`[VOICE:ECHO_REJECTED] Ignored lecture/TTS capture: "${transcription.slice(0, 80)}"`)
             if (manager.state === TutorState.PROCESSING) {
               manager.returnToSleep()
             }
@@ -1512,42 +1808,17 @@ const CoursePlayer = ({
           }
 
           if (isWakeDetection) {
-            if (containsWakeWord(transcription, aiWakeWord, aiTutorName)) {
-              console.log(`[VOICE:WAKE_MATCH] Whisper wake word detected: "${transcription}". Interrupting course lecture...`)
-              interruptLectureAndWake()
-
-              const cleanQuestion = extractQuestionFromWakeWord(transcription, aiWakeWord, aiTutorName)
-              const wordCount = (cleanQuestion || '').split(/\s+/).filter(Boolean).length
-              if (
-                cleanQuestion &&
-                wordCount >= 3 &&
-                !isDanglingFragment(cleanQuestion) &&
-                !isNoiseOrHallucination(cleanQuestion) &&
-                !isLectureEcho(cleanQuestion)
-              ) {
-                console.log(`[VOICE] Wake phrase included complete question: "${cleanQuestion}". Forwarding to AI Tutor after greeting...`)
-                setTimeout(() => {
-                  handleVoiceQuestion(cleanQuestion)
-                }, 1600)
-              }
-            } else {
-              console.log(`[VOICE:WAKE_IGNORE] No wake word in audio: "${transcription}". Staying in SLEEPING.`)
-              if (manager.state === TutorState.PROCESSING) {
-                manager.returnToSleep()
-              }
-            }
+            if (manager.state === TutorState.PROCESSING) manager.returnToSleep()
             return
           }
 
           // Final noise gate before LLM — reject ambient Whisper loops or dangling fragments
           if (isNoiseOrHallucination(transcription)) {
-            console.log(`[VOICE:REJECT] Hallucination/noise rejected before LLM: "${transcription.slice(0, 80)}"`)
             if (manager.state === TutorState.PROCESSING) manager.returnToSleep()
             return
           }
 
           if (isDanglingFragment(transcription)) {
-            console.log(`[VOICE:INCOMPLETE] Audio transcription is a dangling fragment: "${transcription}". Re-listening for continuation...`)
             if (
               manager.state === TutorState.PROCESSING ||
               manager.state === TutorState.ACTIVE_LISTENING ||
@@ -1581,14 +1852,11 @@ const CoursePlayer = ({
       },
       onQuestionReady: (questionText) => {
         if (!isMountedRef.current) return;
-        console.log(`[VOICE] Browser ASR question ready: "${questionText}"`)
         handleVoiceQuestion(questionText)
       },
       onReturnToSleep: () => {
         if (!isMountedRef.current) return;
-        console.log('[VOICE:RETURN_TO_SLEEP] Conversational window ended. Returning to SLEEPING.')
         if (wasLecturePlayingRef.current) {
-          console.log(`[VOICE] Auto-resuming course lecture from Concept ${savedLecturePositionRef.current + 1}...`)
           const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en
           setVoiceStatusText(`▶️ ${resumePhrase}`)
           speakAriaAnswer(resumePhrase, () => {
@@ -1635,7 +1903,7 @@ const CoursePlayer = ({
       }
     }
     // Keep deps narrow — aiName/wakeWord updates must not remount (destroys mid-listen)
-  }, [handsFreeVoice, speechRecognitionLang])
+  }, [handsFreeVoice, speechRecognitionLang, course?.id, aiWakeWord, aiTutorName])
 
   // Hot-update wake config without destroying the mic session
   useEffect(() => {
@@ -1652,7 +1920,6 @@ const CoursePlayer = ({
   // Manual Microphone Button Handler (Optional manual trigger)
   const toggleRecording = async () => {
     if (recording) {
-      console.log('[LiveTutor] Manual stop recording requested.')
       vadStateRef.current = 'PROCESSING'
       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
         try { mediaRecorderRef.current.stop() } catch (e) { }
@@ -1661,11 +1928,18 @@ const CoursePlayer = ({
       return
     }
 
-    console.log('[LiveTutor] Manual start recording requested.')
     if (playingRef.current) {
       wasLecturePlayingRef.current = true
       savedLecturePositionRef.current = currentSentenceIdxRef.current
-      window.speechSynthesis.cancel()
+      try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
       setPlaying(false)
     }
 
@@ -1699,7 +1973,8 @@ const CoursePlayer = ({
 
   useEffect(() => {
     if (course && activeLesson) {
-      lessonOpenTimestampRef.current = performance.now();
+      const request = ++explanationRequest.current;
+      setExplanationError(false);
       const langCode = selectedLanguageCode || 'en';
       const cacheKey = `${course.id}_${activeLesson.id}_${langCode}`;
 
@@ -1712,10 +1987,6 @@ const CoursePlayer = ({
       const isDone = isLessonDone(activeLesson.id);
       const restoredSentence = (savedPb && typeof savedPb.sentenceIdx === 'number' && !isDone) ? savedPb.sentenceIdx : 0;
       const restoredElapsed = (savedPb && typeof savedPb.elapsedSeconds === 'number' && !isDone) ? savedPb.elapsedSeconds : 0;
-
-      if (restoredSentence > 0 || restoredElapsed > 0) {
-        console.log(`[Playback Resume] Resumed Lesson ${activeLesson.id} ("${activeLesson.title}") at Concept ${restoredSentence + 1} (${restoredElapsed}s elapsed)`);
-      }
 
       setElapsedSeconds(restoredElapsed);
       elapsedSecondsRef.current = restoredElapsed;
@@ -1738,36 +2009,33 @@ const CoursePlayer = ({
       }
 
       if (immediateScript) {
-        console.log(`[PERF:LESSON_FETCH_START] [CLIENT_CACHE_HIT] Course: ${course.id}, Lesson: ${activeLesson.id} ("${activeLesson.title}"), Lang: ${langCode}`);
         setExplanation(immediateScript);
         setLessonVisuals(activeLesson.visuals || []);
         setLoadingExplanation(false);
         setPipelineState('READY');
-        const duration = Math.round(performance.now() - lessonOpenTimestampRef.current);
-        console.log(`[PERF:LESSON_FETCH_END] [CLIENT_CACHE_HIT] Retrieved instant lesson script in ${duration}ms (0 network / 0 LLM calls)`);
         return;
       }
 
       // 3. Fallback: Fetch from backend (which checks PostgreSQL Course.curriculum cache before RAG)
-      console.log(`[PERF:LESSON_FETCH_START] [NETWORK] Requesting lesson script for "${activeLesson.title}" (Course: ${course.id}, Lang: ${preferredLanguage})`);
       setLoadingExplanation(true);
       setPipelineState('PREPARING');
       setExplanation('');
       setLessonVisuals(activeLesson.visuals || []);
 
-      const fetchReqStartTime = performance.now();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90000);
       const requestLang = langCode;
-      api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, requestLang)
+      api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, requestLang, controller.signal)
         .then(res => {
-          if (!isMountedRef.current || selectedLanguageCodeRef.current !== requestLang) return;
-          const fetchReqDuration = Math.round(performance.now() - fetchReqStartTime);
-          console.log(`[PERF:LESSON_FETCH_END] Received lesson script from backend in ${fetchReqDuration}ms (Backend DB Cached: ${res.cached ? 'YES' : 'NO'})`);
-          const script = res.explanation || '';
-          if (script && !textMatchesLanguage(script, requestLang)) {
-            console.warn(`[Language Lock] Ignoring mixed-language lesson script for ${requestLang}`);
+          if (!isMountedRef.current || explanationRequest.current !== request) return;
+          const script = res.explanation || res.spoken_explanation || '';
+          if (requestLang !== 'en' && !textMatchesLanguage(script, requestLang)) {
+            console.warn('[CoursePlayer] Script may not strictly match language code, but displaying to learner:', requestLang);
           }
-          lessonExplanationClientCache.set(cacheKey, script);
-          setExplanation(script);
+          if (script) {
+            lessonExplanationClientCache.set(cacheKey, script);
+            setExplanation(script);
+          }
           if (res.page_or_slide_number && res.page_or_slide_number !== currentPageNum) {
             setCurrentPageNum(res.page_or_slide_number);
           }
@@ -1780,16 +2048,21 @@ const CoursePlayer = ({
           setLoadingExplanation(false);
           setPipelineState('READY');
         })
-        .catch(err => {
-          console.error('Failed to load dynamic lesson explanation:', err);
-          const fallbackText = activeLesson?.explanation || activeLesson?.spoken_explanation || `In this lesson, we study ${activeLesson?.title || 'the curriculum'}. Please review the slide displayed on your screen to understand the mandatory operational requirements and safety guidelines.`;
-          setExplanation(fallbackText);
-          setLessonVisuals(activeLesson.visuals || []);
+        .catch((err) => {
+          if (!isMountedRef.current || explanationRequest.current !== request) return;
+          console.warn('[CoursePlayer] Could not fetch lesson explanation:', err?.message);
+          setExplanationError(true);
           setLoadingExplanation(false);
-          setPipelineState('READY');
-        });
+        })
+        .finally(() => clearTimeout(timeout));
+      return () => {
+        clearTimeout(timeout);
+        if (explanationRequest.current === request) explanationRequest.current++;
+        controller.abort();
+      };
+
     }
-  }, [course, activeLessonId, preferredLanguage, selectedLanguageCode]);
+  }, [course, activeLessonId, preferredLanguage, selectedLanguageCode, retryCount]);
 
   // Complete Unicode regex matching all emojis
   const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F000}-\u{1F02F}]|[\u{1F0A0}-\u{1F0FF}]|[\u{1F100}-\u{1F64F}]|[\u{1F680}-\u{1F6FF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{1FA70}-\u{1FAFF}]|[\u{2300}-\u{23FF}]|[\u{2B50}]|[\u{FE00}-\u{FE0F}]/gu
@@ -1807,15 +2080,40 @@ const CoursePlayer = ({
   }
 
   const sentences = useMemo(() => {
-    if (!explanation) return ['Welcome to this lecture. We will explore key concepts step by step.']
+    if (!explanation) return []
     const cleanExp = stripSlidePlaceholders(cleanUnsupportedWords(explanation))
-    const teacherSentences = buildTeacherLectureSentences(cleanExp, activeLesson?.title || '', course?.title || '')
+    const teacherSentences = buildTeacherLectureSentences(cleanExp, activeLesson?.title || '', course?.title || '', selectedLanguageCode)
     const lines = teacherSentences
       .map(s => cleanForSpeech(s))
       .filter(s => s && s.length > 5 && !isNoiseOrHallucination(s))
 
-    return lines.length > 0 ? lines : ['Welcome to this lecture. Please review the material displayed on screen.']
-  }, [explanation, activeLesson?.title, course?.title])
+    return lines
+  }, [explanation, activeLesson?.title, course?.title, selectedLanguageCode])
+
+  // Pre-buffer first 3 sentences of the active slide into memory so playback starts instantaneously
+  useEffect(() => {
+    if (!sentences || sentences.length === 0) return;
+    const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male';
+    const effectiveGender = isMale ? 'MALE' : 'FEMALE';
+
+    for (let i = 0; i < Math.min(3, sentences.length); i++) {
+      const text = cleanForSpeech(sentences[i]);
+      if (text && !preloadedAudioMap.current.has(i)) {
+        try {
+          const url = api.getTtsAudioUrl(text, {
+            language: selectedLanguageCode,
+            gender: effectiveGender,
+            rate: tutorRate,
+            pitch: tutorPitch
+          });
+          const preAudio = new Audio(url);
+          preAudio.preload = 'auto';
+          preAudio.load();
+          preloadedAudioMap.current.set(i, preAudio);
+        } catch (_) {}
+      }
+    }
+  }, [sentences, selectedLanguageCode, tutorRate, tutorPitch, aiVoiceConfig?.gender]);
 
   // Intelligently determine which visual to display for the active spoken sentence/concept
   const activeVisual = useMemo(() => {
@@ -1990,7 +2288,6 @@ const CoursePlayer = ({
   const handleNavigatePage = (targetPageNum) => {
     if (targetPageNum < 1 || targetPageNum > totalPages) return;
     setCurrentPageNum(targetPageNum);
-    try { window.speechSynthesis.cancel(); } catch (e) {}
 
     const matchingLesson = course?.lessons?.find(l => {
       const s = Array.isArray(l.sourceSlides) ? l.sourceSlides : [l.id];
@@ -1999,31 +2296,79 @@ const CoursePlayer = ({
 
     if (matchingLesson && matchingLesson.id !== activeLessonId) {
       setActiveLessonId(matchingLesson.id);
+    }
+
+    try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+    } catch (e) {}
+
+    // Instant client cache hit for visited slides
+    const cacheKey = `${course?.id}_slide_${targetPageNum}_${selectedLanguageCode}`;
+    if (lessonExplanationClientCache.has(cacheKey)) {
+      const cachedExp = lessonExplanationClientCache.get(cacheKey);
+      setExplanation(cachedExp);
+      setLoadingExplanation(false);
+      setPipelineState('READY');
       setCurrentSentenceIdx(0);
       setElapsedSeconds(0);
-      setPlaying(true);
-    } else {
-      setLoadingExplanation(true);
-      api.explainCoursePage(course.id, targetPageNum, selectedLanguageCode)
-        .then(res => {
-          setTutorGuidance({
-            keyPoints: res.key_points || [],
-            safetyWarnings: res.safety_warnings || [],
-            transition: res.suggested_next_transition || ''
-          });
-          const exp = res.spoken_explanation || res.explanation || '';
-          setExplanation(exp);
-          setLoadingExplanation(false);
-          if (exp) {
-            setPlaying(true);
-            setCurrentSentenceIdx(0);
-          }
-        })
-        .catch(err => {
-          console.warn('Page explain notice:', err.message);
-          setLoadingExplanation(false);
-        });
+      if (playingRef.current) setPlaying(true);
+      return;
     }
+
+    // Instant cache hit from pre-loaded course slides payload
+    const slidesList = (Array.isArray(course?.slides) && course.slides.length > 0)
+      ? course.slides
+      : ((Array.isArray(course?.curriculumData?.slides) && course.curriculumData.slides.length > 0)
+        ? course.curriculumData.slides
+        : (course?.curriculum?.slides || []));
+    const targetSlide = slidesList.find(s => (s.slideNumber || s.sourceSlide) === targetPageNum);
+    const preCachedSlideExp = targetSlide?.explanations?.[selectedLanguageCode] ||
+      (selectedLanguageCode === 'en' ? targetSlide?.explanation : null);
+
+    if (preCachedSlideExp && typeof preCachedSlideExp === 'string' && preCachedSlideExp.length > 20) {
+      lessonExplanationClientCache.set(cacheKey, preCachedSlideExp);
+      setExplanation(preCachedSlideExp);
+      setLoadingExplanation(false);
+      setPipelineState('READY');
+      setCurrentSentenceIdx(0);
+      setElapsedSeconds(0);
+      if (playingRef.current) setPlaying(true);
+      return;
+    }
+
+    setLoadingExplanation(true);
+    const request = ++explanationRequest.current;
+    setExplanationError(false);
+    setExplanation('');
+
+    api.explainCoursePage(course.id, targetPageNum, selectedLanguageCode)
+      .then(res => {
+        if (!isMountedRef.current || explanationRequest.current !== request) return;
+        setTutorGuidance({
+          keyPoints: res.key_points || [],
+          safetyWarnings: res.safety_warnings || [],
+          transition: res.suggested_next_transition || ''
+        });
+        const exp = res.spoken_explanation || res.explanation || '';
+        if (exp) {
+          lessonExplanationClientCache.set(cacheKey, exp);
+          setExplanation(exp);
+          setCurrentSentenceIdx(0);
+          setElapsedSeconds(0);
+          if (playingRef.current) setPlaying(true);
+        }
+        setLoadingExplanation(false);
+      })
+      .catch(err => {
+        if (!isMountedRef.current || explanationRequest.current !== request) return;
+        console.warn('Page explain notice:', err.message);
+        setLoadingExplanation(false);
+      });
   };
 
   const getRealLessonDurationStr = (lesson, activeExp = null, idx = 0) => {
@@ -2104,9 +2449,9 @@ const CoursePlayer = ({
     }
   }, [activeLesson?.id, currentSentenceIdx, elapsedSeconds]);
 
-  // Align elapsedSeconds when concept index changes during active playback
+  // Align elapsedSeconds when concept index changes during initial lesson open or manual seek (NOT during active playback to prevent skipping)
   useEffect(() => {
-    if (!loadingExplanation && sentences.length > 0 && totalSeconds > 0 && playing) {
+    if (!loadingExplanation && sentences.length > 0 && totalSeconds > 0 && !playing) {
       const sentenceSec = Math.min(
         totalSeconds,
         Math.round((currentSentenceIdx / Math.max(1, sentences.length)) * totalSeconds)
@@ -2159,16 +2504,45 @@ const CoursePlayer = ({
         elapsedSecondsRef.current = 0;
       }
       try {
+        if (window._skillbridgeCurrentAudio) {
+          window._skillbridgeCurrentAudio.pause();
+          window._skillbridgeCurrentAudio.currentTime = 0;
+          window._skillbridgeCurrentAudio = null;
+        }
         window.speechSynthesis.cancel();
-        window.speechSynthesis.resume();
       } catch (e) { }
+      playingRef.current = true;
       setPlaying(true);
       setChatCollapsed(true);
       requestPlayerFullscreen();
     } else {
+      playingRef.current = false;
+      if (speechTimeoutRef.current) {
+        clearTimeout(speechTimeoutRef.current);
+        speechTimeoutRef.current = null;
+      }
+      if (watchdogRef.current) {
+        clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+      if (window._skillbridgeCurrentAudio) {
+        try {
+          window._skillbridgeCurrentAudio.onended = null;
+          window._skillbridgeCurrentAudio.onerror = null;
+          window._skillbridgeCurrentAudio.onplay = null;
+          window._skillbridgeCurrentAudio.ontimeupdate = null;
+          window._skillbridgeCurrentAudio.pause();
+          window._skillbridgeCurrentAudio.currentTime = 0;
+          window._skillbridgeCurrentAudio.src = '';
+          window._skillbridgeCurrentAudio = null;
+        } catch (e) { }
+      }
       try {
         window.speechSynthesis.cancel();
       } catch (e) { }
+      setIsAriaSpeaking(false);
+      isAriaSpeakingRef.current = false;
+      setActiveSpokenWord('');
       setPlaying(false);
       if (activeLesson?.id && !isLessonDone(activeLesson.id)) {
         saveLessonPlayback(activeLesson.id, currentSentenceIdxRef.current, elapsedSecondsRef.current);
@@ -2219,7 +2593,6 @@ const CoursePlayer = ({
           const isLastLessonOfModule = !nextLesson || (currentModule !== nextModule);
 
           if (isLastLessonOfModule) {
-            console.log('[CoursePlayer] Chapter lecture completed! Opening chapter assessment...');
             setVoiceStatusText('🎉 Chapter complete! Preparing your assessment, please wait...');
             setLoadingQuiz(true);
             setTimeout(() => {
@@ -2228,7 +2601,6 @@ const CoursePlayer = ({
               }
             }, 600);
           } else if (nextLesson) {
-            console.log('[CoursePlayer] Lesson completed! Advancing to next lesson in chapter:', nextLesson.title);
             setVoiceStatusText(`✅ Lesson completed! Advancing to: ${nextLesson.title}...`);
             setTimeout(() => {
               setActiveLessonId(nextLesson.id);
@@ -2252,8 +2624,6 @@ const CoursePlayer = ({
         }
 
         try {
-          const ttsStartTime = performance.now();
-          console.log(`[PERF:TTS_START] Teacher Statement ${idx + 1}/${sentences.length}: "${spokenText.slice(0, 45)}..."`);
 
           // Helper to cleanly advance to the next sentence with teacher pacing
           const handleSentenceAdvance = () => {
@@ -2262,6 +2632,19 @@ const CoursePlayer = ({
               clearTimeout(watchdogRef.current);
               watchdogRef.current = null;
             }
+            if (window._skillbridgeCurrentAudio) {
+              try {
+                window._skillbridgeCurrentAudio.onended = null;
+                window._skillbridgeCurrentAudio.onerror = null;
+                window._skillbridgeCurrentAudio.onplay = null;
+                window._skillbridgeCurrentAudio.ontimeupdate = null;
+                window._skillbridgeCurrentAudio.pause();
+                window._skillbridgeCurrentAudio.currentTime = 0;
+                window._skillbridgeCurrentAudio.src = '';
+              } catch (_) {}
+              window._skillbridgeCurrentAudio = null;
+            }
+            try { window.speechSynthesis.cancel(); } catch (_) {}
             if (utteranceRef.current) {
               utteranceRef.current.onstart = null;
               utteranceRef.current.onend = null;
@@ -2273,20 +2656,21 @@ const CoursePlayer = ({
             setIsAriaSpeaking(false);
             isAriaSpeakingRef.current = false;
             setActiveSpokenWord('');
-            lastAriaSpokenTimeRef.current = Date.now();
 
             const nextIdx = idx + 1;
             currentSentenceIdxRef.current = nextIdx;
             setCurrentSentenceIdx(nextIdx);
 
-            // Natural Teacher Breathing Cadence: calm pause between points
-            let pauseDurationMs = 600; // Calm natural breath between sentences
+            // Natural Teacher Breathing Cadence: clear pauses between sentences, headings, and bullet points
+            let pauseDurationMs = 400; // Natural short breath between normal sentences
             if (/[?？]\s*$/.test(spokenText)) {
-              pauseDurationMs = 1250; // Deep pause for reflection questions
+              pauseDurationMs = 750; // Reflective pause for questions
+            } else if (/^(welcome|in this lesson|let's examine|now let's pay|to wrap up|next let's review|regarding)/i.test(spokenText) || /[:—]\s*$/.test(spokenText)) {
+              pauseDurationMs = 800; // Longer pause after section headings and introductions
+            } else if (/^(first and foremost|to begin with|next|also|furthermore|additionally|another important|step \d+)/i.test(spokenText)) {
+              pauseDurationMs = 650; // Distinct pause after bullet points and sequential steps
             } else if (/[!！]\s*$/.test(spokenText) || /warning|hazard|caution|danger|safety|emergency|ppe|mandatory/i.test(spokenText)) {
-              pauseDurationMs = 950; // Pause for emphasis on critical safety points
-            } else if (/[:;—]\s*$/.test(spokenText)) {
-              pauseDurationMs = 450;
+              pauseDurationMs = 600; // Pause for emphasis on critical safety terms
             }
 
             if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
@@ -2297,115 +2681,208 @@ const CoursePlayer = ({
             }, pauseDurationMs);
           };
 
-          // Always instantiate a fresh SpeechSynthesisUtterance (never reuse old instances)
-          const utterance = new SpeechSynthesisUtterance(spokenText);
-          const voices = window.speechSynthesis.getVoices();
-          const matchedVoice = selectVoiceForLanguage(voices, preferredVoiceLangCode);
-          if (matchedVoice) {
-            utterance.voice = matchedVoice;
-            utterance.lang = matchedVoice.lang;
-          } else {
-            utterance.lang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US';
-          }
+          // Primary: Studio Neural TTS (Microsoft Edge Neural TTS: Jenny for Female, Christopher for Male)
+          // Studio neural TTS produces broadcast-grade human waveforms. Single-source audio eliminates dual-voice overlap.
+          try {
+            const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male';
+            const effectiveGender = isMale ? 'MALE' : 'FEMALE';
 
-          // Calm, measured, comfortable teacher pace (0.88 - 0.90) so it doesn't sound like a rushed book reader
-          let sentenceRate = aiVoiceConfig?.rate ? Math.min(aiVoiceConfig.rate, 0.90) : 0.89;
-          let sentencePitch = aiVoiceConfig?.pitch || 1.0;
-          if (/[?？]\s*$/.test(spokenText)) {
-            // Conversational upward intonation on questions
-            sentencePitch = Math.min(1.15, sentencePitch * 1.04);
-          } else if (/warning|hazard|caution|danger|safety|emergency|ppe|mandatory/i.test(spokenText)) {
-            // Measured gravity for critical rules
-            sentenceRate = Math.max(0.82, sentenceRate * 0.95);
-          }
-          utterance.rate = sentenceRate;
-          utterance.pitch = sentencePitch;
+            const audioUrl = api.getTtsAudioUrl(spokenText, {
+              language: selectedLanguageCode,
+              gender: effectiveGender,
+              rate: tutorRate,
+              pitch: tutorPitch
+            });
 
-          // Prevent Chrome V8 garbage collection mid-speech bug
-          utteranceRef.current = utterance;
-          window._activeSpeechUtterance = utterance;
+            // Strictly neutralize any existing audio or speech synthesis
+            try { window.speechSynthesis.cancel(); } catch (_) {}
+            window._activeSpeechUtterance = null;
 
-          utterance.onstart = () => {
-            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-            voiceManagerRef.current?.noteSpokenText?.(spokenText);
-            const ttsDuration = Math.round(performance.now() - ttsStartTime);
-            console.log(`[PERF:TTS_END] Teacher voice active in ${ttsDuration}ms`);
-            setIsAriaSpeaking(true);
-            isAriaSpeakingRef.current = true;
-            setPipelineState('PLAYING');
+            if (window._skillbridgeCurrentAudio) {
+              try {
+                window._skillbridgeCurrentAudio.onended = null;
+                window._skillbridgeCurrentAudio.onerror = null;
+                window._skillbridgeCurrentAudio.onplay = null;
+                window._skillbridgeCurrentAudio.ontimeupdate = null;
+                window._skillbridgeCurrentAudio.pause();
+                window._skillbridgeCurrentAudio.currentTime = 0;
+                window._skillbridgeCurrentAudio.src = '';
+              } catch (_) { }
+              window._skillbridgeCurrentAudio = null;
+            }
 
-            // Watchdog timer to automatically recover if browser speech engine stalls
-            const watchdogMs = Math.max(7500, Math.min(25000, spokenText.length * 110 + 3500));
-            if (watchdogRef.current) clearTimeout(watchdogRef.current);
-            watchdogRef.current = setTimeout(() => {
-              if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-              console.warn(`[TTS:WATCHDOG] Statement ${idx + 1} timed out in browser engine. Recovering cleanly...`);
-              try { window.speechSynthesis.resume?.(); } catch (e) {}
-              setTimeout(() => {
-                if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-                if (isAriaSpeakingRef.current) {
-                  handleSentenceAdvance();
+            // Pipeline pre-fetch upcoming sentences immediately in the background
+            for (let offset = 1; offset <= 2; offset++) {
+              const targetIdx = idx + offset;
+              if (targetIdx < sentences.length && !preloadedAudioMap.current.has(targetIdx)) {
+                const textToPreload = cleanForSpeech(sentences[targetIdx]);
+                if (textToPreload) {
+                  try {
+                    const targetUrl = api.getTtsAudioUrl(textToPreload, {
+                      language: selectedLanguageCode,
+                      gender: effectiveGender,
+                      rate: tutorRate,
+                      pitch: tutorPitch
+                    });
+                    const pre = new Audio(targetUrl);
+                    pre.preload = 'auto';
+                    pre.load();
+                    preloadedAudioMap.current.set(targetIdx, pre);
+                  } catch (_) { }
                 }
-              }, 1000);
-            }, watchdogMs);
-          };
-
-          // REAL-TIME VISEME LIP-SYNC WORD BOUNDARY
-          utterance.onboundary = (event) => {
-            if (isCancelled || !isMountedRef.current || !playingRef.current) return;
-            if (event.name === 'word') {
-              const word = spokenText.substring(event.charIndex, event.charIndex + (event.charLength || 6)).trim();
-              setActiveSpokenWord(word);
-              setActiveCharIndex(event.charIndex);
+              }
             }
-          };
 
-          utterance.onend = () => {
-            handleSentenceAdvance();
-          };
+            // Check if this sentence was already pre-buffered into memory
+            let audio = preloadedAudioMap.current.get(idx);
+            if (!audio || audio.error) {
+              audio = new Audio(audioUrl);
+              audio.preload = 'auto';
+            }
+            preloadedAudioMap.current.delete(idx);
+            window._skillbridgeCurrentAudio = audio;
 
-          utterance.onerror = (e) => {
-            if (e?.error === 'canceled' || e?.error === 'interrupted') return;
-            console.warn('Speech synthesis error:', e);
-            handleSentenceAdvance();
-          };
+            let hasStarted = false;
+            let hasAdvanced = false;
+            let playbackWatchdog = null;
+            let canplayTimer = null;
 
-          // Clear any colliding audio before speaking
-          if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-            window.speechSynthesis.cancel();
-          }
+            const clearTimers = () => {
+              if (playbackWatchdog) { clearTimeout(playbackWatchdog); playbackWatchdog = null; }
+              if (canplayTimer) { clearTimeout(canplayTimer); canplayTimer = null; }
+            };
 
-          // Short micro-delay ensures browser audio queue is ready
-          setTimeout(() => {
-            if (isCancelled || !playingRef.current || !isMountedRef.current) return;
-            try {
-              window.speechSynthesis.speak(utterance);
-              window.speechSynthesis.resume?.();
-            } catch (err) {
-              console.error('Speech speak failed:', err);
+            const triggerAdvance = () => {
+              if (hasAdvanced || isCancelled || !playingRef.current || !isMountedRef.current) return;
+              hasAdvanced = true;
+              clearTimers();
+              setIsAriaSpeaking(false);
+              isAriaSpeakingRef.current = false;
               handleSentenceAdvance();
-            }
-          }, 40);
+            };
 
+            const onAudioStart = () => {
+              if (hasStarted || isCancelled || !playingRef.current || !isMountedRef.current) return;
+              hasStarted = true;
+              clearTimers();
+
+              // Strictly cancel any lingering or background Web Speech synthesis
+              try { window.speechSynthesis.cancel(); } catch (_) {}
+              utteranceRef.current = null;
+              window._activeSpeechUtterance = null;
+
+              voiceManagerRef.current?.noteSpokenText?.(spokenText);
+              setIsAriaSpeaking(true);
+              isAriaSpeakingRef.current = true;
+              setPipelineState('PLAYING');
+
+              // Safety playback watchdog: if onended never fires or sub-frame stall occurs, auto-advance
+              const rawDuration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : Math.max(3, spokenText.length / 8);
+              const watchdogDurationMs = Math.ceil(rawDuration * 1000) + 2500;
+              playbackWatchdog = setTimeout(() => {
+                if (!hasAdvanced && playingRef.current && isMountedRef.current) {
+                  console.warn(`[VOICE] Playback watchdog reached for sentence ${idx}. Advancing cleanly...`);
+                  triggerAdvance();
+                }
+              }, watchdogDurationMs);
+            };
+
+            audio.onplay = onAudioStart;
+
+            audio.ontimeupdate = () => {
+              if (audio.duration > 0) {
+                const ratio = audio.currentTime / audio.duration;
+                const words = spokenText.split(' ');
+                const wordIdx = Math.min(words.length - 1, Math.floor(ratio * words.length));
+                setActiveSpokenWord(words[wordIdx] || '');
+              }
+            };
+
+            audio.onended = () => {
+              triggerAdvance();
+            };
+
+            audio.onerror = (e) => {
+              console.warn(`[VOICE] Studio neural stream notice for sentence ${idx}:`, e);
+              triggerAdvance();
+            };
+
+            const startPlay = () => {
+              if (!isMountedRef.current || isCancelled || !playingRef.current || hasStarted) return;
+              const playPromise = audio.play();
+              if (playPromise !== undefined) {
+                playPromise.catch((playErr) => {
+                  console.warn('[VOICE] Neural audio playback deferred:', playErr?.message);
+                  setTimeout(() => {
+                    if (!hasStarted && playingRef.current && isMountedRef.current && !hasAdvanced) {
+                      const retry = audio.play();
+                      if (retry !== undefined) {
+                        retry.catch(() => triggerAdvance());
+                      }
+                    }
+                  }, 600);
+                });
+              }
+            };
+
+            // Agile Buffering Watchdog: give remote synthesis 8s max before advancing cleanly
+            canplayTimer = setTimeout(() => {
+              if (!hasStarted && playingRef.current && isMountedRef.current) {
+                console.warn('[VOICE] Neural audio stream threshold reached (8s). Advancing cleanly...');
+                triggerAdvance();
+              }
+            }, 8000);
+
+            const onAudioReady = () => {
+              audio.removeEventListener('canplay', onAudioReady);
+              audio.removeEventListener('canplaythrough', onAudioReady);
+              audio.removeEventListener('loadeddata', onAudioReady);
+              startPlay();
+            };
+
+            // Only trigger playback once audio has buffered data to avoid abort glitches
+            if (audio.readyState >= 2) {
+              startPlay();
+            } else {
+              audio.addEventListener('canplay', onAudioReady, { once: true });
+              audio.addEventListener('canplaythrough', onAudioReady, { once: true });
+              audio.addEventListener('loadeddata', onAudioReady, { once: true });
+              audio.load();
+            }
+          } catch (err) {
+            console.warn('[VOICE] Neural audio init notice:', err);
+            triggerAdvance();
+          }
         } catch (e) {
-          console.warn('Speech synthesis failed:', e);
+          console.warn('Speech execution notice:', e);
+          handleSentenceAdvance();
         }
       };
-
-      // Keep Chrome TTS alive during lecture playback
-      const resumeInterval = setInterval(() => {
-        if (playingRef.current && isAriaSpeakingRef.current && isMountedRef.current) {
-          try { window.speechSynthesis.resume?.(); } catch (e) { }
-        }
-      }, 1500);
 
       speak(currentSentenceIdxRef.current || 0);
 
       return () => {
         isCancelled = true;
-        clearInterval(resumeInterval);
-        if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
-        if (watchdogRef.current) clearTimeout(watchdogRef.current);
+        if (speechTimeoutRef.current) {
+          clearTimeout(speechTimeoutRef.current);
+          speechTimeoutRef.current = null;
+        }
+        if (watchdogRef.current) {
+          clearTimeout(watchdogRef.current);
+          watchdogRef.current = null;
+        }
+        if (window._skillbridgeCurrentAudio) {
+          try {
+            window._skillbridgeCurrentAudio.onended = null;
+            window._skillbridgeCurrentAudio.onerror = null;
+            window._skillbridgeCurrentAudio.onplay = null;
+            window._skillbridgeCurrentAudio.ontimeupdate = null;
+            window._skillbridgeCurrentAudio.pause();
+            window._skillbridgeCurrentAudio.currentTime = 0;
+            window._skillbridgeCurrentAudio.src = '';
+            window._skillbridgeCurrentAudio = null;
+          } catch (e) { }
+        }
         if (utteranceRef.current) {
           utteranceRef.current.onstart = null;
           utteranceRef.current.onend = null;
@@ -2414,6 +2891,7 @@ const CoursePlayer = ({
           utteranceRef.current = null;
         }
         window._activeSpeechUtterance = null;
+        try { window.speechSynthesis.cancel(); } catch (e) { }
         const isTutorGreetingOrSpeaking = Boolean(
           voiceManagerRef.current?.state === TutorState.ARIA_GREETING ||
           voiceManagerRef.current?.state === TutorState.ARIA_SPEAKING ||
@@ -2423,13 +2901,30 @@ const CoursePlayer = ({
         if (!isTutorGreetingOrSpeaking) {
           setIsAriaSpeaking(false);
           isAriaSpeakingRef.current = false;
-          try { window.speechSynthesis.cancel(); } catch (e) { }
         }
         setActiveSpokenWord('');
       };
     } else {
-      if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
-      if (watchdogRef.current) clearTimeout(watchdogRef.current);
+      if (speechTimeoutRef.current) {
+        clearTimeout(speechTimeoutRef.current);
+        speechTimeoutRef.current = null;
+      }
+      if (watchdogRef.current) {
+        clearTimeout(watchdogRef.current);
+        watchdogRef.current = null;
+      }
+      if (window._skillbridgeCurrentAudio) {
+        try {
+          window._skillbridgeCurrentAudio.onended = null;
+          window._skillbridgeCurrentAudio.onerror = null;
+          window._skillbridgeCurrentAudio.onplay = null;
+          window._skillbridgeCurrentAudio.ontimeupdate = null;
+          window._skillbridgeCurrentAudio.pause();
+          window._skillbridgeCurrentAudio.currentTime = 0;
+          window._skillbridgeCurrentAudio.src = '';
+          window._skillbridgeCurrentAudio = null;
+        } catch (e) { }
+      }
       if (utteranceRef.current) {
         utteranceRef.current.onstart = null;
         utteranceRef.current.onend = null;
@@ -2522,72 +3017,141 @@ const CoursePlayer = ({
     const userMsg = chatInput.trim()
     setChatInput('')
 
-    // If lecture is playing, save exact position and pause
-    if (playingRef.current) {
-      wasLecturePlayingRef.current = true
-      savedLecturePositionRef.current = currentSentenceIdxRef.current
-      window.speechSynthesis.cancel()
-      setPlaying(false)
-      console.log(`[LiveTutor] Typed question received during lecture. Paused at Concept ${savedLecturePositionRef.current + 1}.`)
+    // If lecture is playing, immediately stop lecture synchronously
+    const wasPlaying = Boolean(playingRef.current || playing);
+    if (wasPlaying) {
+      wasLecturePlayingRef.current = true;
+      savedLecturePositionRef.current = currentSentenceIdxRef.current;
+      playingRef.current = false;
+      setPlaying(false);
+      voiceManagerRef.current?.setLecturePlaying(false);
     }
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
+    }
+    if (watchdogRef.current) {
+      clearTimeout(watchdogRef.current);
+      watchdogRef.current = null;
+    }
+    if (utteranceRef.current) {
+      utteranceRef.current.onstart = null;
+      utteranceRef.current.onend = null;
+      utteranceRef.current.onerror = null;
+      utteranceRef.current.onboundary = null;
+      utteranceRef.current = null;
+    }
+    window._activeSpeechUtterance = null;
+    if (window._skillbridgeCurrentAudio) {
+      try {
+        window._skillbridgeCurrentAudio.onended = null;
+        window._skillbridgeCurrentAudio.onerror = null;
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      } catch (e) { }
+    }
+    try {
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
 
     if (followUpTimerRef.current) {
       clearTimeout(followUpTimerRef.current)
       followUpTimerRef.current = null
     }
 
+    // Synchronously engage lockouts so the microphone will NOT listen to the tutor's own audio
+    isAnsweringRef.current = true
+    voiceManagerRef.current?.setState?.(TutorState.PROCESSING)
+    voiceManagerRef.current?.setConversationMode?.(true)
+
     setChatMessages(prev => [...prev, { sender: 'user', text: userMsg }])
     setChatLoading(true)
     inConversationModeRef.current = true
     setVoiceStatusText(`✨ Question: "${userMsg}"`)
 
+    // 60s Safety Watchdog prevents permanent answering lock if network or LLM is delayed
+    const chatAnsweringWatchdog = setTimeout(() => {
+      if (isMountedRef.current && isAnsweringRef.current) {
+        console.warn('[CHAT] Tutor answering watchdog triggered (60s)');
+        isAnsweringRef.current = false;
+        setChatLoading(false);
+      }
+    }, 60000);
+
     const currentConceptText = (sentencesRef.current && sentencesRef.current[savedLecturePositionRef.current]) ||
       (sentencesRef.current && sentencesRef.current[currentSentenceIdxRef.current]) ||
       activeLessonRef.current?.title || ''
 
-    api.chatWithTutor(course.id, {
+    const courseIdToUse = course?.id || activeCourseIdRef.current || 'active-course';
+    api.chatWithTutor(courseIdToUse, {
       message: userMsg,
+      courseTitle: course?.title || 'Safety & Operations Course',
       lessonTitle: activeLessonRef.current?.title,
       currentConcept: currentConceptText,
       language: selectedLanguageCode,
-      conversationHistory: chatMessages.slice(-8),
+      conversationHistory: (chatMessagesRef.current || []).slice(-8),
       aiName: aiTutorName
     })
       .then(res => {
-        if (!isMountedRef.current) return;
+        if (!isMountedRef.current) {
+          clearTimeout(chatAnsweringWatchdog);
+          isAnsweringRef.current = false;
+          return;
+        }
         const ariaAnswer = res.text || res.reply || "I'm ready to help with your course questions!"
         setChatMessages(prev => [...prev, { sender: 'aria', text: ariaAnswer }])
         setVoiceStatusText(`🤖 ${aiTutorName} is answering...`)
+        setChatLoading(false)
+
         speakAriaAnswer(ariaAnswer, () => {
-          if (handsFreeVoiceRef.current) {
-            isAwakeRef.current = true
-            inConversationModeRef.current = true
-            voiceManagerRef.current?.setState?.(TutorState.FOLLOW_UP_LISTENING)
-            setVoiceStatusText(`💬 ${aiTutorName} is listening for follow-up (or say "Resume")...`)
+          clearTimeout(chatAnsweringWatchdog);
+          isAnsweringRef.current = false;
+          if (wasLecturePlayingRef.current) {
+            const resumePhrase = RESUME_COURSE_PHRASES[selectedLanguageCode] || RESUME_COURSE_PHRASES.en;
+            setVoiceStatusText(`▶️ ${resumePhrase}`);
+            setTimeout(() => {
+              speakAriaAnswer(resumePhrase, () => {
+                resumeLectureFromExactPosition();
+                voiceManagerRef.current?.returnToSleep();
+              });
+            }, 400);
+          } else if (handsFreeVoiceRef.current) {
+            isAwakeRef.current = true;
+            inConversationModeRef.current = true;
+            voiceManagerRef.current?.setState?.(TutorState.FOLLOW_UP_LISTENING);
+            setVoiceStatusText(`💬 ${aiTutorName} is listening for follow-up (or say "Resume")...`);
             followUpTimerRef.current = setTimeout(() => {
-              voiceManagerRef.current?.returnToSleep?.()
-              resumeLectureFromExactPosition()
-            }, 6000)
+              voiceManagerRef.current?.returnToSleep?.();
+              resumeLectureFromExactPosition();
+            }, 6000);
           } else {
-            resumeLectureFromExactPosition()
+            voiceManagerRef.current?.returnToSleep?.();
+            setVoiceStatusText('');
           }
         })
-        setChatLoading(false)
       })
       .catch(err => {
+        clearTimeout(chatAnsweringWatchdog);
+        isAnsweringRef.current = false;
         if (!isMountedRef.current) return;
-        console.error('Chat tutor error:', err)
+        console.error('Chat tutor error:', err);
         setChatMessages(prev => [...prev, { sender: 'aria', text: `⚠️ ${err.message || 'The AI tutor is temporarily unavailable. Please try again in a moment.'}` }])
         setChatLoading(false)
-        setTimeout(() => {
-          resumeLectureFromExactPosition()
-        }, 1500)
+        if (wasLecturePlayingRef.current) {
+          setTimeout(() => {
+            resumeLectureFromExactPosition()
+          }, 1500)
+        } else {
+          voiceManagerRef.current?.returnToSleep?.()
+          setVoiceStatusText('')
+        }
       })
   }
 
   // Comprehensive Back button exit handler ensuring immediate speech cancellation
   const handleExit = () => {
-    console.log('[CoursePlayer] Back button clicked: halting all speech synthesis and audio streams.');
 
     // 1. Immediately flag unmounted and stop all playback flags BEFORE triggering Web Speech cancel
     isMountedRef.current = false;
@@ -2639,7 +3203,6 @@ const CoursePlayer = ({
 
     if (activeLessonRef.current?.id && !isLessonDone(activeLessonRef.current.id)) {
       saveLessonPlayback(activeLessonRef.current.id, currentSentenceIdxRef.current, elapsedSecondsRef.current);
-      console.log(`[CoursePlayer] Saved progress on exit for Lesson ${activeLessonRef.current.id} at Concept ${currentSentenceIdxRef.current + 1} (${elapsedSecondsRef.current}s)`);
     }
 
     onExit?.();
@@ -2769,7 +3332,15 @@ const CoursePlayer = ({
                             disabled={!isUnlocked}
                             onClick={() => {
                               if (isUnlocked) {
-                                window.speechSynthesis.cancel()
+                                try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
                                 setActiveLessonId(lesson.id)
                                 setCurrentSentenceIdx(0)
                                 setElapsedSeconds(0)
@@ -2899,10 +3470,11 @@ const CoursePlayer = ({
                   {/* Main Display Canvas: Slide Screen Only */}
                   <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden relative">
                     {/* Non-intrusive floating explanation badge while assistant pre-warms explanation */}
+                    {explanationError && <button className="absolute top-2 left-2 z-30 rounded bg-slate-900 p-2 text-white" onClick={() => setRetryCount(count => count + 1)}>Couldn?t load the lesson in {preferredLanguage}. Retry</button>}
                     {loadingExplanation && (
                       <div className="absolute top-2 left-2 right-2 z-30 bg-slate-900/90 border border-[#ff8c21]/40 backdrop-blur-md rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs text-[#ff8c21] shadow-lg animate-fadeIn">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                        <span className="font-semibold text-[11px]">{aiTutorName} & Qwen are preparing explanation for this slide...</span>
+                        <span className="font-semibold text-[11px]">Preparing this lesson in {currentLangObj.native}?</span>
                       </div>
                     )}
 
@@ -3037,27 +3609,28 @@ const CoursePlayer = ({
                     type="button"
                     onClick={handleAvatarCall}
                     title={`Click to call ${aiTutorName} (or say "${aiWakeWord}")`}
-                    className={`relative flex items-center justify-center h-28 w-28 sm:h-36 sm:w-36 md:h-40 md:w-40 lg:h-44 lg:w-44 rounded-full bg-[#182337] border-2 sm:border-[2.5px] cursor-pointer transition-all duration-300 hover:scale-105 active:scale-95 group focus:outline-none focus:ring-2 focus:ring-[#ff8c21]/50 ${
+                    className={`relative flex items-center justify-center h-28 w-28 sm:h-36 sm:w-36 md:h-40 md:w-40 lg:h-44 lg:w-44 rounded-full bg-[#182337] border-2 sm:border-[2.5px] cursor-pointer focus:outline-none ${
                       isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING
                         ? 'border-[#ff8c21]/90 shadow-[0_0_30px_rgba(245,130,32,0.4)] avatar-active ring-4 ring-[#ff8c21]/20'
                         : tutorVoiceState === TutorState.ACTIVE_LISTENING || tutorVoiceState === TutorState.FOLLOW_UP_LISTENING
                           ? 'border-emerald-500 shadow-[0_0_30px_rgba(16,185,129,0.35)] ring-4 ring-emerald-500/20 animate-pulse'
-                          : 'border-[#293c5d] hover:border-[#ff8c21]/70 shadow-2xl hover:shadow-[0_0_25px_rgba(245,130,32,0.25)]'
+                          : 'border-[#293c5d] shadow-2xl'
                     }`}
                   >
-                    <span className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl select-none filter drop-shadow-md group-hover:scale-110 transition-transform">
-                      🤖
-                    </span>
+                    <div className="w-full h-full rounded-full overflow-hidden flex items-center justify-center pointer-events-none">
+                      <LipSyncAvatar
+                        character={(aiVoiceConfig?.gender || '').toLowerCase() === 'male' ? 'male' : 'female'}
+                        isSpeaking={isAriaSpeaking || playing || tutorVoiceState === TutorState.ARIA_SPEAKING || tutorVoiceState === TutorState.ARIA_GREETING}
+                        audioElement={typeof window !== 'undefined' ? window._skillbridgeCurrentAudio : null}
+                        size={176}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
 
                     {/* Calling / Listening ripple ring when awake */}
                     {(tutorVoiceState === TutorState.ACTIVE_LISTENING || tutorVoiceState === TutorState.FOLLOW_UP_LISTENING) && (
                       <span className="absolute -inset-2 rounded-full border-2 border-emerald-400 animate-ping opacity-60 pointer-events-none" />
                     )}
-
-                    {/* Quick Call icon overlay badge */}
-                    <span className="absolute bottom-1 right-1 h-7 w-7 rounded-full bg-[#ff8c21] text-white flex items-center justify-center text-xs shadow-md border-2 border-[#182337] group-hover:scale-110 transition-transform" title="Call AI Avatar">
-                      🎙️
-                    </span>
                   </button>
 
                   {/* ARIA AI TUTOR Pill Badge & Call Hint */}
@@ -3149,7 +3722,15 @@ const CoursePlayer = ({
                   setElapsedSeconds(newSeconds)
                   setCurrentSentenceIdx(newIdx)
                   if (playing) {
-                    window.speechSynthesis.cancel()
+                    try {
+      if (window._skillbridgeCurrentAudio) {
+        window._skillbridgeCurrentAudio.pause();
+        window._skillbridgeCurrentAudio.currentTime = 0;
+        window._skillbridgeCurrentAudio = null;
+      }
+      window.speechSynthesis.cancel();
+      preloadedAudioMap.current.clear();
+    } catch (e) { }
                   }
                 }}
               >
@@ -3252,8 +3833,13 @@ const CoursePlayer = ({
                   className={`flex items-start gap-2.5 ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   {msg.sender === 'aria' && (
-                    <div className="h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] text-sm flex items-center justify-center shrink-0 mt-0.5 shadow-xs select-none">
-                      🤖
+                    <div className="h-8 w-8 rounded-full bg-[#182337] border border-[#ff8c21] overflow-hidden shrink-0 mt-0.5 shadow-xs select-none">
+                      <img
+                        src={`/avatars/${(aiVoiceConfig?.gender || '').toLowerCase() === 'male' ? 'male' : 'female'}/base.png`}
+                        alt="AI Tutor"
+                        className="w-full h-full object-cover"
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
                     </div>
                   )}
 

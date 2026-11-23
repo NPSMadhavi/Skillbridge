@@ -1,0 +1,5 @@
+export type Shape = "X"|"A"|"B"|"C"|"D"|"E"|"F"|"G"|"H";
+export type Cue = { startMs: number; endMs: number; shape: Shape };
+export type LipSyncOptions = { assetsUrl?: string; source?: HTMLMediaElement|MediaStream|AudioNode|ArrayBuffer|string; mode?: "auto"|"precomputed"|"live"; audioContext?: AudioContext; cues?: Cue[]|{mouthCues: unknown[]}; headMotion?: boolean; blink?: boolean; seed?: number; size?: number; onState?: (state: AvatarState)=>void };
+export type AvatarState = { tMs: number; mouth: Record<Shape, number>&{dominant?: Shape}; eyes: { blink: number }; head: { x:number;y:number;rotate:number;scale:number }; body:{ breath:number } };
+export declare function createLipSyncAvatar(target: HTMLElement|HTMLCanvasElement, options?: LipSyncOptions): Promise<{start():void;stop():void;setSource(source: LipSyncOptions["source"]):void;setCues(cues: LipSyncOptions["cues"]):void;setVisemeTimeline(timeline: Cue[]|{mouthCues: unknown[]}):void;renderAt(tMs:number):AvatarState;getState():AvatarState;destroy():void}>;

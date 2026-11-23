@@ -650,30 +650,43 @@ export const api = {
 
   chatWithTutor: async (courseId, chatData) => {
     const url = `${API_BASE_URL}/courses/${courseId}/chat`;
+    const controller = new AbortController();
+    const abortTimeout = setTimeout(() => controller.abort(), 60000);
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: getHeaders(false),
-      body: JSON.stringify({
-        message: chatData.message || chatData.text,
-        lessonTitle: chatData.lessonTitle,
-        currentConcept: chatData.currentConcept,
-        language: chatData.language,
-        conversationHistory: chatData.conversationHistory || [],
-        aiName: chatData.aiName || chatData.assistantName,
-      }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to chat with AI Tutor.');
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: getHeaders(false),
+        signal: controller.signal,
+        body: JSON.stringify({
+          message: chatData.message || chatData.text,
+          courseTitle: chatData.courseTitle,
+          lessonTitle: chatData.lessonTitle,
+          currentConcept: chatData.currentConcept,
+          language: chatData.language,
+          conversationHistory: chatData.conversationHistory || [],
+          aiName: chatData.aiName || chatData.assistantName,
+        }),
+      });
+      clearTimeout(abortTimeout);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to chat with AI Tutor.');
+      }
+      const data = await res.json();
+      return {
+        text: data.reply || data.text || "I'm ready to help with your course questions!",
+        reply: data.reply || data.text || "I'm ready to help with your course questions!",
+        language: data.language,
+        assistantName: data.assistantName
+      };
+    } catch (err) {
+      clearTimeout(abortTimeout);
+      if (err.name === 'AbortError') {
+        throw new Error('AI Tutor response timed out (60s). Please try again.');
+      }
+      throw err;
     }
-    const data = await res.json();
-    return {
-      text: data.reply || data.text || "I'm ready to help with your course questions!",
-      reply: data.reply || data.text || "I'm ready to help with your course questions!",
-      language: data.language,
-      assistantName: data.assistantName
-    };
   },
 
   updateCourseProgressDetails: async (courseId, details) => {
@@ -769,8 +782,9 @@ export const api = {
     return data;
   },
 
-  getCourseDetail: async (id) => {
+  getCourseDetail: async (id, signal) => {
     const res = await fetch(`${API_BASE_URL}/courses/${id}`, {
+      signal,
       method: 'GET',
       headers: getHeaders(false),
     });
@@ -823,8 +837,9 @@ export const api = {
     return null;
   },
 
-  getLessonExplanation: async (id, lessonId, lessonTitle, language) => {
+  getLessonExplanation: async (id, lessonId, lessonTitle, language, signal) => {
     const res = await fetch(`${API_BASE_URL}/courses/${id}/lessons/${lessonId}/explain`, {
+      signal,
       method: 'POST',
       headers: getHeaders(false),
       body: JSON.stringify({ lessonTitle, language }),
@@ -956,13 +971,14 @@ export const api = {
   },
 
   getTtsAudioUrl: (text, options = {}) => {
-    const { voice, gender = 'FEMALE', rate = 1.0, pitch = 1.0 } = options;
+    const { voice, language, gender = 'FEMALE', rate = 1.0, pitch = 1.0 } = options;
     const params = new URLSearchParams({
       text: (text || '').trim(),
       gender,
       rate: String(rate),
       pitch: String(pitch),
     });
+    if (language) params.append('language', language);
     if (voice) params.append('voice', voice);
     const headers = getHeaders(false);
     const token = headers['Authorization']?.replace('Bearer ', '');

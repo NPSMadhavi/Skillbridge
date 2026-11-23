@@ -21,6 +21,8 @@ export class VectorChunkService {
     try {
       await prisma.$executeRawUnsafe(`
         ALTER TABLE "CourseChunk" 
+          ADD COLUMN IF NOT EXISTS "lessonId" TEXT,
+          ADD COLUMN IF NOT EXISTS "content" TEXT,
           ADD COLUMN IF NOT EXISTS "topic" TEXT,
           ADD COLUMN IF NOT EXISTS "subtopic" TEXT,
           ADD COLUMN IF NOT EXISTS "concept" TEXT,
@@ -109,11 +111,12 @@ export class VectorChunkService {
     let cleanIndex = 0;
 
     for (const c of chunks) {
-      const text = (c.chunkText || c.text || '').trim();
-      const concept = (c.concept || c.title || '').trim();
+      const rawText = (c.chunkText || c.text || '').trim();
+      const text = stripSlidePlaceholders(cleanUnsupportedWords(rawText));
+      const concept = cleanUnsupportedWords((c.concept || c.title || '').trim());
 
-      // Filter out trivial noise, broken headers, or fragments under 40 chars
-      if (text.length < 40) continue;
+      // Filter out trivial noise, broken headers, or fragments under 35 chars
+      if (text.length < 35) continue;
       if (concept && isGarbageTitle(concept) && text.length < 120) continue;
 
       // Filter exact duplicate texts
@@ -429,21 +432,22 @@ export class VectorChunkService {
           const vectorStr = `[${embeddingArr.join(',')}]`;
           const rows = await prisma.$queryRawUnsafe(
             `INSERT INTO "CourseChunk" (
-               "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
+               "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
                "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
                "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
                "embedding", "createdAt"
              )
              VALUES (
-               gen_random_uuid()::text, $1, $2, $3, $4, $5, $6,
-               $7, $8, $9::jsonb, $10, $11,
-               $12::jsonb, $13::jsonb, $14::jsonb, $15,
-               $16::vector, NOW()
+               gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
+               $8, $9, $10::jsonb, $11, $12,
+               $13::jsonb, $14::jsonb, $15::jsonb, $16,
+               $17::vector, NOW()
              )
              RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
             courseId,
             chunk.chunkIndex,
             chunk.chunkText,
+            chunk.lessonId || null,
             chunk.topic,
             chunk.subtopic,
             chunk.concept,
@@ -469,19 +473,20 @@ export class VectorChunkService {
         try {
           const rows = await prisma.$queryRawUnsafe(
             `INSERT INTO "CourseChunk" (
-               "id", "courseId", "chunkIndex", "chunkText", "topic", "subtopic", "concept",
+               "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
                "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
                "keyPoints", "relatedConcepts", "metadata", "semanticSummary", "createdAt"
              )
              VALUES (
-               gen_random_uuid()::text, $1, $2, $3, $4, $5, $6,
-               $7, $8, $9::jsonb, $10, $11,
-               $12::jsonb, $13::jsonb, $14::jsonb, $15, NOW()
+               gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
+               $8, $9, $10::jsonb, $11, $12,
+               $13::jsonb, $14::jsonb, $15::jsonb, $16, NOW()
              )
              RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
             courseId,
             chunk.chunkIndex,
             chunk.chunkText,
+            chunk.lessonId || null,
             chunk.topic,
             chunk.subtopic,
             chunk.concept,
@@ -531,7 +536,8 @@ export class VectorChunkService {
     const results = await prisma.$queryRawUnsafe(
       `SELECT "id", "chunkIndex" AS "chunk_index", "sourcePage" AS "page_number",
               "sourceSlides" AS "source_slides", "sourceSection" AS "source_section",
-              "chunkText" AS "text", "topic", "subtopic", "concept", "chunkType",
+              "chunkText" AS "text", "chunkText" AS "content", "topic", "subtopic", "concept", "chunkType",
+              "lessonId", "prerequisites",
               "keyPoints" AS "key_points", "relatedConcepts" AS "related_concepts",
               "metadata", "semanticSummary",
               1 - ("embedding" <=> $1::vector) AS "similarity"
@@ -622,6 +628,36 @@ export class VectorChunkService {
     } catch (e) {
       console.warn(`[pgvector RAG] Vector search notice (${e.message}). Falling back to text retrieval.`);
     }
+
+    // Hybrid retrieval: augment with PostgreSQL keyword text matches
+    try {
+      const cleanKeyword = queryText.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
+      const firstTerms = cleanKeyword.split(/\s+/).filter(t => t.length > 3).slice(0, 3);
+      if (firstTerms.length > 0) {
+        const textResults = await prisma.$queryRawUnsafe(
+          `SELECT "id", "chunkIndex" AS "chunk_index", "sourcePage" AS "page_number",
+                  "sourceSlides" AS "source_slides", "sourceSection" AS "source_section",
+                  "chunkText" AS "text", "chunkText" AS "content", "topic", "subtopic", "concept", "chunkType",
+                  "lessonId", "prerequisites",
+                  "keyPoints" AS "key_points", "relatedConcepts" AS "related_concepts",
+                  "metadata", "semanticSummary",
+                  0.70 AS "similarity"
+           FROM "CourseChunk"
+           WHERE "courseId" = $1 AND ("chunkText" ILIKE $2 OR "concept" ILIKE $2 OR "topic" ILIKE $2)
+           LIMIT $3`,
+          courseId,
+          `%${firstTerms[0]}%`,
+          topK * 2
+        );
+        const existingIds = new Set(vectorResults.map(r => r.id));
+        for (const tr of textResults) {
+          if (!existingIds.has(tr.id)) {
+            vectorResults.push(tr);
+            existingIds.add(tr.id);
+          }
+        }
+      }
+    } catch (_) { }
 
     // If vector search returned results, apply concept/topic relevance weighting
     if (vectorResults && vectorResults.length > 0) {

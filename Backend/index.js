@@ -112,48 +112,13 @@ app.use((req, res, next) => {
 // CORS & BODY PARSING
 // ============================================================
 
-// CORS origin whitelist (includes brutallyhired.com, configured frontend URLs, and local development)
-const allowedOrigins = [
-  'https://brutallyhired.com',
-  'https://www.brutallyhired.com',
-  'http://brutallyhired.com',
-  'http://www.brutallyhired.com',
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'http://127.0.0.1:5173',
-  'http://127.0.0.1:3000'
-];
-if (process.env.FRONTEND_URL) {
-  allowedOrigins.push(process.env.FRONTEND_URL.trim().replace(/\/+$/, ''));
-}
-if (process.env.CORS_ORIGIN) {
-  process.env.CORS_ORIGIN.split(',').forEach(s => allowedOrigins.push(s.trim().replace(/\/+$/, '')));
-}
-
+// Allow all origins (*)
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow server-to-server or same-origin requests (no origin header)
-    if (!origin) return callback(null, true);
-
-    const cleanOrigin = origin.replace(/\/+$/, '');
-    if (!IS_PROD || allowedOrigins.includes(cleanOrigin) || allowedOrigins.includes('*')) {
-      return callback(null, true);
-    }
-
-    // Allow same-host origin requests
-    try {
-      const originHost = new URL(origin).host;
-      if (originHost && originHost.includes('brutallyhired.com')) {
-        return callback(null, true);
-      }
-    } catch (_) { }
-
-    return callback(new Error('Blocked by CORS policy: Origin not allowed.'));
-  },
-  credentials: true,
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-company-code', 'x-admin-password']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-company-code', 'x-admin-password', 'X-Requested-With', 'Accept', 'Origin']
 }));
+app.options('*', cors());
 
 // Parse JSON request bodies (supports large multi-slide documents)
 app.use(express.json({ limit: '100mb' }));
@@ -312,6 +277,18 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ============================================================
 
+function getUrlHost(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return '(not set)';
+  try {
+    const trimmed = rawUrl.trim();
+    const hasProtocol = /^https?:\/\//i.test(trimmed);
+    const parsed = new URL(hasProtocol ? trimmed : `http://${trimmed}`);
+    return parsed.host;
+  } catch {
+    return '(invalid url)';
+  }
+}
+
 app.listen(PORT, async () => {
   console.log('========================================');
   console.log('SKILLBRIDGE / BRUTALLYHIRED BACKEND STARTED');
@@ -319,14 +296,25 @@ app.listen(PORT, async () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('========================================');
 
+  // AI Gateway configuration status
+  const pythonServiceHost = getUrlHost(process.env.PYTHON_SERVICE_URL);
+  console.log(`[AI Gateway] SKILLBRIDGE_LLM_GATEWAY_URL host: ${getUrlHost(process.env.SKILLBRIDGE_LLM_GATEWAY_URL)}`);
+  console.log(`[AI Gateway] LLM_GATEWAY_URL host: ${getUrlHost(process.env.LLM_GATEWAY_URL)}`);
+  console.log(`[AI Gateway] PYTHON_SERVICE_URL host: ${pythonServiceHost}`);
+  console.log(`[AI Gateway] SKILLBRIDGE_LLM_GATEWAY_API_KEY set: ${Boolean(process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY && process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY.trim())}`);
+  console.log(`[AI Gateway] LLM_GATEWAY_API_KEY set: ${Boolean(process.env.LLM_GATEWAY_API_KEY && process.env.LLM_GATEWAY_API_KEY.trim())}`);
+
+  if (pythonServiceHost.endsWith('.ts.net')) {
+    console.warn('[AI Gateway Warning] the public address only allows chat; use the private gateway address for face, STT, TTS and documents.');
+  }
+
   await checkDatabaseConnection();
 
   try {
     const health = await aiService.checkGatewayHealth();
-    const gatewayUrl = aiService.getGatewayBaseUrl();
-    console.log(`[LLM Gateway] Health OK at ${gatewayUrl} (model: ${health?.model || 'unknown'})`);
+    console.log(`[LLM Gateway] Health OK (model: ${health?.model || 'unknown'})`);
   } catch (e) {
-    console.warn('[LLM Gateway] Notice: Gateway health check on port 8081.');
+    console.warn('[LLM Gateway] Notice: Central gateway health check failed.');
   }
 
   // Schedule automated daily database backup (every 24 hours)

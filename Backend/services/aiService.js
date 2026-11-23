@@ -9,20 +9,30 @@ import {
   stripSlidePlaceholders,
   cleanUnsupportedWords
 } from '../utils/contentQuality.js';
+import { formatGatewayError } from '../utils/gatewayError.js';
 
 dotenv.config();
+
+const DEFAULT_GATEWAY_URL = 'https://rtxsvr.tail59469f.ts.net';
 
 class AIService {
   /**
    * Reads SKILLBRIDGE_LLM_GATEWAY_URL and strips a trailing slash.
-   * Chat and health checks must use this same base URL (port 8081).
+   * Chat uses POST {base}/api/v1/chat on this same origin.
    */
   getGatewayBaseUrl() {
     const raw = (
       process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
       process.env.LLM_GATEWAY_URL ||
-      process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
-      'https://rsvragsvr.tail236357.ts.net'
+      DEFAULT_GATEWAY_URL
+    ).trim();
+    return raw.replace(/\/+$/, '');
+  }
+
+  getPythonServiceBaseUrl() {
+    const raw = (
+      process.env.PYTHON_SERVICE_URL ||
+      'http://localhost:8000'
     ).trim();
     return raw.replace(/\/+$/, '');
   }
@@ -31,10 +41,13 @@ class AIService {
     return (
       process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
       process.env.LLM_GATEWAY_API_KEY ||
-      process.env.BRUTALLYHIRED_LLM_API_KEY ||
-      process.env.VEDA_API_KEY ||
       ''
     ).trim();
+  }
+
+  _envFlag(name) {
+    const value = String(process.env[name] || '').trim().toLowerCase();
+    return value === '1' || value === 'true' || value === 'yes' || value === 'on';
   }
 
   getGatewayHeaders(extra = {}) {
@@ -44,7 +57,6 @@ class AIService {
     };
     const apiKey = this.getGatewayApiKey();
     if (apiKey) {
-      headers.Authorization = `Bearer ${apiKey}`;
       headers['X-API-Key'] = apiKey;
     }
     return headers;
@@ -55,21 +67,28 @@ class AIService {
    */
   async checkGatewayHealth() {
     const gatewayUrl = this.getGatewayBaseUrl();
-    const response = await axios.get(`${gatewayUrl}/health`, {
-      timeout: 10000,
-      headers: this.getGatewayHeaders()
-    });
-    if (response.status < 200 || response.status >= 300) {
-      const err = new Error('Local LLM gateway health check failed.');
-      err.status = 503;
+    try {
+      const response = await axios.get(`${gatewayUrl}/health`, {
+        timeout: 10000,
+        headers: this.getGatewayHeaders()
+      });
+      if (response.status < 200 || response.status >= 300) {
+        const err = new Error('Central AI gateway health check failed.');
+        err.status = 503;
+        throw err;
+      }
+      return response.data;
+    } catch (error) {
+      const mapped = formatGatewayError(error);
+      const err = new Error(`Central AI gateway health check failed: ${mapped}`);
+      err.status = error.response?.status || 503;
       throw err;
     }
-    return response.data;
   }
 
   /**
-   * Flattens system prompt, recent conversation, and user/RAG context into the
-   * single `message` string required by the Veda gateway (not an OpenAI messages array).
+   * Flattens recent conversation and the user/RAG prompt into the `message`
+   * string required by POST /api/v1/chat. The system prompt is sent separately.
    */
   _buildGatewayMessage(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
     const MAX_TOTAL_CHARS = 18000;
@@ -152,7 +171,7 @@ class AIService {
       payload.response_format = { type: 'json_object' };
     }
 
-    console.log(`[AIService] Local LLM gateway unavailable or timed out; seamlessly falling back to OpenAI (${model})...`);
+    console.log(`[AIService] Opt-in OpenAI chat fallback (${model}).`);
     const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, {
       headers: {
         'Authorization': `Bearer ${apiKey}`,
@@ -218,62 +237,100 @@ class AIService {
   }
 
   /**
-   * Sends a prompt to the LLM backend with a robust tiered priority:
-   * 1. Local Ollama (Qwen) if running
-   * 2. Self-hosted Veda / Qwen LLM Gateway (SKILLBRIDGE_LLM_GATEWAY_URL)
-   * 3. Cloud OpenAI API fallback (OPENAI_API_KEY)
+   * POST ${SKILLBRIDGE_LLM_GATEWAY_URL}/api/v1/chat
+   * Contract (Central AI Platform Gateway 2.1.1):
+   *   headers: X-API-Key
+   *   body: { message: string, system_prompt?: string }
+   *   response: { model, response, done }
+   */
+  async _callGateway(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+    const apiKey = this.getGatewayApiKey();
+    if (!apiKey) {
+      console.warn('[AIService] SKILLBRIDGE_LLM_GATEWAY_API_KEY is not configured.');
+      throw this._gatewayUnavailableError(503);
+    }
+
+    const gatewayUrl = this.getGatewayBaseUrl();
+    const endpoint = `${gatewayUrl}/api/v1/chat`;
+    const systemParts = [];
+    const system = typeof systemPrompt === 'string' ? systemPrompt.trim() : '';
+    if (system) systemParts.push(system);
+    if (jsonMode) {
+      systemParts.push('Output requirements: Return valid JSON only. Do not wrap the JSON in markdown fences or add commentary.');
+    }
+
+    let message = this._buildGatewayMessage('', userPrompt, false, conversationHistory);
+    if (message.length > 20000) {
+      message = message.slice(0, 20000);
+    }
+    if (!message.trim()) {
+      throw this._gatewayUnavailableError(503);
+    }
+
+    const payload = { message };
+    const systemPromptText = systemParts.join('\n\n').trim();
+    if (systemPromptText) payload.system_prompt = systemPromptText;
+
+    // Suppress Qwen 3.5 deep-reasoning tokens for high-speed voice and chat (< 2s response time)
+    if (!payload.message.startsWith('/no_think')) {
+      payload.message = `/no_think\n${payload.message}`;
+    }
+    if (payload.system_prompt && !payload.system_prompt.startsWith('/no_think')) {
+      payload.system_prompt = `/no_think\n${payload.system_prompt}`;
+    }
+
+    const started = Date.now();
+    try {
+      const response = await axios.post(endpoint, payload, {
+        headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+        timeout: jsonMode ? 180000 : 90000
+      });
+
+      const text = response.data?.response;
+      if (typeof text !== 'string' || !text.trim()) {
+        throw this._gatewayUnavailableError(503);
+      }
+
+      const model = response.data?.model || 'unknown';
+      console.log(`[AIService] Gateway chat served by ${model} in ${Date.now() - started}ms.`);
+      return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    } catch (error) {
+      const mapped = formatGatewayError(error);
+      console.warn(`[AIService] Gateway chat error: ${mapped}`);
+      throw error;
+    }
+  }
+
+  /**
+   * SkillBridge chat, course generation, lesson explanations, and quizzes.
+   * The central gateway is primary. Local Ollama and OpenAI run only when
+   * SKILLBRIDGE_LLM_ALLOW_OLLAMA or SKILLBRIDGE_LLM_ALLOW_OPENAI is true.
    */
   async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
-    // 1. Try local Ollama (Qwen) if available
     try {
-      const ollamaResult = await this._callOllama(systemPrompt, userPrompt, jsonMode, conversationHistory);
-      if (ollamaResult) {
-        return ollamaResult;
-      }
-    } catch (_) {
-      // Ollama not reachable; gracefully proceed to next provider
+      const gatewayResult = await this._callGateway(systemPrompt, userPrompt, jsonMode, conversationHistory);
+      if (gatewayResult) return gatewayResult;
+    } catch (error) {
+      const status = error.response?.status || error.status || error.code || 'error';
+      console.warn(`[AIService] Central gateway chat unavailable (${status}).`);
     }
 
-    // 2. Try Self-hosted LLM Gateway
-    let gatewayUrl;
-    try {
-      gatewayUrl = this.getGatewayBaseUrl();
-    } catch {
-      gatewayUrl = null;
-    }
-
-    if (gatewayUrl) {
-      const message = this._buildGatewayMessage(systemPrompt, userPrompt, jsonMode, conversationHistory);
-      const endpoints = [`${gatewayUrl}/recruitment/chat`, `${gatewayUrl}/chat`];
-      for (const endpoint of endpoints) {
-        try {
-          const response = await axios.post(endpoint, { message }, {
-            headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
-            timeout: jsonMode ? 180000 : 25000
-          });
-
-          const text = response.data?.response;
-          if (typeof text === 'string' && text.trim()) {
-            return text.trim();
-          }
-        } catch (error) {
-          if (error.response?.status === 401 || error.response?.status === 404) {
-            continue; // try next endpoint (/recruitment/chat or /chat)
-          }
-          console.warn(`[AIService] Local LLM gateway issue at ${endpoint} (${error.code || error.response?.status || error.message}). Attempting OpenAI fallback...`);
-          break;
-        }
+    if (this._envFlag('SKILLBRIDGE_LLM_ALLOW_OLLAMA')) {
+      try {
+        const ollamaResult = await this._callOllama(systemPrompt, userPrompt, jsonMode, conversationHistory);
+        if (ollamaResult) return ollamaResult;
+      } catch (error) {
+        console.warn('[AIService] Opt-in Ollama chat fallback failed:', error.message);
       }
     }
 
-    // 3. Automatic fallback to OpenAI if configured
-    try {
-      const fallbackResult = await this._callOpenAIFallback(systemPrompt, userPrompt, jsonMode, conversationHistory);
-      if (fallbackResult) {
-        return fallbackResult;
+    if (this._envFlag('SKILLBRIDGE_LLM_ALLOW_OPENAI')) {
+      try {
+        const fallbackResult = await this._callOpenAIFallback(systemPrompt, userPrompt, jsonMode, conversationHistory);
+        if (fallbackResult) return fallbackResult;
+      } catch (error) {
+        console.warn('[AIService] Opt-in OpenAI chat fallback failed:', error.message);
       }
-    } catch (fbError) {
-      console.warn('[AIService] OpenAI fallback notice:', fbError.message);
     }
 
     throw this._gatewayUnavailableError(503);
@@ -309,13 +366,17 @@ class AIService {
       };
     }
 
-    const systemPrompt = `You are ${cleanName}, a knowledgeable, patient, and friendly AI voice assistant.
-CRITICAL VOICE INTERACTION RULES:
-1. Speak concisely in 2 to 3 natural, clear sentences (around 30 to 55 words).
-2. Answer the question directly and accurately. Avoid fluff, filler, markdown formatting, or lengthy lists.
-3. Your answer will be spoken aloud via text-to-speech, so make it audio-friendly and conversational.
-4. Your name is strictly ${cleanName}. If the user asks about your identity or name, state that you are ${cleanName}. Do not claim to be any other AI.
-5. Do not repeat your name in every sentence. Only mention your name if explicitly asked.
+    const systemPrompt = `You are ${cleanName}, an experienced, warm, and articulate classroom teacher and AI voice assistant.
+Generate crystal-clear, natural human speech with accurate pronunciation and excellent articulation. Use a warm, slightly deep adult teacher voice.
+
+CRITICAL TEACHING & VOICE INTERACTION RULES:
+1. Speak at a slow, steady pace without stretching individual words unnaturally. Pronounce every syllable clearly.
+2. Answer concisely in 2 to 3 natural, articulate sentences (around 30 to 55 words) like an experienced teacher explaining patiently to students.
+3. Maintain natural sentence rhythm, smooth transitions, and consistent volume.
+4. Add short pauses between thoughts and emphasize important educational terms naturally.
+5. Avoid mumbling, slurring, robotic tones, metallic sounds, excessive breathiness, or distorted pronunciation.
+6. Your answer will be spoken aloud via text-to-speech, so make it audio-friendly, conversational, and clear of markdown formatting or bulleted lists.
+7. Your name is strictly ${cleanName}. Only mention your name if explicitly asked.
 ${context ? `Relevant context: ${context.slice(0, 3000)}` : ''}`;
 
     const userPrompt = `User Question: ${cleanQuestion}`;
@@ -425,17 +486,20 @@ ${context ? `Relevant context: ${context.slice(0, 3000)}` : ''}`;
       .filter(t => t && !isBinaryNoiseText(t))
       .join('; ') || '';
 
-    const systemPrompt = `You are SkillBridge AI Tutor (ARIA), a senior workplace instructor explaining training material to a learner.
-Explain the concepts, safety rules, and operational protocols for the slide or page currently displayed on screen.
+    const systemPrompt = `/no_think
+You are SkillBridge AI Tutor (ARIA), a professional human master teacher delivering an engaging, supportive classroom lesson.
+Deliver your teaching with a natural, warm, human-like voice, clear pronunciation, and a comfortable, consistent teaching pace.
 
-CRITICAL INSTRUCTIONAL & SAFETY RULES:
+CLASSROOM TEACHING & SAFETY RULES:
 - Ground your explanation strictly in the verified document content.
 - TEACH THE ACTUAL CONCEPTS, SAFETY PROTOCOLS, MANDATORY REQUIREMENTS, AND OPERATIONAL INSTRUCTIONS.
+- Explain difficult concepts patiently with smooth transitions, gentle emphasis on key points, and a conversational human tone.
 - NEVER describe the visual geometry or layout coordinates of the slide (DO NOT say: "On the left side", "In this picture we see names", "At the bottom of the screen", "There is a diagram on the right").
 - NEVER recite template tags or software noise (DO NOT say: "Text Placeholder", "Date Placeholder", "Footer Placeholder", font names, or file paths).
-- Speak naturally, professionally, and clearly, as an experienced master trainer lecturing to students.
+- When explaining bullet points, present them clearly with natural breaks so the student feels personally coached in a classroom.
 - Explain WHY these procedures matter and HOW to comply safely on the job.
-- Generate a natural, fluent spoken explanation suitable for text-to-speech audio narration.
+- Sound friendly, confident, encouraging, and expressive rather than robotic or monotonic.
+- DO NOT generate thinking tags or internal monologue. Immediately output valid JSON.
 ${language && language !== 'en' ? `- Provide the spoken_explanation, key_points, safety_warnings, and suggested_next_transition in ${language}.` : ''}
 
 Return structured output containing ONLY valid JSON matching:
@@ -481,25 +545,22 @@ Deliver your instructional lecture for this slide.`;
       console.warn('[AIService] explainVisibleContent LLM notice, using structured fallback:', err.message);
     }
 
-    // Rich instructional fallback grounded directly in the cleaned slide content
+    // Instructional fallback grounded in clean takeaway concepts — NEVER raw OCR or layout tags
     const rawBullets = Array.isArray(contentInfo.bulletPoints) ? contentInfo.bulletPoints : [];
     const bulletList = rawBullets
       .map(b => cleanUnsupportedWords(stripSlidePlaceholders(b)))
-      .filter(b => b && b.length > 5 && !isBinaryNoiseText(b));
+      .map(b => b.replace(/^[-*•➔\d\.\)\s]+/g, '').replace(/[#*_~`^|<>]/g, '').trim())
+      .filter(b => b && b.length > 3 && !isBinaryNoiseText(b) && !/^(text|date|footer)\s*placeholder/i.test(b));
 
-    const cleanedText = cleanUnsupportedWords(stripSlidePlaceholders(rawContent))
-      .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
-      .replace(/###[^\n]+\n/g, '')
-      .replace(/\*\*Topic:[^\n]+\n/g, '')
-      .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const cleanBulletsSummary = bulletList.length > 0
+      ? bulletList.slice(0, 4).join(', ')
+      : '';
 
     let spokenText = '';
-    if (cleanedText && cleanedText.length > 30) {
-      spokenText = `In this section on ${pageTitle}, we focus on the core operational standards and safety requirements. ${cleanedText}`;
+    if (cleanBulletsSummary) {
+      spokenText = `In this section on ${pageTitle}, please make sure you understand the following key requirements: ${cleanBulletsSummary}. Strictly complying with these operational procedures ensures safety and regulatory compliance on site.`;
     } else {
-      spokenText = `Here on slide ${pageNum}, we review ${pageTitle}. Please carefully review the operational instructions, safety guidelines, and workplace standards displayed on screen.`;
+      spokenText = `In this section on ${pageTitle}, we review essential workplace guidelines. Please follow the operational standards carefully to maintain safety on the job.`;
     }
 
     const keyPoints = bulletList.length > 0
@@ -861,11 +922,32 @@ Return ONLY JSON:
   }
 
   /**
-   * Generates a single vector embedding using OpenAI text-embedding-3-small,
-   * falling back to a local 768-d hash embedding if OpenAI has no credits.
+   * Generates a single vector embedding using Central AI Gateway / Python Service,
+   * falling back to OpenAI text-embedding-3-small, and finally to local 768-d hash embedding.
    */
   async getEmbedding(text, dimensions = 768) {
     if (!text || !text.trim()) return null;
+
+    // 1. Primary: Central AI Gateway / Python Service embeddings
+    const pythonUrl = this.getPythonServiceBaseUrl();
+    try {
+      const response = await axios.post(`${pythonUrl}/api/v1/embeddings`, {
+        input: text.slice(0, 8000),
+        dimensions: dimensions
+      }, {
+        headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+        timeout: 15000
+      });
+      const data = response.data;
+      const embedding = data?.embedding || data?.data?.[0]?.embedding || (Array.isArray(data) && typeof data[0] === 'number' ? data : null);
+      if (Array.isArray(embedding) && embedding.length > 0) {
+        return embedding;
+      }
+    } catch (err) {
+      console.warn('[AIService] Gateway embeddings unavailable:', formatGatewayError(err));
+    }
+
+    // 2. Fallback: OpenAI embeddings if configured
     if (this._openaiEmbedUnavailable) {
       return this._localHashEmbedding(text, dimensions);
     }
@@ -900,12 +982,40 @@ Return ONLY JSON:
   }
 
   /**
-   * Generates batch vector embeddings using OpenAI text-embedding-3-small,
-   * falling back to local 768-d hash embeddings if OpenAI has no credits.
+   * Generates batch vector embeddings using Central AI Gateway / Python Service,
+   * falling back to OpenAI text-embedding-3-small, and finally to local 768-d hash embeddings.
    */
   async getEmbeddings(textArray, dimensions = 768) {
     if (!textArray || !Array.isArray(textArray) || textArray.length === 0) return [];
     const cleanInputs = textArray.map(t => (typeof t === 'string' ? t.slice(0, 8000) : ''));
+
+    // 1. Primary: Central AI Gateway / Python Service batch embeddings
+    const pythonUrl = this.getPythonServiceBaseUrl();
+    try {
+      const response = await axios.post(`${pythonUrl}/api/v1/embeddings`, {
+        input: cleanInputs,
+        dimensions: dimensions
+      }, {
+        headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+        timeout: 30000
+      });
+      const data = response.data;
+      let vectors = null;
+      if (Array.isArray(data?.data)) {
+        vectors = data.data.map(d => d.embedding || d);
+      } else if (Array.isArray(data?.embeddings)) {
+        vectors = data.embeddings;
+      } else if (Array.isArray(data) && Array.isArray(data[0])) {
+        vectors = data;
+      }
+      if (vectors && vectors.length === cleanInputs.length) {
+        return vectors;
+      }
+    } catch (err) {
+      console.warn('[AIService] Gateway batch embeddings unavailable:', formatGatewayError(err));
+    }
+
+    // 2. Fallback: OpenAI embeddings if configured
     if (this._openaiEmbedUnavailable) {
       return cleanInputs.map(t => this._localHashEmbedding(t, dimensions));
     }
@@ -1691,28 +1801,23 @@ CRITICAL QUIZ GENERATION RULES:
    * Grounded strictly in the retrieved text chunks and designed to provide thorough, extended course-play content.
    */
   async explainLesson(courseTitle, lessonTitle, contextText, language = 'English') {
-    const systemPrompt = `You are ARIA, the senior AI Tutor for SkillBridge.
-Your student is taking the course: "${courseTitle}".
-Current Lesson Topic: "${lessonTitle}".
-Active Teaching Language: ${language}.
+    const cleanContext = (contextText || '').slice(0, 1500);
+    const systemPrompt = `You are ARIA, the passionate, experienced Master Teacher delivering an interactive classroom lesson for SkillBridge.
+Course: "${courseTitle}", Lesson: "${lessonTitle}", Language: ${language}.
 
-PEDAGOGICAL TEACHING & DEPTH INSTRUCTIONS:
-1. LANGUAGE LOCK: The student selected ${language}. Write EVERY sentence, heading, bullet, and question in ${language} only. Do not mix languages. If the retrieved context is Bangla, Tamil, Telugu, Chinese, Malay, or any other language, fully translate the teaching into ${language}. Never leave source-language sentences on screen when the target is English.
-2. Target Teaching Language: Deliver the entire lesson explanation, headings, technical breakdowns, analogies, and reflection questions fluently in ${language} (supported: English, Chinese (中文), Malay (Bahasa Melayu), Tamil (தமிழ்), Bangla (বাংলা), Telugu (తెలుగు)).
-3. Comprehensive Teaching Duration: Provide an extensive, thorough, and high-value lecture (10-15 clear instructional paragraphs/points). Speak as a world-class instructor explaining each concept step-by-step with depth rather than providing short superficial summaries.
-4. Grounding: Draw core principles, terminology, and workflows directly from the retrieved document context.
-5. Technical Terminology: Keep recognized technical terms (e.g. PPE, Reversing, Blind Spot, Coupling, Lashing, Stanchions, Checklist) in their standard form alongside the explanation in ${language}.
-6. Blackboard Presentation Structure:
-   Structure your teaching response into these clear, rich pedagogical sections:
-   - ### 💡 Overview & Core Motivation (Detailed intuitive breakdown of what this topic is, why it is critical, and where it fits in the broader training)
-   - #### 🎯 Mandatory Requirements & Protocols (4-6 comprehensive bullet points detailing essential rules, safety gear, procedures, or limits)
-   - #### 🔍 Step-by-Step Execution & Operational Flow (Step-by-step breakdown of how to execute the procedure correctly and safely)
-   - #### 🌐 Real-World Scenario & Practical Case (A vivid, memorable operational scenario demonstrating why this rule exists)
-   - #### ⚠️ Critical Hazards & Common Pitfalls (Dangerous mistakes, what can go wrong, and exact prevention steps)
-   - #### 📌 Key Safety Takeaways (3 high-value bullet points summarizing the core learnings)
-   - #### ⚡ Knowledge Check & Reflection (An insightful question for the learner to test their understanding)`;
+PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
+1. Explain concepts deeply and intuitively instead of reciting bullet points or reading slides word-for-word.
+2. Deliver your entire explanation in natural, articulate, classroom-ready ${language}.
+3. Structure into 4 clear chalkboard sections (approximately 120-160 words total):
+   - ### 💡 Overview (Hook the student, introduce the topic, and explain why it matters in practical workplace operations)
+   - #### 🎯 Key Protocols (Step-by-step practical procedures explained in meaningful, connected sentences)
+   - #### ⚠️ Safety Rules (Critical hazards, precautions, PPE requirements, and common operational pitfalls)
+   - #### 📌 Takeaways (Core actionable summary rules to remember on the job)
+4. Speak in a warm, encouraging, authoritative human teacher voice.
+5. Provide concrete real-world context and workplace safety standards (such as PPE, SOP, LOTO, and ISO standards).
+6. NEVER recite raw OCR artifacts, file paths, placeholder tags, or bullet dashes.`;
 
-    const userPrompt = `Retrieved Course Context:\n${contextText}\n\nLesson to teach: "${lessonTitle}"\nSelected Teaching Language: ${language}\nLANGUAGE LOCK: Output the full lecture in ${language} only. Translate any source text that is not already in ${language}.`;
+    const userPrompt = `Course Context:\n${cleanContext}\n\nExplain lesson "${lessonTitle}" in ${language} (4 concise sections):`;
 
     try {
       return await this._callLLM(systemPrompt, userPrompt, false);

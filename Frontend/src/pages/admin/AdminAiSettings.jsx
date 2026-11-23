@@ -289,7 +289,7 @@ export default function AdminAiSettings() {
         aiName: cleanName,
         wakeWord: cleanWake,
         aiVoiceGender: voiceGender,
-        aiVoiceName: voiceGender === 'MALE' ? 'en-US-GuyNeural' : 'en-US-JennyNeural',
+        aiVoiceName: voiceGender === 'MALE' ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural',
         aiVoiceRate: parseFloat(voiceRate),
         aiVoicePitch: parseFloat(voicePitch),
       });
@@ -304,9 +304,54 @@ export default function AdminAiSettings() {
         ...currentSession,
         aiName: cleanName,
         wakeWord: cleanWake,
+        aiVoiceGender: voiceGender,
+        aiVoiceRate: parseFloat(voiceRate),
+        aiVoicePitch: parseFloat(voicePitch)
       });
       sessionStorage.setItem('skillbridge_admin', updatedSession);
       localStorage.setItem('skillbridge_admin', updatedSession);
+
+      // Dedicated global AI settings store for instant course player sync
+      const aiSettingsPayload = JSON.stringify({
+        aiName: cleanName,
+        wakeWord: cleanWake,
+        aiVoiceGender: voiceGender,
+        aiVoiceName: voiceGender === 'MALE' ? 'en-US-ChristopherNeural' : 'en-US-JennyNeural',
+        aiVoiceRate: parseFloat(voiceRate),
+        aiVoicePitch: parseFloat(voicePitch)
+      });
+      localStorage.setItem('skillbridge_ai_settings', aiSettingsPayload);
+      sessionStorage.setItem('skillbridge_ai_settings', aiSettingsPayload);
+
+      // Also sync to learner session if currently running in learner view
+      try {
+        const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null');
+        if (userSession) {
+          const updatedUserSession = JSON.stringify({
+            ...userSession,
+            aiName: cleanName,
+            wakeWord: cleanWake,
+            aiVoiceGender: voiceGender,
+            aiVoiceRate: parseFloat(voiceRate),
+            aiVoicePitch: parseFloat(voicePitch)
+          });
+          sessionStorage.setItem('skillbridge_user', updatedUserSession);
+          localStorage.setItem('skillbridge_user', updatedUserSession);
+        }
+      } catch (_) { }
+
+      // Broadcast live event across active tabs/windows and CoursePlayer components
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('skillbridge_ai_settings_updated', {
+          detail: {
+            aiName: cleanName,
+            wakeWord: cleanWake,
+            aiVoiceGender: voiceGender,
+            aiVoiceRate: parseFloat(voiceRate),
+            aiVoicePitch: parseFloat(voicePitch)
+          }
+        }));
+      }
     } catch (err) {
       console.error('Save AI settings error:', err);
       setStatusMessage({
@@ -400,24 +445,6 @@ export default function AdminAiSettings() {
                 onChange={(e) => handleAiNameChange(e.target.value)}
                 className="w-full rounded-lg border border-line bg-ink/50 px-3 py-2 text-xs font-medium text-fg outline-none transition placeholder:text-muted/60 focus:bg-panel focus:border-navy focus:shadow-[0_0_0_2px_rgba(14,47,92,0.08)]"
               />
-              {/* Supported AI Tutor Name */}
-              <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                <span className="text-[10px] text-muted">Supported:</span>
-                {['ARIA'].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => handleSelectSuggested(preset)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-semibold transition cursor-pointer ${
-                      aiName.toLowerCase() === preset.toLowerCase()
-                        ? 'bg-navy text-white shadow-2xs'
-                        : 'bg-ink border border-line text-fg hover:bg-slate-200'
-                    }`}
-                  >
-                    {preset} (Official Tutor)
-                  </button>
-                ))}
-              </div>
             </div>
 
             {/* Wake Word Input & Live Mic Action */}

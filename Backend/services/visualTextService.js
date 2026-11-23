@@ -2,6 +2,7 @@ import { createWorker } from 'tesseract.js';
 import axios from 'axios';
 import FormData from 'form-data';
 import { isGarbageTitle, isPlaceholderTitle, firstUsefulTitleLine } from '../utils/contentQuality.js';
+import { formatGatewayError } from '../utils/gatewayError.js';
 
 const MIN_IMAGE_BYTES = 12000;
 const MIN_TEACHING_IMAGE_BYTES = 25000;
@@ -18,10 +19,8 @@ function dataUrlToBuffer(dataUrl) {
 
 function gatewayBaseUrl() {
   return String(
-    process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
-    process.env.LLM_GATEWAY_URL ||
-    process.env.BRUTALLYHIRED_LLM_GATEWAY_URL ||
-    'https://rsvragsvr.tail236357.ts.net'
+    process.env.PYTHON_SERVICE_URL ||
+    'http://localhost:8000'
   ).trim().replace(/\/+$/, '');
 }
 
@@ -30,12 +29,9 @@ function gatewayHeaders(extra = {}) {
   const apiKey = (
     process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
     process.env.LLM_GATEWAY_API_KEY ||
-    process.env.BRUTALLYHIRED_LLM_API_KEY ||
-    process.env.VEDA_API_KEY ||
     ''
   ).trim();
   if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
     headers['X-API-Key'] = apiKey;
   }
   return headers;
@@ -170,14 +166,15 @@ export async function analyzeImageWithQwen(img, slideNumber) {
     return explanation && explanation.length > 30 ? explanation : null;
   } catch (err) {
     consecutiveVisionFailures++;
+    const mapped = formatGatewayError(err);
     const isTimeout = err.code === 'ECONNABORTED' || String(err.message || '').includes('timeout');
     const isOfflineOrAuth = err.response?.status === 401 || err.response?.status === 403 || err.response?.status === 404 || err.code === 'ECONNREFUSED';
 
     if (isOfflineOrAuth || consecutiveVisionFailures >= 2) {
-      console.warn(`[VisualText] Gateway image analysis unavailable (${isTimeout ? '2 consecutive timeouts' : `HTTP ${err.response?.status || err.code}`}). Disabling remote vision for next 10 minutes.`);
+      console.warn(`[VisualText] Gateway image analysis notice: ${mapped}. Disabling remote vision for next 10 minutes.`);
       gatewayVisionDisabledUntil = Date.now() + 10 * 60 * 1000;
     }
-    throw err;
+    throw new Error(mapped);
   }
 }
 

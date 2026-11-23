@@ -169,7 +169,7 @@ const GREETING_ONLY_SET = new Set([
 ]);
 
 export const ARIA_VARIANTS_SET = new Set([
-  'aria', 'area', 'arya', 'aarya', 'ariya', 'auria', 'oria', 'arria', 'avatar',
+  'aria', 'area', 'arya', 'aarya', 'ariya', 'auria', 'oria', 'arria', 'riya', 'eria', 'aeria', 'avatar',
   'आरिया', 'आर्या', 'ஆரியா', 'ஆர்யா', 'அரியா', 'আরিয়া', 'আরিয়া', 'আর্য', 'ఆరియా', 'ఆర్యా', 'అరియా',
   '阿莉娅', '阿丽娅', '阿里亚', '艾莉亚', '艾丽娅'
 ]);
@@ -177,8 +177,8 @@ export const ARIA_VARIANTS_SET = new Set([
 const WAKE_WORD_PATTERNS = [
 
   // ENGLISH — greeting / call + name (greeting alone is NOT enough)
-  // "area" is a common browser-ASR mishear of "ARIA"
-  /\b(?:hey|hi|hello|ok|okay|ask|yo|hay|heya|hiya|call|calling|wake\s+up|tell|listen)\s+(?:aria|arya|aarya|ariya|auria|oria|arria|area|avatar)\b/i,
+  // "area", "riya", "eria" are common browser-ASR mishears of "ARIA"
+  /\b(?:hey|hi|hello|ok|okay|ask|yo|hay|heya|hiya|call|calling|wake\s+up|tell|listen)\s+(?:aria|arya|aarya|ariya|auria|oria|arria|area|riya|eria|aeria|avatar)\b/i,
 
   // ENGLISH — direct calling of avatar / assistant / AI
   /\b(?:hey|hi|hello|call|calling)\s+(?:avatar|ai\s+avatar|ai\s+tutor|assistant)\b/i,
@@ -248,18 +248,22 @@ export const KNOWN_SELF_ECHO_PATTERNS = [
   /(?:சொல்லுங்கள்|நான்\s*கேட்கிறேன்|சொல்லுங்கள்\s*நான்\s*கேட்கிறேன்|பாடத்தைத்\s*தொடர்கிறேன்|பாடத்தைத்\s*தொடர்கிறது|உங்கள்\s*கேள்வி\s*புரியவில்லை|மீண்டும்\s*கேளுங்கள்)/iu,
 
   // Bangla
-  /(?:হ্যাঁ\\s*বলুন|আমি\\s*শুনছি|বলুন\\s*আমি\\s*শুনছি|আমি\\s*শুনছি|কোর্সে\\s*ফিরে\\s*যাচ্ছি|ক্লাস\\s*চালু\\s*করছি|প্রশ্নটি\\s*বুঝতে\\s*পারিনি|আবার\\s*জিজ্ঞাসা\\s*করুন)/iu
+  /(?:হ্যাঁ\\s*বলুন|আমি\\s*শুনছি|বলুন\\s*আমি\\s*শুনছি|আমি\\s*শুনছি|কোর্সে\\s*ফিরে\\s*যাচ্ছি|ক্লাస్\\s*চালু\\s*করছি|প্রশ্নটি\\s*বুঝতে\\s*পারিনি|আবার\\s*জিজ্ঞাসা\\s*করুন)/iu,
+
+  // Telugu
+  /(?:చెప్పండి|నేను\s*వింటున్నాను|చెప్పండి\s*నేను\s*వింటున్నాను|పాఠాన్ని\s*కొనసాగిస్తున్నాను|మీ\s*ప్రశ్న\s*వినపడలేదు|మళ్లీ\s*అడగండి)/iu
 ];
 
 // Phonetic misrecognition dictionary for popular voice assistant names
 const NAME_PHONETIC_VARIANTS = {
   veda: ['veda', 'vedha', 'vaida', 'veeda', 'weda'],
   maya: ['maya', 'maia', 'mya', 'maiya'],
-  aria: ['aria', 'area', 'arya', 'aarya', 'ariya', 'auria', 'oria', 'arria'],
+  aria: ['aria', 'area', 'arya', 'aarya', 'ariya', 'auria', 'oria', 'arria', 'riya', 'eria', 'aeria', 'audio'],
   jarvis: ['jarvis', 'jarves', 'javis'],
   sophia: ['sophia', 'sofia', 'sofiya'],
   alex: ['alex', 'alec', 'alix'],
-  elena: ['elena', 'alena', 'helena']
+  elena: ['elena', 'alena', 'helena'],
+  kimi: ['kimi', 'kimmy', 'kimmie', 'kim', 'keemi', 'key me', 'ki mi', 'kemy', 'gimme', 'give me']
 };
 
 export const containsWakeWord = (text, customWakeWord = null, aiName = null) => {
@@ -392,9 +396,9 @@ export const extractQuestionFromWakeWord = (
     }
   }
 
-  // English / Malay ARIA variants (include "area" ASR mishear; exclude heria/haria)
+  // English / Malay ARIA variants (include "area", "riya", "eria" ASR mishear; exclude heria/haria)
   clean = clean.replace(
-    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh|call|calling)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria|avatar)\s*[,.:!?-]*/iu,
+    /^(?:hey|hi|hello|ok|okay|ask|hay|heya|hiya|yo|dear|here|hear|excuse\s+me|hai|helo|halo|tolong|boleh|call|calling)?\s*(?:aria|area|arya|aarya|ariya|auria|oria|arria|riya|eria|aeria|avatar)\s*[,.:!?-]*/iu,
     ''
   );
 
@@ -782,6 +786,14 @@ export class VoiceTutorManager {
     this.state =
       newState;
 
+    // Fast-wake optimization: Switch to target language when awake, and en-US for ultra-fast wake listening when sleeping
+    if (
+      (newState === TutorState.ACTIVE_LISTENING && oldState !== TutorState.ACTIVE_LISTENING) ||
+      (newState === TutorState.SLEEPING && oldState !== TutorState.SLEEPING)
+    ) {
+      this.restartSpeechRecognition(true);
+    }
+
     // Watchdog: LLM + Whisper can take well over 6s. Only recover if truly stuck.
     if (this._processingWatchdog) {
       clearTimeout(this._processingWatchdog);
@@ -794,6 +806,21 @@ export class VoiceTutorManager {
           this.returnToSleep();
         }
       }, 45000);
+    }
+
+    if (this._greetingWatchdog) {
+      clearTimeout(this._greetingWatchdog);
+      this._greetingWatchdog = null;
+    }
+    if (newState === TutorState.ARIA_GREETING) {
+      this._greetingWatchdog = setTimeout(() => {
+        if (this.state === TutorState.ARIA_GREETING) {
+          console.warn('[VOICE] ARIA_GREETING watchdog timeout (3.5s). Auto-advancing to ACTIVE_LISTENING.');
+          this.isTutorSpeaking = false;
+          this.ttsMutedUntil = 0;
+          this.setState(TutorState.ACTIVE_LISTENING);
+        }
+      }, 3500);
     }
 
     this.log(
@@ -1002,17 +1029,17 @@ export class VoiceTutorManager {
 
     try {
 
-      try {
-        await this.initMicrophonePipeline();
-      } catch (micErr) {
-        console.warn('[VOICE] Microphone pipeline initialization notice (SpeechRecognition will handle wake word):', micErr);
-      }
-
+      // Immediately initialize and start Web Speech Recognition for instant zero-latency wake word listening
       this.initSpeechRecognition();
 
       this.setState(
         TutorState.SLEEPING
       );
+
+      // Initialize background mic pipeline for VAD and MediaRecorder asynchronously without blocking wake word detection
+      this.initMicrophonePipeline().catch((micErr) => {
+        console.warn('[VOICE] Background mic pipeline initialization notice:', micErr);
+      });
 
     } catch (error) {
 
@@ -1599,9 +1626,11 @@ export class VoiceTutorManager {
         5;
 
 
-      rec.lang =
-        this.langCode ||
-        'en-US';
+      // Ultra-fast wake detection: When sleeping and wake word is English, listen on en-US for instant 100ms interim wake response
+      const isEnglishWake = !/[\u0C00-\u0C7F\u0B80-\u0BFF\u0980-\u09FF\u0900-\u097F\u4E00-\u9FFF]/.test(this.wakeWord || 'Hey ARIA');
+      rec.lang = (this.state === TutorState.SLEEPING && isEnglishWake)
+        ? 'en-US'
+        : (this.langCode || 'en-US');
 
 
       rec.onstart =
@@ -1877,18 +1906,18 @@ export class VoiceTutorManager {
 
         /*
          * If ARIA is speaking,
-         * don't start recognition yet.
+         * don't start recognition yet. Reschedule for when mute window expires.
          */
 
-        if (
-          this.isTutorSpeaking ||
-          Date.now() <
-          this.ttsMutedUntil
-        ) {
+        if (this.isTutorSpeaking) {
+          this.isRestarting = false;
+          return;
+        }
 
-          this.isRestarting =
-            false;
-
+        if (Date.now() < this.ttsMutedUntil) {
+          this.isRestarting = false;
+          const remainingMute = Math.max(50, this.ttsMutedUntil - Date.now() + 50);
+          this.scheduleRestart(remainingMute);
           return;
         }
 
@@ -1914,7 +1943,7 @@ export class VoiceTutorManager {
   }
 
 
-  scheduleRestart() {
+  scheduleRestart(delay = 200) {
 
     if (
       !this.isMounted
@@ -1935,8 +1964,12 @@ export class VoiceTutorManager {
     this.isRestarting =
       true;
 
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+    }
 
-    setTimeout(() => {
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
 
       if (
         !this.isMounted
@@ -1949,47 +1982,35 @@ export class VoiceTutorManager {
       }
 
 
-      if (
-        this.isTutorSpeaking ||
-        Date.now() <
-        this.ttsMutedUntil
-      ) {
+      if (this.isTutorSpeaking) {
+        this.isRestarting = false;
+        return;
+      }
 
-        this.isRestarting =
-          false;
-
+      if (Date.now() < this.ttsMutedUntil) {
+        this.isRestarting = false;
+        const remainingMute = Math.max(50, this.ttsMutedUntil - Date.now() + 50);
+        this.scheduleRestart(remainingMute);
         return;
       }
 
 
       try {
 
-        if (
-          this.recognition
-        ) {
-
+        // Completely detach and clean up any dead/stale recognition instance
+        if (this.recognition) {
           try {
-
-            this.recognition.start();
-
-          } catch (error) {
-
-            if (
-              error?.name !==
-              'InvalidStateError'
-            ) {
-
-              this.initSpeechRecognition();
-
-            }
-
-          }
-
-        } else {
-
-          this.initSpeechRecognition();
-
+            this.recognition.onstart = null;
+            this.recognition.onend = null;
+            this.recognition.onerror = null;
+            this.recognition.onresult = null;
+            this.recognition.abort();
+          } catch (e) { }
+          this.recognition = null;
         }
+
+        // Always instantiate a fresh SpeechRecognition to prevent Chrome InvalidStateError
+        this.initSpeechRecognition();
 
       } catch (error) {
 
@@ -2007,7 +2028,7 @@ export class VoiceTutorManager {
       this.isRestarting =
         false;
 
-    }, 200);
+    }, delay);
   }
 
 
@@ -2046,10 +2067,10 @@ export class VoiceTutorManager {
 
     if (
       this.isLecturePlaying &&
-      this.state === TutorState.SLEEPING
+      (this.state === TutorState.SLEEPING || this.state === TutorState.RETURN_TO_SLEEP)
     ) {
       if (containsWakeWord(text, this.wakeWord, this.aiName)) {
-        if (this.isEchoOfRecentAria(text)) {
+        if (this.isTranscriptSelfEcho(text)) {
           this.log(
             LogCategory.ECHO_REJECT,
             `Suppressed wake from lecture echo: "${text}"`
@@ -2073,11 +2094,12 @@ export class VoiceTutorManager {
      *
      * Course is NOT playing.
      *
-     * Still listen for wake word.
+     * Still listen for wake word (interim or final for instant response).
      */
 
     if (
-      this.state === TutorState.SLEEPING
+      this.state === TutorState.SLEEPING ||
+      this.state === TutorState.RETURN_TO_SLEEP
     ) {
       if (containsWakeWord(text, this.wakeWord, this.aiName)) {
         this.log(
@@ -2156,6 +2178,7 @@ export class VoiceTutorManager {
       this.state === TutorState.FOLLOW_UP_LISTENING
     ) {
       if (!isFinal) {
+        clearTimeout(this._finalDebounceTimer);
         // Buffer latest interim text with a debounce timer so user speech is processed even if isFinal is delayed
         this._latestInterimText = text;
         if (this._interimDebounceTimer) {
@@ -2258,7 +2281,7 @@ export class VoiceTutorManager {
         return;
       }
 
-      // If sentence appears complete, debounce slightly (1200ms) to allow multi-clause continuation
+      // Briefly coalesce adjacent final recognition segments.
       if (this._finalDebounceTimer) {
         clearTimeout(this._finalDebounceTimer);
       }
@@ -2278,7 +2301,7 @@ export class VoiceTutorManager {
           `User question finalized: "${finalQuestion}"`
         );
         this.processUserQuestion(finalQuestion);
-      }, 1200);
+      }, 350);
     }
   }
 
@@ -2857,6 +2880,8 @@ export class VoiceTutorManager {
 
     this.clearBuffers();
 
+    // Reset TTS mute window so wake listener starts without delay
+    this.ttsMutedUntil = 0;
 
     this.setState(
       TutorState.RETURN_TO_SLEEP
@@ -2938,6 +2963,11 @@ export class VoiceTutorManager {
     if (this._processingWatchdog) {
       clearTimeout(this._processingWatchdog);
       this._processingWatchdog = null;
+    }
+
+    if (this._greetingWatchdog) {
+      clearTimeout(this._greetingWatchdog);
+      this._greetingWatchdog = null;
     }
 
     if (this._returnToSleepTimer) {

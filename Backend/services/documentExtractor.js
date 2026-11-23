@@ -5,6 +5,7 @@ import mammoth from 'mammoth';
 import axios from 'axios';
 import FormData from 'form-data';
 import { exec } from 'child_process';
+import { formatGatewayError } from '../utils/gatewayError.js';
 import util from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -211,7 +212,7 @@ try {
           const bulletPoints = cleanParas.map(p => `- ${p}`);
           const cleanNotes = stripSlidePlaceholders(ps.speakerNotes || '');
           const fullText = `--- Slide ${sNum}: ${cleanTitle} ---\n` +
-            (cleanParas.length > 0 ? cleanParas.join('\n\n') : `[Visual Content on Slide ${sNum}]: Full slide presentation`) +
+            (cleanParas.length > 0 ? cleanParas.join('\n\n') : '') +
             (cleanNotes ? `\n\n[Speaker Notes for Slide ${sNum}]:\n${cleanNotes}` : '');
 
           return {
@@ -268,9 +269,7 @@ for i, page in enumerate(pdf):
     const pyFile = path.join(tmpDir, 'render.py');
     fs.writeFileSync(pyFile, pyScript);
 
-    const pythonExe = fs.existsSync('c:\\prem\\Netopsys\\Skill-Bridge\\ai-service\\.venv\\Scripts\\python.exe')
-      ? 'c:\\prem\\Netopsys\\Skill-Bridge\\ai-service\\.venv\\Scripts\\python.exe'
-      : 'python';
+    const pythonExe = process.env.PYTHON_PATH || 'python';
 
     await execPromise(`"${pythonExe}" "${pyFile}"`, { timeout: 60000 });
 
@@ -741,10 +740,7 @@ function extractPptx(buffer) {
         }
       }
 
-      if (slideImages.length > 0) {
-        slideText += `\n[Visual Content on Slide ${slideIndex}]: ` +
-          slideImages.map(img => `${img.name}${img.descr ? ` (${img.descr})` : ''}`).join(', ') + '\n';
-      }
+      // Do not append visual content descriptions into readable slideText to prevent speech pollution
       if (speakerNotes) {
         slideText += `\n[Speaker Notes for Slide ${slideIndex}]:\n${speakerNotes}\n`;
       }
@@ -827,7 +823,7 @@ function alignSlidesToRendered(slides, renderedSlides) {
     let fullText = keepTitle && prev.fullText
       ? stripSlidePlaceholders(prev.fullText)
       : `--- Slide ${rImg.sourceSlide}: ${cleanTitle} ---\n` +
-        (cleanParagraphs.length > 0 ? cleanParagraphs.join('\n\n') : `[Visual Content on Slide ${rImg.sourceSlide}]: Full slide presentation`);
+      (cleanParagraphs.length > 0 ? cleanParagraphs.join('\n\n') : '');
 
     return {
       slideNumber: rImg.sourceSlide,
@@ -939,7 +935,7 @@ function extractPptBinary(buffer) {
         tables: [],
         images: [img],
         speakerNotes: '',
-        fullText: `--- Slide ${i + 1}: Visual training slide ---\n[Visual Content on Slide ${i + 1}]: ${img.name}`
+        fullText: `--- Slide ${i + 1}: Visual training slide ---`
       });
     }
   } else if (embeddedImages.length > 0) {
@@ -1012,11 +1008,19 @@ function splitTextIntoPages(text, startPage = 1) {
  * coherent, high-value learning chunks using LLM intelligence.
  */
 async function extractAudioFile(buffer, originalname, mimetype) {
-  const PYTHON_SERVICE_URL = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
+  const PYTHON_SERVICE_URL = (
+    process.env.PYTHON_SERVICE_URL ||
+    'http://localhost:8000'
+  ).replace(/\/+$/, '');
+  const gatewayApiKey = (
+    process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
+    process.env.LLM_GATEWAY_API_KEY ||
+    ''
+  ).trim();
   let transcription = '';
   let detectedLanguage = 'en';
 
-  // 1. Try local Python faster-whisper microservice
+  // 1. Try Central AI Gateway / Python faster-whisper service
   try {
     const form = new FormData();
     form.append('file', buffer, {
@@ -1024,9 +1028,19 @@ async function extractAudioFile(buffer, originalname, mimetype) {
       contentType: mimetype || 'audio/mpeg'
     });
 
-    const pyRes = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/transcribe`, form, {
-      headers: form.getHeaders(),
-      timeout: 120000
+    const headers = form.getHeaders();
+    if (gatewayApiKey) {
+      headers['X-API-Key'] = gatewayApiKey;
+    }
+
+    const pyRes = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/stt/transcribe`, form, {
+      headers,
+      timeout: 10000
+    }).catch(async (err) => {
+      if (err.response?.status === 404) {
+        return await axios.post(`${PYTHON_SERVICE_URL}/api/v1/transcribe`, form, { headers, timeout: 10000 });
+      }
+      throw err;
     });
 
     if (pyRes.data?.text && typeof pyRes.data.text === 'string' && pyRes.data.text.trim().length > 0) {
@@ -1035,7 +1049,8 @@ async function extractAudioFile(buffer, originalname, mimetype) {
       console.log(`[Doc Extractor:Audio] Python faster-whisper transcribed ${transcription.length} chars (detected: ${detectedLanguage})`);
     }
   } catch (pyErr) {
-    console.warn(`[Doc Extractor:Audio] Python whisper offline or failed: ${pyErr.message}`);
+    const mapped = formatGatewayError(pyErr);
+    console.warn(`[Doc Extractor:Audio] Python whisper notice: ${mapped}`);
   }
 
   // 2. Try OpenAI Whisper fallback if API key is configured
@@ -1238,10 +1253,10 @@ export async function extractDocument(file) {
           const formFeedPages = text.split(/\f|\u000c/).map(p => p.trim()).filter(p => p.length > 10);
           pages = formFeedPages.length > 1
             ? formFeedPages.map((cleanText, idx) => ({
-                page_number: idx + 1,
-                text: cleanText,
-                title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${idx + 1}`
-              }))
+              page_number: idx + 1,
+              text: cleanText,
+              title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${idx + 1}`
+            }))
             : splitTextIntoPages(text);
         }
         parsed = true;
@@ -1342,7 +1357,7 @@ export async function extractDocument(file) {
         pages = images.map((img, idx) => ({
           page_number: idx + 1,
           title: `Page ${idx + 1}`,
-          text: `--- Page ${idx + 1} ---\n[Visual Content on Page ${idx + 1}]: Word document page ${idx + 1}`,
+          text: `--- Page ${idx + 1} ---`,
           images: [img],
           pageImage: img
         }));
@@ -1414,8 +1429,8 @@ export async function extractDocument(file) {
 
     const pageTitle = (visualText && firstUsefulTitleLine(visualText)) || cleanName || 'Training Visual';
     text = visualText
-      ? `--- Page 1: ${pageTitle} ---\n\n[Visual Content on Page 1]:\n${visualText}`
-      : `--- Page 1: ${pageTitle} ---\n\n[Visual Content on Page 1]: Training graphic ${originalname}`;
+      ? `--- Page 1: ${pageTitle} ---\n\n${visualText}`
+      : `--- Page 1: ${pageTitle} ---`;
 
     pages = [
       {
