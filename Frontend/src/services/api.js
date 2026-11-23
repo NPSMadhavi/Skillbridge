@@ -717,8 +717,21 @@ export const api = {
       body: formData,
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to publish course.');
+      let errMsg = 'Failed to publish course.';
+      try {
+        const text = await res.text();
+        const json = JSON.parse(text);
+        errMsg = json.error || json.message || errMsg;
+      } catch (_) {
+        if (res.status === 504) {
+          errMsg = 'Server Gateway Timeout (504). The AI model took longer to process this course than the web server timeout allows. Please increase Nginx proxy_read_timeout to 300s on brutallyhired.com.';
+        } else if (res.status === 502) {
+          errMsg = 'Bad Gateway (502). The backend server may be restarting or unreachable.';
+        } else {
+          errMsg = `Server error (${res.status} ${res.statusText || 'Error'}).`;
+        }
+      }
+      throw new Error(errMsg);
     }
     return res.json();
   },

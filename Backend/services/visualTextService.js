@@ -132,6 +132,14 @@ export async function analyzeImageWithQwen(img, slideNumber) {
   if (Date.now() < gatewayVisionDisabledUntil) return null;
   const gateway = gatewayBaseUrl();
   if (!gateway) return null;
+
+  // In production, skip unreachable private LAN addresses (192.168.x.x, 10.x.x.x) to prevent gateway timeouts
+  const isPrivateIp = /^https?:\/\/(?:192\.168\.|10\.|172\.(?:1[6-9]|2[0-9]|3[01])\.)/i.test(gateway);
+  const isProd = process.env.NODE_ENV === 'production';
+  if (isProd && isPrivateIp) {
+    return null;
+  }
+
   const buf = img.buffer || dataUrlToBuffer(img.dataUrl);
   if (!buf) return null;
 
@@ -152,7 +160,7 @@ export async function analyzeImageWithQwen(img, slideNumber) {
       headers: gatewayHeaders(form.getHeaders()),
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
-      timeout: 20000
+      timeout: 5000
     });
 
     consecutiveVisionFailures = 0;
@@ -161,13 +169,10 @@ export async function analyzeImageWithQwen(img, slideNumber) {
   } catch (err) {
     consecutiveVisionFailures++;
     const mapped = formatGatewayError(err);
-    const isTimeout = err.code === 'ECONNABORTED' || String(err.message || '').includes('timeout');
-    const isOfflineOrAuth = err.response?.status === 401 || err.response?.status === 403 || err.response?.status === 404 || err.code === 'ECONNREFUSED';
 
-    if (isOfflineOrAuth || consecutiveVisionFailures >= 2) {
-      console.warn(`[VisualText] Gateway image analysis notice: ${mapped}. Disabling remote vision for next 10 minutes.`);
-      gatewayVisionDisabledUntil = Date.now() + 10 * 60 * 1000;
-    }
+    // Fast circuit breaker: if unreachable or fails twice, disable remote vision for 10 minutes to unblock uploads
+    gatewayVisionDisabledUntil = Date.now() + 10 * 60 * 1000;
+    console.warn(`[VisualText] Gateway image analysis notice: ${mapped}. Disabling remote vision for next 10 minutes to unblock uploads.`);
     throw new Error(mapped);
   }
 }
