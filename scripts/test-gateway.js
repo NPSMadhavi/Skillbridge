@@ -34,17 +34,13 @@ for (const envPath of envCandidates) {
   }
 }
 
-const baseUrl = (
-  process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
-  process.env.LLM_GATEWAY_URL ||
-  'https://rtxsvr.tail59469f.ts.net'
-).trim().replace(/\/+$/, '');
+const baseUrl = String(process.env.SKILLBRIDGE_LLM_GATEWAY_URL || '').trim().replace(/\/+$/, '');
+const apiKey = String(process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY || '').trim();
 
-const apiKey = (
-  process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-  process.env.LLM_GATEWAY_API_KEY ||
-  ''
-).trim();
+if (!baseUrl) {
+  console.error('SKILLBRIDGE_LLM_GATEWAY_URL is not configured in Backend/.env');
+  process.exit(1);
+}
 
 const headers = {
   'Accept': 'application/json'

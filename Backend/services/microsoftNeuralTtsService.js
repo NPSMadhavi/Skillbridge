@@ -15,6 +15,7 @@ import crypto from 'crypto';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import { detectDominantScript } from '../utils/language.js';
 import axios from 'axios';
+import { getPythonServiceUrl, getGatewayApiKey } from '../config/gateway.js';
 import { formatGatewayError } from '../utils/gatewayError.js';
 
 // ---------------------------------------------------------------------------
@@ -600,8 +601,8 @@ ${ssmlBody}    </prosody>
 
       // Graceful fallback to Central AI Gateway if available
       try {
-        const gatewayUrl = (process.env.PYTHON_SERVICE_URL || 'http://localhost:8000').replace(/\/+$/, '');
-        const gatewayKey = (process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY || process.env.LLM_GATEWAY_API_KEY || '').trim();
+        const gatewayUrl = getPythonServiceUrl();
+        const gatewayKey = getGatewayApiKey();
 
         const fallbackRes = await axios.post(`${gatewayUrl}/api/v1/tts/synthesize`, {
           text: cleanSpoken,

@@ -13,6 +13,14 @@ import ttsRoutes from './routes/tts.js';
 import superAdminRoutes from './routes/superAdmin.js';
 import assistantRoutes from './routes/assistantRoutes.js';
 import voiceRoutes from './routes/voiceRoutes.js';
+import {
+  getGatewayBaseUrl,
+  getPythonServiceUrl,
+  getChatGatewayVarName,
+  getPythonServiceVarName,
+  getGatewayApiKey,
+  getApiKeyVarName
+} from './config/gateway.js';
 import { resolveTenant } from './middleware/tenantMiddleware.js';
 import { generalApiLimiter } from './middleware/rateLimiter.js';
 import prisma from './config/prisma.js';
@@ -296,17 +304,16 @@ app.listen(PORT, async () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('========================================');
 
-  // AI Gateway configuration status
-  const pythonServiceHost = getUrlHost(process.env.PYTHON_SERVICE_URL);
-  console.log(`[AI Gateway] SKILLBRIDGE_LLM_GATEWAY_URL host: ${getUrlHost(process.env.SKILLBRIDGE_LLM_GATEWAY_URL)}`);
-  console.log(`[AI Gateway] LLM_GATEWAY_URL host: ${getUrlHost(process.env.LLM_GATEWAY_URL)}`);
-  console.log(`[AI Gateway] PYTHON_SERVICE_URL host: ${pythonServiceHost}`);
-  console.log(`[AI Gateway] SKILLBRIDGE_LLM_GATEWAY_API_KEY set: ${Boolean(process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY && process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY.trim())}`);
-  console.log(`[AI Gateway] LLM_GATEWAY_API_KEY set: ${Boolean(process.env.LLM_GATEWAY_API_KEY && process.env.LLM_GATEWAY_API_KEY.trim())}`);
-
-  if (pythonServiceHost.endsWith('.ts.net')) {
-    console.warn('[AI Gateway Warning] the public address only allows chat; use the private gateway address for face, STT, TTS and documents.');
-  }
+  // AI Subsystems Configuration Logging (Variable names only, never secrets)
+  console.log('=== Gateway Subsystems Configuration ===');
+  console.log(`- Chat: [${getChatGatewayVarName()}]`);
+  console.log(`- Face: [${getPythonServiceVarName()}]`);
+  console.log(`- STT: [${getPythonServiceVarName()}]`);
+  console.log(`- TTS: [${getPythonServiceVarName()}]`);
+  console.log(`- Documents/OCR: [${getPythonServiceVarName()}]`);
+  console.log(`- Embeddings: [${getPythonServiceVarName()}]`);
+  console.log(`- API key: [${getApiKeyVarName()}]`);
+  console.log('========================================');
 
   await checkDatabaseConnection();
 

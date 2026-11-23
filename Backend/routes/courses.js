@@ -14,6 +14,7 @@ import tenantService from '../services/tenantService.js';
 import { authenticateToken, optionalAuthenticateToken, requireRole } from '../middleware/auth.js';
 import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
 import { cleanUnsupportedWords, stripSlidePlaceholders, isBinaryNoiseText, isPlaceholderTitle } from '../utils/contentQuality.js';
+import { getGatewayBaseUrl, getPythonServiceUrl, getGatewayApiKey } from '../config/gateway.js';
 import { formatGatewayError } from '../utils/gatewayError.js';
 
 const router = express.Router();
@@ -2092,15 +2093,8 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
 
     const targetLangCode = resolveLanguageCode(requestedLang);
 
-    const PYTHON_SERVICE_URL = (
-      process.env.PYTHON_SERVICE_URL ||
-      'http://localhost:8000'
-    ).replace(/\/+$/, '');
-    const gatewayApiKey = (
-      process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-      process.env.LLM_GATEWAY_API_KEY ||
-      ''
-    ).trim();
+    const gatewayUrl = getPythonServiceUrl();
+    const gatewayApiKey = getGatewayApiKey();
     const WHISPER_SERVER_URL = process.env.WHISPER_SERVER_URL || 'http://localhost:9000';
     console.log(`[Whisper Flow] Transcribing audio file: ${req.file.originalname || 'voice.webm'} (${req.file.size} bytes, targetLang: ${targetLangCode || 'auto'})...`);
 
@@ -2120,13 +2114,13 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
         headers['X-API-Key'] = gatewayApiKey;
       }
 
-      const transcribeEndpoint = `${PYTHON_SERVICE_URL}/api/v1/stt/transcribe`;
+      const transcribeEndpoint = `${gatewayUrl}/api/v1/stt/transcribe`;
       const pyResponse = await axios.post(transcribeEndpoint, form, {
         headers,
         timeout: 3000
       }).catch(async (err) => {
         if (err.response?.status === 404) {
-          return await axios.post(`${PYTHON_SERVICE_URL}/api/v1/transcribe`, form, { headers, timeout: 3000 });
+          return await axios.post(`${gatewayUrl}/api/v1/transcribe`, form, { headers, timeout: 3000 });
         }
         throw err;
       });

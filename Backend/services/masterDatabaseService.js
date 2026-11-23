@@ -32,7 +32,7 @@ function getCandidateMasterDbUrls() {
       const u = new URL(process.env.DATABASE_URL);
       u.pathname = '/skillbridge_master';
       candidates.push(u.toString());
-    } catch (_) {}
+    } catch (_) { }
     // 2. Fallback to primary database if skillbridge_master does not exist
     candidates.push(process.env.DATABASE_URL);
   }
@@ -47,7 +47,7 @@ export async function getWorkingMasterClient() {
       await client.connect();
       return { client, url };
     } catch (err) {
-      await client.end().catch(() => {});
+      await client.end().catch(() => { });
     }
   }
   return null;
@@ -122,7 +122,7 @@ export async function ensureMasterDatabase() {
     console.error('[MasterDB] Error initializing master schema:', err.message);
     return false;
   } finally {
-    await client.end().catch(() => {});
+    await client.end().catch(() => { });
   }
 }
 
@@ -159,7 +159,7 @@ export async function findSuperAdminByEmail(email, masterPrisma) {
     console.error('[MasterDB] Direct SQL query error:', err.message);
     return null;
   } finally {
-    await client.end().catch(() => {});
+    await client.end().catch(() => { });
   }
 }
 
@@ -171,7 +171,7 @@ export async function findSuperAdminById(id, masterPrisma) {
     try {
       const admin = await masterPrisma.superAdmin.findUnique({ where: { id } });
       if (admin) return admin;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   const connection = await getWorkingMasterClient();
@@ -187,7 +187,7 @@ export async function findSuperAdminById(id, masterPrisma) {
   } catch (err) {
     return null;
   } finally {
-    await client.end().catch(() => {});
+    await client.end().catch(() => { });
   }
 }
 
@@ -201,7 +201,7 @@ export async function listAllSuperAdmins(masterPrisma) {
         select: { id: true, email: true, name: true, createdAt: true },
         orderBy: { createdAt: 'desc' }
       });
-    } catch (_) {}
+    } catch (_) { }
   }
 
   const connection = await getWorkingMasterClient();
@@ -216,6 +216,6 @@ export async function listAllSuperAdmins(masterPrisma) {
   } catch (err) {
     return [];
   } finally {
-    await client.end().catch(() => {});
+    await client.end().catch(() => { });
   }
 }

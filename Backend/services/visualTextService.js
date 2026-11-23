@@ -2,6 +2,7 @@ import { createWorker } from 'tesseract.js';
 import axios from 'axios';
 import FormData from 'form-data';
 import { isGarbageTitle, isPlaceholderTitle, firstUsefulTitleLine } from '../utils/contentQuality.js';
+import { getPythonServiceUrl, getGatewayApiKey } from '../config/gateway.js';
 import { formatGatewayError } from '../utils/gatewayError.js';
 
 const MIN_IMAGE_BYTES = 12000;
@@ -18,19 +19,12 @@ function dataUrlToBuffer(dataUrl) {
 }
 
 function gatewayBaseUrl() {
-  return String(
-    process.env.PYTHON_SERVICE_URL ||
-    'http://localhost:8000'
-  ).trim().replace(/\/+$/, '');
+  return getPythonServiceUrl();
 }
 
 function gatewayHeaders(extra = {}) {
   const headers = { ...extra };
-  const apiKey = (
-    process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-    process.env.LLM_GATEWAY_API_KEY ||
-    ''
-  ).trim();
+  const apiKey = getGatewayApiKey();
   if (apiKey) {
     headers['X-API-Key'] = apiKey;
   }

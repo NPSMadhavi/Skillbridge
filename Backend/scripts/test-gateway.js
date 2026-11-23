@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { getGatewayBaseUrl, getGatewayApiKey } from '../config/gateway.js';
 
 // Resolve environment variables from Backend/.env or .env
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -36,17 +37,8 @@ for (const envPath of envCandidates) {
   }
 }
 
-const baseUrl = (
-  process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
-  process.env.LLM_GATEWAY_URL ||
-  'https://rtxsvr.tail59469f.ts.net'
-).trim().replace(/\/+$/, '');
-
-const apiKey = (
-  process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-  process.env.LLM_GATEWAY_API_KEY ||
-  ''
-).trim();
+const baseUrl = getGatewayBaseUrl();
+const apiKey = getGatewayApiKey();
 
 const headers = {
   'Accept': 'application/json'
@@ -95,6 +87,29 @@ async function run() {
     }
   } catch (err) {
     console.log(`POST /api/v1/chat: ${err.cause?.code || err.code || err.message}`);
+  }
+
+  // 4. Every AI feature must be served by this same gateway.
+  // A GET on a POST-only route returns 405 when the route exists on the gateway;
+  // an HTML 404 means the route is not exposed on this gateway address.
+  const featureRoutes = [
+    ['Face extraction (Face ID login)', '/api/v1/face/extract'],
+    ['Speech to text (voice input)', '/api/v1/stt/transcribe'],
+    ['Embeddings (course RAG)', '/api/v1/embeddings'],
+    ['TTS fallback (ARIA voice)', '/api/v1/tts/synthesize'],
+    ['OCR (document visuals)', '/api/v1/ocr'],
+  ];
+
+  console.log('\nGateway route availability:');
+  for (const [label, route] of featureRoutes) {
+    try {
+      const res = await fetch(`${baseUrl}${route}`, { method: 'GET', headers });
+      const contentType = res.headers.get('content-type') || '';
+      const exposed = res.status !== 404 || !contentType.includes('text/html');
+      console.log(`  ${label} ${route}: ${res.status} ${exposed ? 'EXPOSED' : 'NOT EXPOSED on this gateway address'}`);
+    } catch (err) {
+      console.log(`  ${label} ${route}: ${err.cause?.code || err.code || err.message}`);
+    }
   }
 }
 

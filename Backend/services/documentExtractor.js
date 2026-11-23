@@ -5,6 +5,7 @@ import mammoth from 'mammoth';
 import axios from 'axios';
 import FormData from 'form-data';
 import { exec } from 'child_process';
+import { getPythonServiceUrl, getGatewayApiKey } from '../config/gateway.js';
 import { formatGatewayError } from '../utils/gatewayError.js';
 import util from 'util';
 import fs from 'fs';
@@ -1008,15 +1009,8 @@ function splitTextIntoPages(text, startPage = 1) {
  * coherent, high-value learning chunks using LLM intelligence.
  */
 async function extractAudioFile(buffer, originalname, mimetype) {
-  const PYTHON_SERVICE_URL = (
-    process.env.PYTHON_SERVICE_URL ||
-    'http://localhost:8000'
-  ).replace(/\/+$/, '');
-  const gatewayApiKey = (
-    process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-    process.env.LLM_GATEWAY_API_KEY ||
-    ''
-  ).trim();
+  const gatewayUrl = getPythonServiceUrl();
+  const gatewayApiKey = getGatewayApiKey();
   let transcription = '';
   let detectedLanguage = 'en';
 
@@ -1033,12 +1027,12 @@ async function extractAudioFile(buffer, originalname, mimetype) {
       headers['X-API-Key'] = gatewayApiKey;
     }
 
-    const pyRes = await axios.post(`${PYTHON_SERVICE_URL}/api/v1/stt/transcribe`, form, {
+    const pyRes = await axios.post(`${gatewayUrl}/api/v1/stt/transcribe`, form, {
       headers,
       timeout: 10000
     }).catch(async (err) => {
       if (err.response?.status === 404) {
-        return await axios.post(`${PYTHON_SERVICE_URL}/api/v1/transcribe`, form, { headers, timeout: 10000 });
+        return await axios.post(`${gatewayUrl}/api/v1/transcribe`, form, { headers, timeout: 10000 });
       }
       throw err;
     });

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { getGatewayBaseUrl as resolveGatewayBaseUrl, getPythonServiceUrl as resolvePythonServiceUrl, getGatewayApiKey as resolveGatewayApiKey } from '../config/gateway.js';
 import {
   isGarbageTitle,
   isPlaceholderTitle,
@@ -13,36 +14,22 @@ import { formatGatewayError } from '../utils/gatewayError.js';
 
 dotenv.config();
 
-const DEFAULT_GATEWAY_URL = 'https://rtxsvr.tail59469f.ts.net';
-
 class AIService {
   /**
    * Reads SKILLBRIDGE_LLM_GATEWAY_URL and strips a trailing slash.
    * Chat uses POST {base}/api/v1/chat on this same origin.
    */
   getGatewayBaseUrl() {
-    const raw = (
-      process.env.SKILLBRIDGE_LLM_GATEWAY_URL ||
-      process.env.LLM_GATEWAY_URL ||
-      DEFAULT_GATEWAY_URL
-    ).trim();
-    return raw.replace(/\/+$/, '');
+    return resolveGatewayBaseUrl();
   }
 
+  // Embeddings and python-service calls use PYTHON_SERVICE_URL
   getPythonServiceBaseUrl() {
-    const raw = (
-      process.env.PYTHON_SERVICE_URL ||
-      'http://localhost:8000'
-    ).trim();
-    return raw.replace(/\/+$/, '');
+    return resolvePythonServiceUrl();
   }
 
   getGatewayApiKey() {
-    return (
-      process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-      process.env.LLM_GATEWAY_API_KEY ||
-      ''
-    ).trim();
+    return resolveGatewayApiKey();
   }
 
   _envFlag(name) {
@@ -922,16 +909,16 @@ Return ONLY JSON:
   }
 
   /**
-   * Generates a single vector embedding using Central AI Gateway / Python Service,
+   * Generates a single vector embedding using Central AI Gateway,
    * falling back to OpenAI text-embedding-3-small, and finally to local 768-d hash embedding.
    */
   async getEmbedding(text, dimensions = 768) {
     if (!text || !text.trim()) return null;
 
-    // 1. Primary: Central AI Gateway / Python Service embeddings
-    const pythonUrl = this.getPythonServiceBaseUrl();
+    // 1. Primary: Central AI Gateway embeddings (Python Service)
+    const gatewayUrl = this.getPythonServiceBaseUrl();
     try {
-      const response = await axios.post(`${pythonUrl}/api/v1/embeddings`, {
+      const response = await axios.post(`${gatewayUrl}/api/v1/embeddings`, {
         input: text.slice(0, 8000),
         dimensions: dimensions
       }, {
@@ -982,17 +969,17 @@ Return ONLY JSON:
   }
 
   /**
-   * Generates batch vector embeddings using Central AI Gateway / Python Service,
+   * Generates batch vector embeddings using Central AI Gateway,
    * falling back to OpenAI text-embedding-3-small, and finally to local 768-d hash embeddings.
    */
   async getEmbeddings(textArray, dimensions = 768) {
     if (!textArray || !Array.isArray(textArray) || textArray.length === 0) return [];
     const cleanInputs = textArray.map(t => (typeof t === 'string' ? t.slice(0, 8000) : ''));
 
-    // 1. Primary: Central AI Gateway / Python Service batch embeddings
-    const pythonUrl = this.getPythonServiceBaseUrl();
+    // 1. Primary: Central AI Gateway batch embeddings (Python Service)
+    const gatewayUrl = this.getPythonServiceBaseUrl();
     try {
-      const response = await axios.post(`${pythonUrl}/api/v1/embeddings`, {
+      const response = await axios.post(`${gatewayUrl}/api/v1/embeddings`, {
         input: cleanInputs,
         dimensions: dimensions
       }, {

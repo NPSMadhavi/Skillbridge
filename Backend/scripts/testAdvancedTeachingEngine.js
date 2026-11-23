@@ -15,11 +15,12 @@ import { healBrokenBullets, validateCleanedContent, stripSlidePlaceholders } fro
 import interactiveCourseService from '../services/interactiveCourseService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
 import prisma from '../config/prisma.js';
+import { getGatewayBaseUrl, getGatewayApiKey } from '../config/gateway.js';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const GATEWAY_URL = process.env.SKILLBRIDGE_LLM_GATEWAY_URL || 'https://rtxsvr.tail59469f.ts.net';
-const GATEWAY_KEY = process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY || 'd52edbbeb11ee8b323282d10fe030b6f71667984d8199b8e4f67ed7513fb7387';
+const GATEWAY_URL = getGatewayBaseUrl();
+const GATEWAY_KEY = getGatewayApiKey();
 
 async function runTestSuite() {
   console.log('========================================================================');

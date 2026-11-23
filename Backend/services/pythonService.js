@@ -1,19 +1,11 @@
 import axios from 'axios';
 import crypto from 'crypto';
 import FormData from 'form-data';
+import { getPythonServiceUrl, getGatewayApiKey } from '../config/gateway.js';
 import { formatGatewayError } from '../utils/gatewayError.js';
 
-const getServiceUrl = () => {
-  const url = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000';
-  return url.replace(/\/+$/, '');
-};
-
 const getServiceHeaders = () => {
-  const key = (
-    process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
-    process.env.LLM_GATEWAY_API_KEY ||
-    ''
-  ).trim();
+  const key = getGatewayApiKey();
   return key ? { 'X-API-Key': key } : {};
 };
 
@@ -46,7 +38,7 @@ async function extractFaceEmbedding(image) {
 
   const headers = { ...form.getHeaders(), ...getServiceHeaders() };
   try {
-    const res = await axios.post(`${getServiceUrl()}/api/v1/face/extract`, form, {
+    const res = await axios.post(`${getPythonServiceUrl()}/api/v1/face/extract`, form, {
       headers,
       timeout: 25000
     });
