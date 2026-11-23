@@ -40,7 +40,7 @@ async function extractFaceEmbedding(image) {
   try {
     const res = await axios.post(`${getPythonServiceUrl()}/api/v1/face/extract`, form, {
       headers,
-      timeout: 25000
+      timeout: 8000
     });
 
     if (res.data?.embedding && Array.isArray(res.data.embedding)) {
