@@ -1166,7 +1166,12 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     }
 
     const { lessonTitle, language } = req.body;
-    if (!lessonTitle) {
+    let effectiveLessonTitle = lessonTitle;
+    if (!effectiveLessonTitle && Array.isArray(curriculum.lessons)) {
+      const found = curriculum.lessons.find(l => String(l.id) === lessonIdStr);
+      if (found?.title) effectiveLessonTitle = found.title;
+    }
+    if (!effectiveLessonTitle) {
       return res.status(400).json({ error: 'Lesson title is required.' });
     }
 
@@ -1257,9 +1262,9 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     const sourceScript = hasCleanStored ? storedScript : synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
 
     try {
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Teacher lecture generation timeout (25s)')), 25000));
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Teacher lecture generation timeout (50s)')), 50000));
       explanation = await Promise.race([
-        interactiveCourseService.generateTeacherLecture(lessonTitle, course.title, sourceScript, {
+        interactiveCourseService.generateTeacherLecture(effectiveLessonTitle, course.title, sourceScript, {
           language: targetLangInfo.code,
           targetWpm: 130
         }),
@@ -1267,11 +1272,7 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
       ]);
     } catch (lectureErr) {
       console.warn(`[PERF:LLM_END] AI teacher engine fallback triggered for ${targetLanguage}:`, lectureErr.message);
-      try {
-        explanation = await aiService.explainLesson(course.title, lessonTitle, sourceScript, targetLanguage);
-      } catch (fallbackErr) {
-        explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
-      }
+      explanation = aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
     }
 
     if (explanation && !textMatchesLanguage(explanation, targetLangInfo.code)) {

@@ -2065,6 +2065,17 @@ const CoursePlayer = ({
           console.warn('[CoursePlayer] Could not fetch lesson explanation:', err?.message);
           setExplanationError(true);
           setLoadingExplanation(false);
+
+          // Resilient Pedagogical Fallback: If localized backend fetch failed,
+          // recover using the available lesson explanation so the student is never blocked
+          const fallbackText = activeLesson?.explanations?.[requestLang] ||
+            activeLesson?.explanation ||
+            activeLesson?.title ||
+            '';
+          if (fallbackText && fallbackText.length > 20) {
+            setExplanation(fallbackText);
+            setPipelineState('READY');
+          }
         })
         .finally(() => clearTimeout(timeout));
       return () => {
@@ -3542,7 +3553,24 @@ const CoursePlayer = ({
                   {/* Main Display Canvas: Slide Screen Only */}
                   <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden relative">
                     {/* Non-intrusive floating explanation badge while assistant pre-warms explanation */}
-                    {explanationError && <button className="absolute top-2 left-2 z-30 rounded bg-slate-900 p-2 text-white" onClick={() => setRetryCount(count => count + 1)}>Couldn?t load the lesson in {preferredLanguage}. Retry</button>}
+                    {explanationError && (
+                      <div className="absolute top-2 left-2 z-30 flex items-center gap-2 bg-slate-900/95 border border-amber-500/40 backdrop-blur-md rounded-xl px-3 py-1.5 shadow-xl animate-fadeIn">
+                        <span className="text-amber-400 text-xs">⚠️</span>
+                        <span className="text-xs text-slate-200 font-medium">
+                          Couldn't load the lesson in {preferredLanguage}.
+                        </span>
+                        <button
+                          type="button"
+                          className="ml-1 px-2 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 font-semibold text-xs rounded-md border border-amber-500/40 transition-colors cursor-pointer"
+                          onClick={() => {
+                            setExplanationError(false);
+                            setRetryCount(count => count + 1);
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    )}
                     {loadingExplanation && (
                       <div className="absolute top-2 left-2 right-2 z-30 bg-slate-900/90 border border-[#ff8c21]/40 backdrop-blur-md rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs text-[#ff8c21] shadow-lg animate-fadeIn">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
