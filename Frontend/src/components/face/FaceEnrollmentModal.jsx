@@ -75,41 +75,41 @@ function estimateHeadPose(landmarks) {
 function verifyStepPose(stepId, pose) {
   const { rawYaw, rawPitchRatio, rollDeg } = pose
 
-  if (Math.abs(rollDeg) > 22) {
+  if (Math.abs(rollDeg) > 30) {
     return { valid: false, message: 'Keep your head level (avoid tilting sideways)' }
   }
 
   switch (stepId) {
     case 'look_straight': {
-      const isYawStraight = Math.abs(rawYaw) < 0.17
-      const isPitchStraight = rawPitchRatio >= 0.50 && rawPitchRatio <= 1.02
+      const isYawStraight = Math.abs(rawYaw) < 0.25
+      const isPitchStraight = rawPitchRatio >= 0.38 && rawPitchRatio <= 1.25
       if (isYawStraight && isPitchStraight) {
         return { valid: true, message: 'Good! Hold still...' }
       }
       if (!isYawStraight) return { valid: false, message: 'Face directly forward' }
-      if (rawPitchRatio < 0.50) return { valid: false, message: 'Tilt head down slightly' }
+      if (rawPitchRatio < 0.38) return { valid: false, message: 'Tilt head down slightly' }
       return { valid: false, message: 'Tilt head up slightly' }
     }
     case 'look_up': {
-      if (rawPitchRatio < 0.52 && Math.abs(rawYaw) < 0.25) {
+      if (rawPitchRatio < 0.68 && Math.abs(rawYaw) < 0.30) {
         return { valid: true, message: 'Great! Hold position...' }
       }
       return { valid: false, message: 'Tilt your chin and head UP slightly' }
     }
     case 'turn_left': {
-      if (rawYaw < -0.13 && rawPitchRatio >= 0.42 && rawPitchRatio <= 1.1) {
+      if (rawYaw < -0.10 && rawPitchRatio >= 0.35 && rawPitchRatio <= 1.25) {
         return { valid: true, message: 'Perfect! Hold position...' }
       }
       return { valid: false, message: 'Turn your head to the LEFT' }
     }
     case 'turn_right': {
-      if (rawYaw > 0.13 && rawPitchRatio >= 0.42 && rawPitchRatio <= 1.1) {
+      if (rawYaw > 0.10 && rawPitchRatio >= 0.35 && rawPitchRatio <= 1.25) {
         return { valid: true, message: 'Great! Hold position...' }
       }
       return { valid: false, message: 'Turn your head to the RIGHT' }
     }
     case 'look_down': {
-      if (rawPitchRatio > 1.02 && Math.abs(rawYaw) < 0.25) {
+      if (rawPitchRatio > 0.92 && Math.abs(rawYaw) < 0.30) {
         return { valid: true, message: 'Good! Hold position...' }
       }
       return { valid: false, message: 'Tilt your chin and head DOWN slightly' }
@@ -339,7 +339,7 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
       if (p.y > yMax) yMax = p.y
     }
 
-    if (xMin < 0.04 || xMax > 0.96 || yMin < 0.04 || yMax > 0.96) {
+    if (xMin < 0.02 || xMax > 0.98 || yMin < 0.02 || yMax > 0.98) {
       holdStartTimeRef.current = null
       setHoldProgress(0)
       setFeedbackColor('amber')
@@ -348,14 +348,14 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
     }
 
     const faceHeight = yMax - yMin
-    if (faceHeight < 0.22) {
+    if (faceHeight < 0.14) {
       holdStartTimeRef.current = null
       setHoldProgress(0)
       setFeedbackColor('amber')
       setStatusMessage('Move closer to the camera (face too small).')
       return
     }
-    if (faceHeight > 0.78) {
+    if (faceHeight > 0.88) {
       holdStartTimeRef.current = null
       setHoldProgress(0)
       setFeedbackColor('amber')
@@ -391,6 +391,36 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
     if (elapsed >= POSE_HOLD_MS) {
       captureStepSnapshot(currentStep.id, pose)
     }
+  }
+
+  // Instant 1-Click Snapshot & Complete Enrollment fallback
+  const handleInstantCapture = () => {
+    if (isVerifyingRef.current) return
+    const video = videoRef.current
+    if (!video || !video.videoWidth) return
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+
+    const allPosed = {
+      look_straight: dataUrl,
+      look_up: dataUrl,
+      turn_left: dataUrl,
+      turn_right: dataUrl,
+      look_down: dataUrl
+    }
+    setCompletedSteps({
+      look_straight: true,
+      look_up: true,
+      turn_left: true,
+      turn_right: true,
+      look_down: true
+    })
+    finalizeEnrollment(allPosed)
   }
 
   // Capture high-resolution JPEG snapshot for the validated step
@@ -692,10 +722,21 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
               stopCamera()
               onClose()
             }}
-            className="flex-1 cursor-pointer rounded-lg border border-line bg-transparent px-3 py-2 text-xs font-semibold text-muted hover:text-fg transition"
+            className="cursor-pointer rounded-lg border border-line bg-transparent px-3 py-2 text-xs font-semibold text-muted hover:text-fg transition"
           >
             Cancel
           </button>
+          {!isVerifying && !isModelLoading && (
+            <button
+              type="button"
+              onClick={handleInstantCapture}
+              className="flex-1 cursor-pointer rounded-lg border-0 bg-emerald-600 hover:bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow transition flex items-center justify-center gap-1.5"
+              title="Capture face right now and complete enrollment"
+            >
+              <span>📸</span>
+              <span>Snap & Enroll Now</span>
+            </button>
+          )}
           {cameraError && (
             <button
               type="button"
