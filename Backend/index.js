@@ -120,9 +120,32 @@ app.use((req, res, next) => {
 // CORS & BODY PARSING
 // ============================================================
 
-// Allow all origins (*)
+// Allowed production and local origins
+const ALLOWED_ORIGINS = [
+  'https://brutallyhired.com',
+  'https://www.brutallyhired.com',
+  'http://localhost:5173',
+  'http://localhost:5000',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5000'
+];
+
 app.use(cors({
-  origin: '*',
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (
+      ALLOWED_ORIGINS.includes(origin) ||
+      origin.endsWith('.brutallyhired.com') ||
+      origin.includes('localhost') ||
+      origin.includes('127.0.0.1') ||
+      !IS_PROD
+    ) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'x-company-code', 'x-admin-password', 'X-Requested-With', 'Accept', 'Origin']
 }));
@@ -203,6 +226,7 @@ app.get('/api/health', async (req, res) => {
       status: 'ok',
       server: 'running',
       database: 'connected',
+      appUrl: 'https://brutallyhired.com/',
       timestamp: new Date().toISOString()
     });
   } catch (error) {
@@ -302,6 +326,7 @@ app.listen(PORT, async () => {
   console.log('SKILLBRIDGE / BRUTALLYHIRED BACKEND STARTED');
   console.log(`Port / Socket: ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
+  console.log('Production URL: https://brutallyhired.com/');
   console.log('========================================');
 
   // AI Subsystems Configuration Logging (Variable names only, never secrets)
