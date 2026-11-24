@@ -844,13 +844,15 @@ export function invalidateCoursesCatalogCache(tenantCode) {
 
 // Helper to format lightweight course object for catalog/listing without massive base64 payloads
 function formatCourseForCatalog(course) {
-  let curriculumSummary = course.curriculum;
-  if (curriculumSummary) {
-    if (typeof curriculumSummary === 'string') {
-      try {
-        curriculumSummary = JSON.parse(curriculumSummary);
-      } catch (e) {
-        curriculumSummary = {};
+  try {
+    let curriculumSummary = course?.curriculum;
+    if (curriculumSummary) {
+      if (typeof curriculumSummary === 'string') {
+        try {
+          curriculumSummary = JSON.parse(curriculumSummary);
+        } catch (e) {
+          curriculumSummary = {};
+        }
       }
     }
     if (!curriculumSummary || typeof curriculumSummary !== 'object') {
