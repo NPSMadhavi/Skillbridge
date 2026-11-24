@@ -321,7 +321,7 @@ function getUrlHost(rawUrl) {
   }
 }
 
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   console.log('========================================');
   console.log('SKILLBRIDGE / BRUTALLYHIRED BACKEND STARTED');
   console.log(`Port / Socket: ${PORT}`);
@@ -357,6 +357,13 @@ app.listen(PORT, async () => {
   }, BACKUP_INTERVAL_MS);
   if (typeof backupTimer.unref === 'function') {
     backupTimer.unref();
+  }
+});
+
+server.on('error', (err) => {
+  console.error('[SERVER LISTEN ERROR]', err.message || err);
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[SERVER LISTEN ERROR] Port or socket ${PORT} is already in use.`);
   }
 });
 

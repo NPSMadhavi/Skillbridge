@@ -201,9 +201,8 @@ export const tenantService = {
     });
 
     // Ensure backwards-compatible schema columns exist in tenant DB
+    client.$executeRawUnsafe(`ALTER TABLE IF EXISTS "User" ADD COLUMN IF NOT EXISTS "phone" TEXT;`).catch(() => {});
     client.$executeRawUnsafe(`
-      ALTER TABLE IF EXISTS "User"
-        ADD COLUMN IF NOT EXISTS "phone" TEXT;
       ALTER TABLE IF EXISTS "Admin"
         ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
         ADD COLUMN IF NOT EXISTS "fullName" TEXT,
@@ -967,10 +966,9 @@ export const tenantService = {
       }
 
       // 4. Ensure required schema columns exist in default database
+      await defaultPrisma.$executeRawUnsafe(`ALTER TABLE IF EXISTS "User" ADD COLUMN IF NOT EXISTS "phone" TEXT;`).catch(() => {});
       await defaultPrisma.$executeRawUnsafe(`
-        ALTER TABLE IF EXISTS "User"
-        ADD COLUMN IF NOT EXISTS "phone" TEXT;
-      ALTER TABLE IF EXISTS "Admin"
+        ALTER TABLE IF EXISTS "Admin"
           ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false,
           ADD COLUMN IF NOT EXISTS "fullName" TEXT,
           ADD COLUMN IF NOT EXISTS "nricFin" TEXT,
