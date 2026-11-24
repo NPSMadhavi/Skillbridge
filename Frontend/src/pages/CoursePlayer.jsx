@@ -3585,7 +3585,7 @@ const CoursePlayer = ({
                         <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-slate-700/80 bg-slate-950/80 shadow-lg relative group flex flex-col">
                           <div className={`relative flex-1 min-h-0 flex bg-black/60 overflow-auto no-scrollbar ${fitToWidth ? 'items-start justify-center p-1 sm:p-2' : 'items-center justify-center p-2'}`}>
                             <img
-                              src={currentDocPage?.image || activeVisual.dataUrl || activeVisual.url}
+                              src={currentDocPage?.image || activeVisual?.dataUrl || activeVisual?.url}
                               alt={currentDocPage?.title || activeVisual?.descr || 'Presentation Slide'}
                               onError={() => setSlideImageLoadError(true)}
                               style={{

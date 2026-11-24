@@ -30,6 +30,76 @@ async function extractDocumentContent(file) {
   return await documentExtractor.extractDocument(file);
 }
 
+function escapeXml(unsafe) {
+  if (!unsafe) return '';
+  return String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function generateSlideSvg({ slideNumber, totalSlides = 1, title = '', headings = [], bulletPoints = [], paragraphs = [], courseTitle = 'SkillBridge Training' }) {
+  const safeTitle = escapeXml(title || `Slide ${slideNumber}`);
+  const safeCourse = escapeXml(courseTitle);
+  const rawBullets = Array.isArray(bulletPoints) ? bulletPoints : [];
+  const rawParas = Array.isArray(paragraphs) ? paragraphs : [];
+  const items = rawBullets.length > 0
+    ? rawBullets.slice(0, 6).map(b => escapeXml(String(b).replace(/^[-*•▸\d.]+\s*/, '').trim()))
+    : rawParas.slice(0, 5).map(p => escapeXml(String(p).trim()));
+
+  let contentY = 220;
+  let itemsSvg = '';
+  items.forEach((item, idx) => {
+    if (!item) return;
+    const truncated = item.length > 115 ? item.slice(0, 112) + '...' : item;
+    itemsSvg += `
+      <g transform="translate(100, ${contentY + idx * 68})">
+        <rect x="0" y="0" width="1080" height="52" rx="10" fill="#131e3d" fill-opacity="0.75" stroke="#253561" stroke-width="1.2"/>
+        <circle cx="28" cy="26" r="6" fill="#ff8c21"/>
+        <text x="50" y="32" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18" fill="#e2e8f0" font-weight="500">${truncated}</text>
+      </g>`;
+  });
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+    <defs>
+      <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#0b1329"/>
+        <stop offset="50%" stop-color="#0f1b3b"/>
+        <stop offset="100%" stop-color="#070d1e"/>
+      </linearGradient>
+      <linearGradient id="orangeBar" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#ff8c21"/>
+        <stop offset="100%" stop-color="#ffaa44"/>
+      </linearGradient>
+    </defs>
+    <rect width="1280" height="720" fill="url(#bgGrad)"/>
+    <rect x="0" y="0" width="1280" height="6" fill="url(#orangeBar)"/>
+    
+    <!-- Slide Header Card -->
+    <g transform="translate(100, 60)">
+      <rect x="0" y="0" width="1080" height="124" rx="16" fill="#162244" fill-opacity="0.65" stroke="#2c3e6b" stroke-width="1.5"/>
+      <rect x="28" y="24" width="40" height="40" rx="10" fill="#ff8c21" fill-opacity="0.2" stroke="#ff8c21" stroke-width="1.5"/>
+      <text x="48" y="50" font-family="sans-serif" font-size="22" fill="#ff8c21" text-anchor="middle" font-weight="bold">📊</text>
+      <text x="84" y="38" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" fill="#ff8c21" font-weight="bold" letter-spacing="1.5">POWERPOINT PRESENTATION • SLIDE ${slideNumber} OF ${totalSlides}</text>
+      <text x="84" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="24" fill="#ffffff" font-weight="bold">${safeTitle}</text>
+      <text x="84" y="100" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" fill="#94a3b8">${safeCourse}</text>
+    </g>
+
+    <!-- Slide Content Items -->
+    ${itemsSvg}
+
+    <!-- Slide Footer -->
+    <g transform="translate(100, 665)">
+      <line x1="0" y1="0" x2="1080" y2="0" stroke="#1e293b" stroke-width="1"/>
+      <circle cx="8" cy="22" r="5" fill="#ff8c21"/>
+      <text x="24" y="26" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" fill="#64748b" font-weight="500">SkillBridge Interactive Slide Player</text>
+      <text x="1080" y="26" font-family="monospace" font-size="12" fill="#64748b" font-weight="bold" text-anchor="end">Slide ${slideNumber} of ${totalSlides}</text>
+    </g>
+  </svg>`;
+}
+
 // 1. Admin: Create course module by uploading a document (PDF, Word, PPTX, TXT, etc.)
 router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
   req.setTimeout(300000);
@@ -119,36 +189,60 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       if (Array.isArray(generatedCourse.slides)) {
         generatedCourse.slides = generatedCourse.slides.map((s, idx) => {
           const sNum = s.slideNumber || idx + 1;
-          const slideFile = path.join(slidesDir, `Slide${sNum}.png`);
-          const rawData = s.fullSlideImage?.dataUrl || s.images?.[0]?.dataUrl || s.dataUrl;
+          const slidePngFile = path.join(slidesDir, `Slide${sNum}.png`);
+          const slideSvgFile = path.join(slidesDir, `Slide${sNum}.svg`);
+          const origSlide = (docResult.slides && docResult.slides[idx]) || {};
+          const rawData = origSlide.fullSlideImage?.dataUrl || origSlide.images?.[0]?.dataUrl || origSlide.dataUrl || s.fullSlideImage?.dataUrl || s.dataUrl;
           let imageSaved = false;
 
-          if (rawData && rawData.startsWith('data:image')) {
+          if (rawData && typeof rawData === 'string' && rawData.startsWith('data:image')) {
             const base64Part = rawData.split(',')[1];
             if (base64Part) {
-              fs.writeFileSync(slideFile, Buffer.from(base64Part, 'base64'));
+              fs.writeFileSync(slidePngFile, Buffer.from(base64Part, 'base64'));
               imageSaved = true;
             }
-          } else if (fs.existsSync(slideFile)) {
+          } else if (origSlide.images?.[0]?.buffer && Buffer.isBuffer(origSlide.images[0].buffer)) {
+            fs.writeFileSync(slidePngFile, origSlide.images[0].buffer);
+            imageSaved = true;
+          } else if (fs.existsSync(slidePngFile) || fs.existsSync(slideSvgFile)) {
             imageSaved = true;
           }
 
-          const imageUrl = imageSaved ? `/api/v1/courses/${newCourse.id}/slides/${sNum}/image` : null;
+          // If no raster graphic found, generate clean high-res branded presentation SVG card
+          if (!imageSaved) {
+            try {
+              const svgContent = generateSlideSvg({
+                slideNumber: sNum,
+                totalSlides: generatedCourse.slides.length,
+                title: s.title,
+                headings: s.headings,
+                bulletPoints: s.bulletPoints,
+                paragraphs: s.paragraphs,
+                courseTitle: generatedCourse.title
+              });
+              fs.writeFileSync(slideSvgFile, svgContent, 'utf-8');
+              imageSaved = true;
+            } catch (svgErr) {
+              console.warn(`[File Storage] Notice generating SVG for slide ${sNum}:`, svgErr.message);
+            }
+          }
+
+          const imageUrl = `/api/v1/courses/${newCourse.id}/slides/${sNum}/image`;
           return {
             ...s,
             slideNumber: sNum,
             image: imageUrl,
-            fullSlideImage: imageSaved ? {
+            fullSlideImage: {
               id: `full_slide_${sNum}`,
               url: imageUrl,
               slideNumber: sNum,
               fileName: `Slide${sNum}.png`,
               mimetype: 'image/png'
-            } : null,
+            },
             images: (s.images || []).map((im, imIdx) => ({
               ...im,
               dataUrl: undefined,
-              url: imageSaved ? `/api/v1/courses/${newCourse.id}/slides/${sNum}/image` : null
+              url: imageUrl
             }))
           };
         });
@@ -158,14 +252,41 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       if (Array.isArray(generatedCourse.pages)) {
         generatedCourse.pages = generatedCourse.pages.map((p, idx) => {
           const pNum = p.page_number || p.pageNumber || idx + 1;
-          const pageFile = path.join(pagesDir, `Page${pNum}.png`);
-          const rawData = p.pageImage?.dataUrl || p.images?.[0]?.dataUrl || p.dataUrl;
-          if (rawData && rawData.startsWith('data:image')) {
+          const pagePngFile = path.join(pagesDir, `Page${pNum}.png`);
+          const pageSvgFile = path.join(pagesDir, `Page${pNum}.svg`);
+          const origPage = (docResult.pages && docResult.pages[idx]) || {};
+          const rawData = origPage.pageImage?.dataUrl || origPage.images?.[0]?.dataUrl || origPage.dataUrl || p.pageImage?.dataUrl || p.dataUrl;
+          let imageSaved = false;
+
+          if (rawData && typeof rawData === 'string' && rawData.startsWith('data:image')) {
             const base64Part = rawData.split(',')[1];
             if (base64Part) {
-              fs.writeFileSync(pageFile, Buffer.from(base64Part, 'base64'));
+              fs.writeFileSync(pagePngFile, Buffer.from(base64Part, 'base64'));
+              imageSaved = true;
+            }
+          } else if (origPage.images?.[0]?.buffer && Buffer.isBuffer(origPage.images[0].buffer)) {
+            fs.writeFileSync(pagePngFile, origPage.images[0].buffer);
+            imageSaved = true;
+          } else if (fs.existsSync(pagePngFile) || fs.existsSync(pageSvgFile)) {
+            imageSaved = true;
+          }
+
+          if (!imageSaved) {
+            try {
+              const svgContent = generateSlideSvg({
+                slideNumber: pNum,
+                totalSlides: generatedCourse.pages.length,
+                title: p.title || `Page ${pNum}`,
+                paragraphs: p.text ? [p.text] : [],
+                courseTitle: generatedCourse.title
+              });
+              fs.writeFileSync(pageSvgFile, svgContent, 'utf-8');
+              imageSaved = true;
+            } catch (svgErr) {
+              console.warn(`[File Storage] Notice generating SVG for page ${pNum}:`, svgErr.message);
             }
           }
+
           const imageUrl = `/api/v1/courses/${newCourse.id}/pages/${pNum}/image`;
           return {
             ...p,
@@ -179,7 +300,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
               fileName: `Page${pNum}.png`,
               mimetype: 'image/png'
             },
-            images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
+            images: (p.images || []).map(im => ({ ...im, dataUrl: undefined, url: imageUrl }))
           };
         });
       }
@@ -194,26 +315,9 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       console.warn(`[File Storage] Notice saving course files:`, saveErr.message);
     }
 
-    // Store semantic chunks and generate vector embeddings directly in PostgreSQL pgvector
-    try {
-      console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension into PostgreSQL pgvector...`);
-      await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, generatedCourse);
-      console.log(`[pgvector] Course chunks and vector embeddings stored successfully.`);
-
-    } catch (vectorErr) {
-      console.warn(`[pgvector] Indexing warning for course ${newCourse.id}:`, vectorErr.message);
-    }
-
-    try {
-      const summary = generateModulesSummary(generatedCourse);
-      await targetPrisma.$executeRaw`
-        UPDATE "Course"
-        SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
-        WHERE id = ${newCourse.id};
-      `;
-    } catch (_) { }
     invalidateCoursesCatalogCache(req.tenantCode);
 
+    // Return immediate success to prevent web server 504 Gateway Timeouts
     res.status(201).json({
       message: 'Course published successfully.',
       course: {
@@ -221,9 +325,30 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         title: newCourse.title,
         description: newCourse.description,
         fileName: newCourse.fileName,
-        curriculum: newCourse.curriculum,
+        curriculum: generatedCourse,
         createdAt: newCourse.createdAt,
       },
+    });
+
+    // Run semantic chunking, vector indexing and modulesSummary asynchronously in background
+    setImmediate(async () => {
+      try {
+        console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension in background...`);
+        await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, generatedCourse);
+        console.log(`[pgvector] Course chunks and vector embeddings stored successfully for course ${newCourse.id}.`);
+      } catch (vectorErr) {
+        console.warn(`[pgvector] Background indexing notice for course ${newCourse.id}:`, vectorErr.message);
+      }
+
+      try {
+        const summary = generateModulesSummary(generatedCourse);
+        await targetPrisma.$executeRaw`
+          UPDATE "Course"
+          SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+          WHERE id = ${newCourse.id};
+        `;
+      } catch (_) { }
+      invalidateCoursesCatalogCache(req.tenantCode);
     });
   } catch (error) {
     console.error('[Document Extraction] Failed to publish course:', error);
@@ -274,7 +399,7 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
   }
 });
 
-// Serve slide image (PNG) for course (PowerPoint slides)
+// Serve slide image (PNG or SVG) for course (PowerPoint slides)
 router.get('/:id/slides/:slideNum/image', async (req, res) => {
   try {
     const courseId = req.params.id;
@@ -285,15 +410,24 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
 
     const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
     const slidesDir = path.join(courseUploadDir, 'slides');
-    const slideFile = path.join(slidesDir, `Slide${slideNum}.png`);
+    const slidePngFile = path.join(slidesDir, `Slide${slideNum}.png`);
+    const slideSvgFile = path.join(slidesDir, `Slide${slideNum}.svg`);
 
-    if (fs.existsSync(slideFile)) {
+    // 1. Direct raster PNG file exists
+    if (fs.existsSync(slidePngFile)) {
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      return fs.createReadStream(slideFile).pipe(res);
+      return fs.createReadStream(slidePngFile).pipe(res);
     }
 
-    // Try on-demand extraction from original presentation file on Ubuntu/Linux
+    // 2. Direct SVG presentation file exists
+    if (fs.existsSync(slideSvgFile)) {
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return fs.createReadStream(slideSvgFile).pipe(res);
+    }
+
+    // 3. Try on-demand extraction from original presentation file on Ubuntu/Linux
     if (fs.existsSync(courseUploadDir)) {
       const files = fs.readdirSync(courseUploadDir);
       const presFile = files.find(f => /\.(pptx|ppt)$/i.test(f));
@@ -320,13 +454,13 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
       }
     }
 
-    if (fs.existsSync(slideFile)) {
+    if (fs.existsSync(slidePngFile)) {
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      return fs.createReadStream(slideFile).pipe(res);
+      return fs.createReadStream(slidePngFile).pipe(res);
     }
 
-    // Fallback: Check if slide image is stored in DB curriculum
+    // 4. Fallback: Check if slide image is stored in DB curriculum
     const { course } = await findCourseAcrossTenants(courseId, req.prisma || prisma, null);
     if (!course) return res.status(404).json({ error: 'Course not found.' });
 
@@ -339,21 +473,40 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
       if (base64Part) {
         fs.mkdirSync(slidesDir, { recursive: true });
         const buf = Buffer.from(base64Part, 'base64');
-        fs.writeFileSync(slideFile, buf);
+        fs.writeFileSync(slidePngFile, buf);
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.end(buf);
       }
     }
 
-    return res.status(404).json({ error: `Slide image ${slideNum} not found.` });
+    // 5. Ultimate Guarantee: Dynamically generate crisp presentation SVG card on-the-fly
+    fs.mkdirSync(slidesDir, { recursive: true });
+    const totalSlides = Array.isArray(cur.slides) ? cur.slides.length : 1;
+    const svgOutput = generateSlideSvg({
+      slideNumber: slideNum,
+      totalSlides,
+      title: targetSlide?.title || `Slide ${slideNum}`,
+      headings: targetSlide?.headings || [],
+      bulletPoints: targetSlide?.bulletPoints || [],
+      paragraphs: targetSlide?.paragraphs || [],
+      courseTitle: course.title || 'Course Presentation'
+    });
+
+    try {
+      fs.writeFileSync(slideSvgFile, svgOutput, 'utf-8');
+    } catch (_) {}
+
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.end(svgOutput);
   } catch (err) {
     console.error('Error serving slide image:', err);
     res.status(500).json({ error: 'Failed to retrieve slide image.' });
   }
 });
 
-// Serve page image (PNG) for course (PDF / documents)
+// Serve page image (PNG or SVG) for course (PDF / documents)
 router.get('/:id/pages/:pageNum/image', async (req, res) => {
   try {
     const courseId = req.params.id;
@@ -364,15 +517,24 @@ router.get('/:id/pages/:pageNum/image', async (req, res) => {
 
     const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
     const pagesDir = path.join(courseUploadDir, 'pages');
-    const pageFile = path.join(pagesDir, `Page${pageNum}.png`);
+    const pagePngFile = path.join(pagesDir, `Page${pageNum}.png`);
+    const pageSvgFile = path.join(pagesDir, `Page${pageNum}.svg`);
 
-    if (fs.existsSync(pageFile)) {
+    // 1. Direct raster PNG file exists
+    if (fs.existsSync(pagePngFile)) {
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      return fs.createReadStream(pageFile).pipe(res);
+      return fs.createReadStream(pagePngFile).pipe(res);
     }
 
-    // Try on-demand extraction from original PDF document on Ubuntu/Linux
+    // 2. Direct SVG document file exists
+    if (fs.existsSync(pageSvgFile)) {
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return fs.createReadStream(pageSvgFile).pipe(res);
+    }
+
+    // 3. Try on-demand extraction from original PDF document on Ubuntu/Linux
     if (fs.existsSync(courseUploadDir)) {
       const files = fs.readdirSync(courseUploadDir);
       const pdfFile = files.find(f => /\.pdf$/i.test(f));
@@ -399,10 +561,10 @@ router.get('/:id/pages/:pageNum/image', async (req, res) => {
       }
     }
 
-    if (fs.existsSync(pageFile)) {
+    if (fs.existsSync(pagePngFile)) {
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      return fs.createReadStream(pageFile).pipe(res);
+      return fs.createReadStream(pagePngFile).pipe(res);
     }
 
     const { course } = await findCourseAcrossTenants(courseId, req.prisma || prisma, null);
@@ -417,14 +579,31 @@ router.get('/:id/pages/:pageNum/image', async (req, res) => {
       if (base64Part) {
         fs.mkdirSync(pagesDir, { recursive: true });
         const buf = Buffer.from(base64Part, 'base64');
-        fs.writeFileSync(pageFile, buf);
+        fs.writeFileSync(pagePngFile, buf);
         res.setHeader('Content-Type', 'image/png');
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.end(buf);
       }
     }
 
-    return res.status(404).json({ error: `Page image ${pageNum} not found.` });
+    // 5. Ultimate Guarantee: Dynamically generate crisp document SVG card on-the-fly
+    fs.mkdirSync(pagesDir, { recursive: true });
+    const totalPages = Array.isArray(cur.pages) ? cur.pages.length : 1;
+    const svgOutput = generateSlideSvg({
+      slideNumber: pageNum,
+      totalSlides: totalPages,
+      title: targetPage?.title || `Page ${pageNum}`,
+      paragraphs: targetPage?.text ? [targetPage.text] : [],
+      courseTitle: course.title || 'Training Document'
+    });
+
+    try {
+      fs.writeFileSync(pageSvgFile, svgOutput, 'utf-8');
+    } catch (_) {}
+
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.end(svgOutput);
   } catch (err) {
     console.error('Error serving page image:', err);
     res.status(500).json({ error: 'Failed to retrieve page image.' });

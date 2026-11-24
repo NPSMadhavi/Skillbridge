@@ -168,20 +168,9 @@ export default function AdminManagement() {
       {/* Admins Table Card */}
       <div className="rounded-2xl border border-line bg-panel overflow-hidden shadow-xs">
         {loading ? (
-          <div className="p-4 space-y-3 animate-pulse">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="flex items-center gap-4 py-3 px-2 border-b border-line/50 last:border-0">
-                <div className="w-7 h-7 rounded-full bg-ink shrink-0" />
-                <div className="flex-1 space-y-1.5 min-w-0">
-                  <div className="h-3.5 w-32 rounded bg-ink" />
-                  <div className="h-2.5 w-48 rounded bg-ink/70" />
-                </div>
-                <div className="h-3 w-24 rounded bg-ink/60 hidden sm:block" />
-                <div className="h-3 w-28 rounded bg-ink/60 hidden md:block" />
-                <div className="h-3 w-20 rounded bg-ink/60 hidden lg:block" />
-                <div className="h-7 w-20 rounded-lg bg-ink/70" />
-              </div>
-            ))}
+          <div className="py-16 flex flex-col items-center justify-center text-center">
+            <div className="h-8 w-8 rounded-full border-3 border-line border-t-navy animate-spin mb-3" />
+            <p className="text-xs font-semibold text-fg">Loading administrators...</p>
           </div>
         ) : error ? (
           <div className="p-8 text-center text-rose-500 text-xs">

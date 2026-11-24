@@ -67,66 +67,51 @@ const AdminDashboard = () => {
         </div>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 sm:gap-3.5">
-        {loading ? (
-          [1, 2, 3, 4].map((i) => (
-            <div key={i} className="rounded-xl border border-line bg-panel p-3.5 shadow-xs animate-pulse space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="h-3 w-16 rounded bg-ink" />
-                <div className="h-7 w-7 rounded-lg bg-ink" />
-              </div>
-              <div className="h-6 w-12 rounded bg-ink" />
-              <div className="h-2.5 w-24 rounded bg-ink/70" />
-            </div>
-          ))
-        ) : (
-          <>
-            <StatCard
-              label="Total users"
-              value={stats.totalUsers}
-              hint="All registered profiles"
-              tone="text-navy"
-              icon={
-                <svg className="w-4 h-4 text-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              }
-            />
-            <StatCard
-              label="Face ID enrolled"
-              value={stats.faceEnrolled}
-              hint="Biometric captures saved"
-              tone="text-sky"
-              icon={
-                <svg className="w-4 h-4 text-sky" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-              }
-            />
-            <StatCard
-              label="Regions covered"
-              value={stats.regionsCovered}
-              hint="Unique regions in use"
-              tone="text-orange"
-              icon={
-                <svg className="w-4 h-4 text-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              }
-            />
-            <StatCard
-              label="Pending Face ID"
-              value={stats.pendingFaceId}
-              hint="Profiles without capture"
-              tone="text-danger"
-              icon={
-                <svg className="w-4 h-4 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              }
-            />
-          </>
-        )}
+        <StatCard
+          label="Total users"
+          value={loading ? '—' : stats.totalUsers}
+          hint="All registered profiles"
+          tone="text-navy"
+          icon={
+            <svg className="w-4 h-4 text-navy" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Face ID enrolled"
+          value={loading ? '—' : stats.faceEnrolled}
+          hint="Biometric captures saved"
+          tone="text-sky"
+          icon={
+            <svg className="w-4 h-4 text-sky" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Regions covered"
+          value={loading ? '—' : stats.regionsCovered}
+          hint="Unique regions in use"
+          tone="text-orange"
+          icon={
+            <svg className="w-4 h-4 text-orange" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Pending Face ID"
+          value={loading ? '—' : stats.pendingFaceId}
+          hint="Profiles without capture"
+          tone="text-danger"
+          icon={
+            <svg className="w-4 h-4 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          }
+        />
       </div>
 
       <section className="rounded-2xl border border-line bg-panel p-5 shadow-[0_10px_30px_rgba(15,27,45,0.04)] sm:p-6">
@@ -138,19 +123,9 @@ const AdminDashboard = () => {
         </div>
 
         {loading ? (
-          <div className="space-y-3 p-2 animate-pulse">
-            {[1, 2, 3, 4, 5].map((i) => (
-              <div key={i} className="flex items-center gap-4 py-3 border-b border-line/50 last:border-0">
-                <div className="h-10 w-10 rounded-lg bg-ink shrink-0" />
-                <div className="flex-1 space-y-1.5 min-w-0">
-                  <div className="h-3.5 w-32 rounded bg-ink" />
-                  <div className="h-2.5 w-44 rounded bg-ink/70" />
-                </div>
-                <div className="h-3 w-20 rounded bg-ink/60 hidden sm:block" />
-                <div className="h-3 w-20 rounded bg-ink/60 hidden md:block" />
-                <div className="h-6 w-16 rounded-full bg-ink/60" />
-              </div>
-            ))}
+          <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-muted">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-line border-t-sky" />
+            <span>Loading recent activity...</span>
           </div>
         ) : recent.length === 0 ? (
           <div className="rounded-xl border border-dashed border-line bg-ink/50 px-4 py-10 text-center">
