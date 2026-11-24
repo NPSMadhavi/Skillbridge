@@ -2222,8 +2222,8 @@ const CoursePlayer = ({
         const fullImg = s.fullSlideImage ||
           (Array.isArray(s.images) ? (s.images.find(im => String(im.id || '').startsWith('full_slide') || String(im.id || '').startsWith('slide_') || im.purpose?.includes('exact powerpoint')) || s.images[0]) : null) ||
           s.image;
-        const rawUrl = fullImg?.url || fullImg?.dataUrl || (typeof fullImg === 'string' ? fullImg : null) || s.image || s.url;
-        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, sNum) : (course?.id ? api.getCourseSlideImageUrl(course.id, sNum) : null);
+        const rawUrl = fullImg?.url || fullImg?.dataUrl || (typeof fullImg === 'string' ? fullImg : null) || s.image;
+        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, sNum) : null;
         return {
           pageNumber: sNum,
           title: s.title || `Slide ${sNum}`,
@@ -2254,8 +2254,8 @@ const CoursePlayer = ({
         const fullImg = p.pageImage ||
           (Array.isArray(p.images) ? (p.images.find(im => String(im.id || '').startsWith('full_page') || im.purpose?.includes('exact document page')) || p.images[0]) : null) ||
           p.image;
-        const rawUrl = fullImg?.url || fullImg?.dataUrl || (typeof fullImg === 'string' ? fullImg : null) || p.image || p.url;
-        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, pNum) : (course?.id ? api.getCoursePageImageUrl(course.id, pNum) : null);
+        const rawUrl = fullImg?.url || fullImg?.dataUrl || (typeof fullImg === 'string' ? fullImg : null) || p.image;
+        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, pNum) : null;
         return {
           pageNumber: pNum,
           title: p.title || `Page ${pNum}`,
@@ -2275,7 +2275,7 @@ const CoursePlayer = ({
         const sNum = l.sourceSlides?.[0] || idx + 1;
         const v = (Array.isArray(l.visuals) ? (l.visuals.find(vis => String(vis.id || '').startsWith('full_')) || l.visuals[0]) : null) || l.slideData?.images?.[0];
         const rawUrl = v?.dataUrl || v?.url;
-        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, sNum) : (course?.id ? api.getCourseSlideImageUrl(course.id, sNum) : null);
+        const imgUrl = rawUrl ? resolveMediaUrl(rawUrl, sNum) : null;
         return {
           pageNumber: sNum,
           title: l.title || `Section ${idx + 1}`,
@@ -3588,7 +3588,7 @@ const CoursePlayer = ({
                     )}
 
                     {/* Faithful PowerPoint Presentation Slide Screen */}
-                    {(currentDocPage?.image && !slideImageLoadError) || (activeVisual && (activeVisual.dataUrl || activeVisual.url) && !slideImageLoadError) ? (
+                    {!slideImageLoadError && (currentDocPage?.image || (activeVisual && (activeVisual.dataUrl || activeVisual.url))) ? (
                       <div className="flex-1 min-h-0 flex flex-col justify-between overflow-hidden">
                         <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-slate-700/80 bg-slate-950/80 shadow-lg relative group flex flex-col">
                           <div className={`relative flex-1 min-h-0 flex bg-black/60 overflow-auto no-scrollbar ${fitToWidth ? 'items-start justify-center p-1 sm:p-2' : 'items-center justify-center p-2'}`}>

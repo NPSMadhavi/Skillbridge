@@ -157,10 +157,53 @@ try {
   [System.Runtime.InteropServices.Marshal]::ReleaseComObject($ppt) | Out-Null
 }
 `;
-    const psFile = path.join(tmpDir, 'export.ps1');
-    fs.writeFileSync(psFile, psScript);
+    if (process.platform === 'win32') {
+      try {
+        const psFile = path.join(tmpDir, 'export.ps1');
+        fs.writeFileSync(psFile, psScript);
+        await execPromise(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 60000 });
+      } catch (comErr) {
+        console.warn('[Doc Extractor] Windows PowerPoint COM notice:', comErr.message);
+      }
+    }
 
-    await execPromise(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 90000 });
+    // On Linux / Ubuntu (or if COM produced no files): convert PPTX to PDF via LibreOffice, then render via pypdfium2
+    const hasComFiles = fs.existsSync(outDir) && fs.readdirSync(outDir).some(f => /^Slide\d+\.png$/i.test(f));
+    if (!hasComFiles) {
+      try {
+        console.log(`[Doc Extractor] Rendering ${originalname} slides on Ubuntu/Linux using LibreOffice & pypdfium2...`);
+        let converted = false;
+        for (const bin of ['libreoffice', 'soffice']) {
+          try {
+            await execPromise(`${bin} --headless --convert-to pdf --outdir "${tmpDir}" "${tmpFile}"`, { timeout: 45000 });
+            converted = true;
+            break;
+          } catch (_) {}
+        }
+
+        const generatedPdf = path.join(tmpDir, `presentation.pdf`);
+        if (converted && fs.existsSync(generatedPdf)) {
+          const pdfBuffer = fs.readFileSync(generatedPdf);
+          const pdfPages = await renderPdfPagesToImages(pdfBuffer);
+          if (pdfPages.length > 0) {
+            console.log(`[Doc Extractor] Successfully rendered ${pdfPages.length} PowerPoint slide images on Ubuntu server.`);
+            return pdfPages.map(p => ({
+              id: `full_slide_${p.sourcePage}`,
+              dataUrl: p.dataUrl,
+              fileName: `Slide${p.sourcePage}.png`,
+              mimetype: 'image/png',
+              sourceSlide: p.sourcePage,
+              name: `Slide ${p.sourcePage}`,
+              descr: `Full slide presentation graphic for slide ${p.sourcePage}`,
+              purpose: `Exact PowerPoint Presentation Slide ${p.sourcePage}`,
+              sizeBytes: p.sizeBytes
+            }));
+          }
+        }
+      } catch (loErr) {
+        console.warn('[Doc Extractor] Linux LibreOffice slide rendering notice:', loErr.message);
+      }
+    }
 
     if (!fs.existsSync(outDir)) return [];
     const files = fs.readdirSync(outDir);
@@ -259,7 +302,19 @@ async function renderPdfPagesToImages(fileBuffer) {
     fs.mkdirSync(outDir, { recursive: true });
     fs.writeFileSync(tmpFile, fileBuffer);
 
-    const pyScript = `
+    let rendered = false;
+
+    // 1. Try pdftoppm (standard on Ubuntu via poppler-utils, ultra-fast and reliable)
+    try {
+      await execPromise(`pdftoppm -png -r 150 "${tmpFile}" "${path.join(outDir, 'Page')}"`, { timeout: 45000 });
+      if (fs.existsSync(outDir) && fs.readdirSync(outDir).some(f => /^Page.*\.png$/i.test(f))) {
+        rendered = true;
+      }
+    } catch (_) {}
+
+    // 2. Fallback to python with pypdfium2 (trying PYTHON_PATH, python3, and python)
+    if (!rendered) {
+      const pyScript = `
 import pypdfium2 as pdfium, sys, os
 pdf = pdfium.PdfDocument(r"${tmpFile}")
 out_dir = r"${outDir}"
@@ -267,18 +322,26 @@ for i, page in enumerate(pdf):
     image = page.render(scale=2).to_pil()
     image.save(os.path.join(out_dir, f"Page{i+1}.png"))
 `;
-    const pyFile = path.join(tmpDir, 'render.py');
-    fs.writeFileSync(pyFile, pyScript);
+      const pyFile = path.join(tmpDir, 'render.py');
+      fs.writeFileSync(pyFile, pyScript);
 
-    const pythonExe = process.env.PYTHON_PATH || 'python';
-
-    await execPromise(`"${pythonExe}" "${pyFile}"`, { timeout: 60000 });
+      const pyCandidates = [process.env.PYTHON_PATH, 'python3', 'python'].filter(Boolean);
+      for (const pyExe of pyCandidates) {
+        try {
+          await execPromise(`"${pyExe}" "${pyFile}"`, { timeout: 60000 });
+          if (fs.existsSync(outDir) && fs.readdirSync(outDir).some(f => /^Page.*\.png$/i.test(f))) {
+            rendered = true;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
 
     if (!fs.existsSync(outDir)) return [];
     const files = fs.readdirSync(outDir);
     const pageImages = [];
     const sortedFiles = files
-      .filter(f => /^Page\d+\.png$/i.test(f))
+      .filter(f => /^Page[-_]?\d+\.png$/i.test(f))
       .sort((a, b) => {
         const numA = parseInt(a.match(/\d+/)?.[0] || '0', 10);
         const numB = parseInt(b.match(/\d+/)?.[0] || '0', 10);
@@ -1517,5 +1580,7 @@ export async function extractDocument(file) {
 export default {
   extractDocument,
   extractPptx,
-  extractPptBinary
+  extractPptBinary,
+  renderPptSlidesToImages,
+  renderPdfPagesToImages
 };

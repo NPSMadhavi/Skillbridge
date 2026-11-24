@@ -107,28 +107,34 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
           const sNum = s.slideNumber || idx + 1;
           const slideFile = path.join(slidesDir, `Slide${sNum}.png`);
           const rawData = s.fullSlideImage?.dataUrl || s.images?.[0]?.dataUrl || s.dataUrl;
+          let imageSaved = false;
+
           if (rawData && rawData.startsWith('data:image')) {
             const base64Part = rawData.split(',')[1];
             if (base64Part) {
               fs.writeFileSync(slideFile, Buffer.from(base64Part, 'base64'));
+              imageSaved = true;
             }
+          } else if (fs.existsSync(slideFile)) {
+            imageSaved = true;
           }
-          const imageUrl = `/api/v1/courses/${newCourse.id}/slides/${sNum}/image`;
+
+          const imageUrl = imageSaved ? `/api/v1/courses/${newCourse.id}/slides/${sNum}/image` : null;
           return {
             ...s,
             slideNumber: sNum,
             image: imageUrl,
-            fullSlideImage: {
+            fullSlideImage: imageSaved ? {
               id: `full_slide_${sNum}`,
               url: imageUrl,
               slideNumber: sNum,
               fileName: `Slide${sNum}.png`,
               mimetype: 'image/png'
-            },
+            } : null,
             images: (s.images || []).map((im, imIdx) => ({
               ...im,
               dataUrl: undefined,
-              url: `/api/v1/courses/${newCourse.id}/slides/${sNum}/image`
+              url: imageSaved ? `/api/v1/courses/${newCourse.id}/slides/${sNum}/image` : null
             }))
           };
         });
@@ -273,6 +279,39 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
       return fs.createReadStream(slideFile).pipe(res);
     }
 
+    // Try on-demand extraction from original presentation file on Ubuntu/Linux
+    if (fs.existsSync(courseUploadDir)) {
+      const files = fs.readdirSync(courseUploadDir);
+      const presFile = files.find(f => /\.(pptx|ppt)$/i.test(f));
+      if (presFile) {
+        try {
+          const presPath = path.join(courseUploadDir, presFile);
+          const buf = fs.readFileSync(presPath);
+          const rendered = await documentExtractor.renderPptSlidesToImages(buf, presFile);
+          if (Array.isArray(rendered) && rendered.length > 0) {
+            fs.mkdirSync(slidesDir, { recursive: true });
+            for (const r of rendered) {
+              const targetPath = path.join(slidesDir, `Slide${r.sourceSlide}.png`);
+              if (r.dataUrl && r.dataUrl.startsWith('data:image')) {
+                const b64 = r.dataUrl.split(',')[1];
+                if (b64 && !fs.existsSync(targetPath)) {
+                  fs.writeFileSync(targetPath, Buffer.from(b64, 'base64'));
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[Courses] On-demand slide rendering notice:', e.message);
+        }
+      }
+    }
+
+    if (fs.existsSync(slideFile)) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return fs.createReadStream(slideFile).pipe(res);
+    }
+
     // Fallback: Check if slide image is stored in DB curriculum
     const { course } = await findCourseAcrossTenants(courseId, req.prisma || prisma, null);
     if (!course) return res.status(404).json({ error: 'Course not found.' });
@@ -312,6 +351,39 @@ router.get('/:id/pages/:pageNum/image', async (req, res) => {
     const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
     const pagesDir = path.join(courseUploadDir, 'pages');
     const pageFile = path.join(pagesDir, `Page${pageNum}.png`);
+
+    if (fs.existsSync(pageFile)) {
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      return fs.createReadStream(pageFile).pipe(res);
+    }
+
+    // Try on-demand extraction from original PDF document on Ubuntu/Linux
+    if (fs.existsSync(courseUploadDir)) {
+      const files = fs.readdirSync(courseUploadDir);
+      const pdfFile = files.find(f => /\.pdf$/i.test(f));
+      if (pdfFile) {
+        try {
+          const pdfPath = path.join(courseUploadDir, pdfFile);
+          const buf = fs.readFileSync(pdfPath);
+          const rendered = await documentExtractor.renderPdfPagesToImages(buf);
+          if (Array.isArray(rendered) && rendered.length > 0) {
+            fs.mkdirSync(pagesDir, { recursive: true });
+            for (const r of rendered) {
+              const targetPath = path.join(pagesDir, `Page${r.sourcePage}.png`);
+              if (r.dataUrl && r.dataUrl.startsWith('data:image')) {
+                const b64 = r.dataUrl.split(',')[1];
+                if (b64 && !fs.existsSync(targetPath)) {
+                  fs.writeFileSync(targetPath, Buffer.from(b64, 'base64'));
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[Courses] On-demand PDF page rendering notice:', e.message);
+        }
+      }
+    }
 
     if (fs.existsSync(pageFile)) {
       res.setHeader('Content-Type', 'image/png');
@@ -951,22 +1023,29 @@ router.get('/:id', optionalAuthenticateToken, async (req, res) => {
       });
     }
 
+    const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(course.id));
+    const slidesDir = path.join(courseUploadDir, 'slides');
+    const pagesDir = path.join(courseUploadDir, 'pages');
+    const hasOriginalDoc = fs.existsSync(courseUploadDir) && fs.readdirSync(courseUploadDir).some(f => /\.(pptx|ppt|pdf|docx|doc)$/i.test(f));
+
     // Sanitize heavy base64 strings from curriculumData.slides and curriculumData.pages
     if (Array.isArray(curriculumData.slides)) {
       curriculumData.slides = curriculumData.slides.map((s, idx) => {
         const sNum = s.slideNumber || (idx + 1);
-        const imageUrl = `/api/v1/courses/${course.id}/slides/${sNum}/image`;
+        const slideFile = path.join(slidesDir, `Slide${sNum}.png`);
+        const imageExists = fs.existsSync(slideFile) || hasOriginalDoc || (s.fullSlideImage?.dataUrl && s.fullSlideImage.dataUrl.startsWith('data:image')) || (s.images?.[0]?.dataUrl && s.images[0].dataUrl.startsWith('data:image'));
+        const imageUrl = imageExists ? `/api/v1/courses/${course.id}/slides/${sNum}/image` : null;
         return {
           ...s,
           slideNumber: sNum,
           image: imageUrl,
-          fullSlideImage: {
+          fullSlideImage: imageUrl ? {
             id: `full_slide_${sNum}`,
             url: imageUrl,
             slideNumber: sNum,
             fileName: `Slide${sNum}.png`,
             mimetype: 'image/png'
-          },
+          } : null,
           images: Array.isArray(s.images)
             ? s.images.map(img => {
               if (String(img.id).startsWith('full_slide') || img.slideNumber === sNum) {
@@ -982,19 +1061,21 @@ router.get('/:id', optionalAuthenticateToken, async (req, res) => {
     if (Array.isArray(curriculumData.pages)) {
       curriculumData.pages = curriculumData.pages.map((p, idx) => {
         const pNum = p.page_number || p.pageNumber || (idx + 1);
-        const imageUrl = `/api/v1/courses/${course.id}/pages/${pNum}/image`;
+        const pageFile = path.join(pagesDir, `Page${pNum}.png`);
+        const imageExists = fs.existsSync(pageFile) || hasOriginalDoc || (p.pageImage?.dataUrl && p.pageImage.dataUrl.startsWith('data:image')) || (p.images?.[0]?.dataUrl && p.images[0].dataUrl.startsWith('data:image'));
+        const imageUrl = imageExists ? `/api/v1/courses/${course.id}/pages/${pNum}/image` : null;
         return {
           ...p,
           page_number: pNum,
           pageNumber: pNum,
           image: imageUrl,
-          pageImage: {
+          pageImage: imageUrl ? {
             id: `full_page_${pNum}`,
             url: imageUrl,
             pageNumber: pNum,
             fileName: `Page${pNum}.png`,
             mimetype: 'image/png'
-          },
+          } : null,
           images: []
         };
       });
