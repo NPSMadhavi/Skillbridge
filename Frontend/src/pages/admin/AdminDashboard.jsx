@@ -21,7 +21,7 @@ const StatCard = ({ label, value, hint, tone, icon }) => (
 const AdminDashboard = () => {
   const [stats, setStats] = useState({ totalUsers: 0, faceEnrolled: 0, regionsCovered: 0, pendingFaceId: 0 })
   const [recent, setRecent] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -69,7 +69,7 @@ const AdminDashboard = () => {
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 sm:gap-3.5">
         <StatCard
           label="Total users"
-          value={loading ? '—' : stats.totalUsers}
+          value={stats.totalUsers}
           hint="All registered profiles"
           tone="text-navy"
           icon={
@@ -80,7 +80,7 @@ const AdminDashboard = () => {
         />
         <StatCard
           label="Face ID enrolled"
-          value={loading ? '—' : stats.faceEnrolled}
+          value={stats.faceEnrolled}
           hint="Biometric captures saved"
           tone="text-sky"
           icon={
@@ -92,7 +92,7 @@ const AdminDashboard = () => {
         />
         <StatCard
           label="Regions covered"
-          value={loading ? '—' : stats.regionsCovered}
+          value={stats.regionsCovered}
           hint="Unique regions in use"
           tone="text-orange"
           icon={
@@ -103,7 +103,7 @@ const AdminDashboard = () => {
         />
         <StatCard
           label="Pending Face ID"
-          value={loading ? '—' : stats.pendingFaceId}
+          value={stats.pendingFaceId}
           hint="Profiles without capture"
           tone="text-danger"
           icon={
@@ -122,12 +122,7 @@ const AdminDashboard = () => {
           </Link>
         </div>
 
-        {loading ? (
-          <div className="py-12 flex flex-col items-center justify-center gap-2 text-xs text-muted">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-line border-t-sky" />
-            <span>Loading recent activity...</span>
-          </div>
-        ) : recent.length === 0 ? (
+        {recent.length === 0 ? (
           <div className="rounded-xl border border-dashed border-line bg-ink/50 px-4 py-10 text-center">
             <p className="font-medium text-fg">No users registered yet</p>
             <p className="mt-1 text-sm text-muted">Start by registering a learner with Face ID.</p>

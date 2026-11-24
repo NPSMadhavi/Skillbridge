@@ -784,10 +784,33 @@ export const api = {
 
   getCourses: async (asAdmin) => {
     const isAdmin = asAdmin !== undefined ? asAdmin : (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin'));
-    const res = await fetch(`${API_BASE_URL}/courses`, {
-      method: 'GET',
-      headers: getHeaders(isAdmin),
-    });
+    
+    // Fast resilient fetch with 15s timeout
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = controller ? setTimeout(() => controller.abort(), 15000) : null;
+
+    let res;
+    try {
+      res = await fetch(`${API_BASE_URL}/courses`, {
+        method: 'GET',
+        headers: getHeaders(isAdmin),
+        signal: controller?.signal
+      });
+    } catch (netErr) {
+      if (timeoutId) clearTimeout(timeoutId);
+      console.warn('[API] getCourses network error or timeout:', netErr.message);
+      // Return cached courses if available
+      try {
+        const cached = sessionStorage.getItem('skillbridge_cached_courses');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (_) { }
+      return [];
+    }
+    if (timeoutId) clearTimeout(timeoutId);
+
     if (!res.ok) {
       let errMsg = 'Failed to fetch courses catalog.';
       try {
@@ -810,7 +833,8 @@ export const api = {
         }
       } catch (_) { }
 
-      throw new Error(errMsg);
+      console.warn('[API] getCourses returned non-ok:', res.status, errMsg);
+      return [];
     }
     const text = await res.text();
     let data = [];

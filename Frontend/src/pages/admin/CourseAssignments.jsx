@@ -3,7 +3,7 @@ import { toast } from 'react-toastify'
 import { api } from '../../services/api'
 
 const CourseAssignments = () => {
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [users, setUsers] = useState([])
   const [courses, setCourses] = useState([])
   const [mode, setMode] = useState('by-user') // 'by-user' | 'by-course'
@@ -285,31 +285,25 @@ const CourseAssignments = () => {
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
         <div className="rounded-xl border border-line bg-panel p-3 shadow-xs">
           <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Total Learners</p>
-          <p className="mt-0.5 font-display text-xl font-bold text-fg">{loading ? '—' : users.length}</p>
+          <p className="mt-0.5 font-display text-xl font-bold text-fg">{users.length}</p>
         </div>
         <div className="rounded-xl border border-line bg-panel p-3 shadow-xs">
           <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Published Courses</p>
-          <p className="mt-0.5 font-display text-xl font-bold text-sky">{loading ? '—' : courses.length}</p>
+          <p className="mt-0.5 font-display text-xl font-bold text-sky">{courses.length}</p>
         </div>
         <div className="rounded-xl border border-line bg-panel p-3 shadow-xs">
           <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Active Enrollments</p>
-          <p className="mt-0.5 font-display text-xl font-bold text-emerald-600">{loading ? '—' : totalAssignments}</p>
+          <p className="mt-0.5 font-display text-xl font-bold text-emerald-600">{totalAssignments}</p>
         </div>
         <div className="rounded-xl border border-line bg-panel p-3 shadow-xs">
           <p className="text-[10px] font-bold uppercase tracking-wider text-muted">Unassigned Learners</p>
           <p className={`mt-0.5 font-display text-xl font-bold ${unassignedLearnersCount > 0 ? 'text-orange' : 'text-muted'}`}>
-            {loading ? '—' : unassignedLearnersCount}
+            {unassignedLearnersCount}
           </p>
         </div>
       </div>
 
-      {loading ? (
-        <div className="rounded-2xl border border-line bg-panel p-16 shadow-xs flex flex-col items-center justify-center text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-3 border-line border-t-sky mb-3" />
-          <p className="text-sm font-bold text-fg">Loading assignments and courses...</p>
-          <p className="text-xs text-muted mt-1">Please wait while data is retrieved.</p>
-        </div>
-      ) : mode === 'by-user' ? (
+      {mode === 'by-user' ? (
         /* ================= MODE 1: ASSIGN BY LEARNER ================= */
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 items-start">
           {/* Left Panel: Learners Directory */}

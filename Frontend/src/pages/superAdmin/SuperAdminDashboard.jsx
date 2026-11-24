@@ -558,15 +558,7 @@ export default function SuperAdminDashboard() {
 
               {/* Companies Table Card */}
               <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-                {loading ? (
-                  <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center space-y-3">
-                    <svg className="animate-spin h-6 w-6 text-[#0e2246]" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                    </svg>
-                    <span className="text-xs text-slate-500 font-medium">Loading companies...</span>
-                  </div>
-                ) : error ? (
+                {error ? (
                   <div className="p-8 text-center text-red-600 text-xs">
                     <p>{error}</p>
                     <button onClick={loadCompanies} className="mt-3 text-xs text-[#0e2246] underline font-semibold">Try again</button>

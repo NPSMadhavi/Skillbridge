@@ -428,22 +428,12 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
 
               <div className="my-auto py-1">
                 <h3 className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold tracking-tight text-white leading-tight line-clamp-2">
-                  {activeCourseObj ? (
-                    activeCourseObj.title
-                  ) : loading ? (
-                    'Loading course...'
-                  ) : (
-                    'No Assigned Course'
-                  )}
+                  {activeCourseObj ? activeCourseObj.title : 'No Assigned Course'}
                 </h3>
                 <p className="text-xs text-blue-100/90 font-medium mt-1">
-                  {activeCourseObj ? (
-                    `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
-                  ) : loading ? (
-                    'Checking enrolled courses...'
-                  ) : (
-                    'Awaiting administrator assignment'
-                  )}
+                  {activeCourseObj
+                    ? `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
+                    : 'Awaiting administrator assignment'}
                 </p>
               </div>
 
@@ -451,11 +441,11 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 <div className="w-full bg-white/20 h-2 rounded-full overflow-hidden mb-1.5">
                   <div
                     className="bg-[#ff7a00] h-full rounded-full transition-all duration-500"
-                    style={{ width: `${loading ? 0 : activeCourseProgressPct}%` }}
+                    style={{ width: `${activeCourseProgressPct}%` }}
                   />
                 </div>
                 <span className="text-[11px] font-bold text-blue-100">
-                  {loading ? '...' : `${activeCourseProgressPct}% Complete`}
+                  {`${activeCourseProgressPct}% Complete`}
                 </span>
               </div>
 
@@ -590,12 +580,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col divide-y divide-slate-100/80 overflow-y-auto pr-1">
-            {loading && displayCourses.length === 0 ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-400 my-auto">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-[#ff7a00] mb-2" />
-                <span className="text-xs font-semibold text-slate-500">Loading assigned courses...</span>
-              </div>
-            ) : displayCourses.length === 0 ? (
+            {displayCourses.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400 my-auto">
                 <span className="text-3xl mb-2">📚</span>
                 <p className="text-xs font-semibold text-slate-600">No assigned courses yet</p>

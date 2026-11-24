@@ -5,7 +5,7 @@ import { api } from '../../services/api'
 
 const AdminCourses = () => {
   const [coursesList, setCoursesList] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -217,13 +217,7 @@ const AdminCourses = () => {
       </div>
 
       {/* Catalog Grid */}
-      {loading ? (
-        <div className="rounded-2xl border border-line bg-panel p-16 shadow-xs flex flex-col items-center justify-center text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-3 border-line border-t-brand mb-3" />
-          <p className="text-sm font-bold text-fg">Loading published courses...</p>
-          <p className="text-xs text-muted mt-1">Please wait while the course catalog is retrieved.</p>
-        </div>
-      ) : coursesList.length === 0 ? (
+      {coursesList.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line bg-panel px-6 py-12 text-center shadow-sm">
           <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-orange/10 text-orange">
             <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">

@@ -853,8 +853,11 @@ function formatCourseForCatalog(course) {
         curriculumSummary = {};
       }
     }
+    if (!curriculumSummary || typeof curriculumSummary !== 'object') {
+      curriculumSummary = {};
+    }
 
-    // If lessons array is empty, synthesize clean lessons from course.chunks
+    // Extract lightweight lessons list for catalog presentation
     const rawLessons = (Array.isArray(curriculumSummary.lessons) && curriculumSummary.lessons.length > 0)
       ? curriculumSummary.lessons
       : (Array.isArray(course.chunks) && course.chunks.length > 0)
@@ -865,12 +868,9 @@ function formatCourseForCatalog(course) {
           moduleId: `mod_${Math.floor(cIdx / 4) + 1}`,
           moduleTitle: cleanUnsupportedWords(c.topic || course.title),
           chapterTitle: cleanUnsupportedWords(c.topic || course.title),
-          explanation: c.chunkText || c.semanticSummary || '',
-          sourceSlides: Array.isArray(c.sourceSlides) && c.sourceSlides.length > 0 ? c.sourceSlides : [c.sourcePage || cIdx + 1]
         }))
         : [];
 
-    // Strip heavy base64 visuals and raw slide data from lessons for fast catalog listing
     const sanitizedLessons = rawLessons.map((l, lIdx) => ({
       id: l.id || lIdx + 1,
       title: cleanUnsupportedWords(l.title, `Lesson ${lIdx + 1}`),
@@ -879,21 +879,31 @@ function formatCourseForCatalog(course) {
       chapterId: l.chapterId,
       moduleTitle: cleanUnsupportedWords(l.moduleTitle || l.chapterTitle, course.title),
       chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, course.title),
-      explanation: l.explanation,
-      explanations: l.explanations,
-      sourceSlides: l.sourceSlides,
     }));
 
-    const fileType = (curriculumSummary.fileType || course.fileName?.split('.').pop() || '').toLowerCase();
+    const rawModules = Array.isArray(curriculumSummary.curriculum) ? curriculumSummary.curriculum : [];
+    const sanitizedModules = rawModules.map((m, mIdx) => ({
+      id: m.id || mIdx + 1,
+      title: cleanUnsupportedWords(m.title, `Module ${mIdx + 1}`),
+      description: cleanUnsupportedWords(m.description || ''),
+      lessons: Array.isArray(m.lessons) ? m.lessons.map((l, idx) => ({
+        id: l.id || idx + 1,
+        title: cleanUnsupportedWords(l.title, `Lesson ${idx + 1}`),
+        duration: l.duration || '02:30'
+      })) : []
+    }));
+
+    const detectedFileType = (curriculumSummary.fileType || course.fileName?.split('.').pop() || '').toLowerCase();
+
+    // Streamlined slide metadata without heavy base64 images or thousands of paragraph lines
     const slideSummaries = Array.isArray(curriculumSummary.slides)
       ? curriculumSummary.slides.map((s, idx) => ({
         slideNumber: s.slideNumber || idx + 1,
         title: cleanUnsupportedWords(s.title || `Slide ${idx + 1}`),
         type: 'slide',
         image: `/api/v1/courses/${course.id}/slides/${s.slideNumber || idx + 1}/image`,
-        bulletPoints: (s.bulletPoints || []).map(bp => cleanUnsupportedWords(bp)),
-        headings: (s.headings || []).map(h => cleanUnsupportedWords(h)),
-        paragraphs: s.paragraphs || []
+        bulletPoints: (s.bulletPoints || []).slice(0, 5).map(bp => cleanUnsupportedWords(bp)),
+        headings: (s.headings || []).slice(0, 3).map(h => cleanUnsupportedWords(h))
       }))
       : [];
 
@@ -906,38 +916,48 @@ function formatCourseForCatalog(course) {
       }))
       : [];
 
-    curriculumSummary = {
-      title: cleanUnsupportedWords(curriculumSummary.title || course.title),
-      description: cleanUnsupportedWords(curriculumSummary.description || course.description),
-      fileType,
+    return {
+      id: course.id,
+      title: cleanUnsupportedWords(course.title),
+      description: cleanUnsupportedWords(course.description),
       fileName: course.fileName,
+      fileType: detectedFileType,
       slides: slideSummaries,
       pages: pageSummaries,
-      includes: curriculumSummary.includes,
-      learning: curriculumSummary.learning,
-      curriculum: curriculumSummary.curriculum,
+      curriculum: {
+        title: cleanUnsupportedWords(curriculumSummary.title || course.title),
+        description: cleanUnsupportedWords(curriculumSummary.description || course.description),
+        fileType: detectedFileType,
+        fileName: course.fileName,
+        slides: slideSummaries,
+        pages: pageSummaries,
+        includes: curriculumSummary.includes,
+        learning: curriculumSummary.learning,
+        curriculum: sanitizedModules,
+        lessons: sanitizedLessons
+      },
       lessons: sanitizedLessons,
-      quiz: curriculumSummary.quiz,
+      createdAt: course.createdAt,
+      updatedAt: course.updatedAt,
+      assignedUsersCount: course.assignedUsersCount ?? course._count?.assignments ?? 0,
+    };
+  } catch (fmtErr) {
+    console.warn(`[Courses] Error formatting course ${course?.id}:`, fmtErr.message);
+    return {
+      id: course?.id,
+      title: course?.title || 'Course',
+      description: course?.description || '',
+      fileName: course?.fileName || '',
+      fileType: 'document',
+      slides: [],
+      pages: [],
+      curriculum: { lessons: [], curriculum: [] },
+      lessons: [],
+      createdAt: course?.createdAt || new Date().toISOString(),
+      updatedAt: course?.updatedAt || new Date().toISOString(),
+      assignedUsersCount: 0
     };
   }
-
-  const detectedFileType = (curriculumSummary?.fileType || course.fileName?.split('.').pop() || '').toLowerCase();
-
-  return {
-    id: course.id,
-    title: cleanUnsupportedWords(course.title),
-    description: cleanUnsupportedWords(course.description),
-    fileName: course.fileName,
-    fileType: detectedFileType,
-    slides: curriculumSummary?.slides || [],
-    pages: curriculumSummary?.pages || [],
-    curriculum: curriculumSummary,
-    lessons: curriculumSummary?.lessons || [],
-    chunks: course.chunks || [],
-    createdAt: course.createdAt,
-    updatedAt: course.updatedAt,
-    assignedUsersCount: course.assignedUsersCount ?? course._count?.assignments ?? 0,
-  };
 }
 
 // 2. Get published RAG courses (Admin gets all with counts; Students get ONLY assigned courses)

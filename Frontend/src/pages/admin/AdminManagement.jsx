@@ -9,7 +9,7 @@ const NRIC_FIN_REGEX = /^[STFGMstfgm]\d{7}[A-Za-z]$/;
 
 export default function AdminManagement() {
   const [admins, setAdmins] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [tenantCode, setTenantCode] = useState('');
   const [currentAdminEmail, setCurrentAdminEmail] = useState('');
@@ -167,12 +167,7 @@ export default function AdminManagement() {
 
       {/* Admins Table Card */}
       <div className="rounded-2xl border border-line bg-panel overflow-hidden shadow-xs">
-        {loading ? (
-          <div className="py-16 flex flex-col items-center justify-center text-center">
-            <div className="h-8 w-8 rounded-full border-3 border-line border-t-navy animate-spin mb-3" />
-            <p className="text-xs font-semibold text-fg">Loading administrators...</p>
-          </div>
-        ) : error ? (
+        {error ? (
           <div className="p-8 text-center text-rose-500 text-xs">
             <p>{error}</p>
             <button

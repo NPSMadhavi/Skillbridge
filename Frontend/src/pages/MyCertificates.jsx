@@ -197,13 +197,8 @@ const MyCertificates = () => {
           </div>
         </div>
 
-        {/* Loading State */}
-        {loading ? (
-          <div className="text-center py-16">
-            <div className="inline-block animate-spin h-8 w-8 border-4 border-[#ff7a00] border-t-transparent rounded-full mb-3" />
-            <p className="text-xs text-slate-500 font-medium">Loading your earned certificates...</p>
-          </div>
-        ) : userCourses.length === 0 ? (
+        {/* Certificates Grid / Empty State */}
+        {userCourses.length === 0 ? (
           <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center max-w-md mx-auto my-12 shadow-xs">
             <div className="h-14 w-14 rounded-2xl bg-orange-50 text-[#ff7a00] border border-orange-100 flex items-center justify-center mx-auto mb-3">
               <svg className="h-7 w-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">

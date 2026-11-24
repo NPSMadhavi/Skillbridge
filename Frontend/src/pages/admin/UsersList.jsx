@@ -17,7 +17,7 @@ const LANGUAGES = [
 
 const UsersList = () => {
   const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [selectedUser, setSelectedUser] = useState(null)
@@ -426,13 +426,7 @@ const UsersList = () => {
       </label>
 
       <section className="overflow-hidden rounded-2xl border border-line bg-panel shadow-[0_10px_30px_rgba(15,27,45,0.04)]">
-        {loading ? (
-          <div className="py-20 flex flex-col items-center justify-center text-center">
-            <div className="h-9 w-9 rounded-full border-3 border-line border-t-navy animate-spin mb-3" />
-            <p className="text-sm font-semibold text-fg">Loading users...</p>
-            <p className="text-xs text-muted mt-0.5">Fetching registered learners and course assignments</p>
-          </div>
-        ) : error ? (
+        {error ? (
           <div className="px-4 py-14 text-center">
             <p className="font-medium text-danger">{error}</p>
           </div>
