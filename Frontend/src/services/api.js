@@ -497,10 +497,23 @@ export const api = {
       headers: getHeaders(true),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to fetch users.');
+      let errMsg = 'Failed to fetch users.';
+      try {
+        const text = await res.text();
+        const err = JSON.parse(text);
+        errMsg = err.error || errMsg;
+      } catch (_) {
+        if (res.status === 504) errMsg = 'Gateway Timeout (504).';
+        else if (res.status === 502) errMsg = 'Bad Gateway (502).';
+      }
+      throw new Error(errMsg);
     }
-    return res.json();
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return [];
+    }
   },
 
   // Admin User Course Progress
@@ -776,10 +789,37 @@ export const api = {
       headers: getHeaders(isAdmin),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to fetch courses catalog.');
+      let errMsg = 'Failed to fetch courses catalog.';
+      try {
+        const text = await res.text();
+        try {
+          const err = JSON.parse(text);
+          errMsg = err.error || err.message || errMsg;
+        } catch (_) {
+          if (res.status === 504) errMsg = 'Gateway Timeout (504). Please retry loading courses.';
+          else if (res.status === 502) errMsg = 'Bad Gateway (502).';
+        }
+      } catch (_) { }
+
+      // Check sessionStorage cache fallback
+      try {
+        const cached = sessionStorage.getItem('skillbridge_cached_courses');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (_) { }
+
+      throw new Error(errMsg);
     }
-    const data = await res.json();
+    const text = await res.text();
+    let data = [];
+    try {
+      data = JSON.parse(text);
+    } catch (_) {
+      console.warn('[API] Non-JSON courses response received');
+      return [];
+    }
     try {
       if (Array.isArray(data) && typeof window !== 'undefined') {
         window.__courseCache = window.__courseCache || new Map();

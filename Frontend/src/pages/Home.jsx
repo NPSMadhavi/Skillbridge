@@ -428,19 +428,19 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
 
               <div className="my-auto py-1">
                 <h3 className="font-display text-xl sm:text-2xl lg:text-[26px] font-bold tracking-tight text-white leading-tight line-clamp-2">
-                  {loading ? (
-                    <span className="inline-block h-7 w-48 rounded-lg bg-white/20 animate-pulse" />
-                  ) : activeCourseObj ? (
+                  {activeCourseObj ? (
                     activeCourseObj.title
+                  ) : loading ? (
+                    'Loading course...'
                   ) : (
                     'No Assigned Course'
                   )}
                 </h3>
                 <p className="text-xs text-blue-100/90 font-medium mt-1">
-                  {loading ? (
-                    <span className="inline-block h-3.5 w-24 rounded bg-white/20 animate-pulse" />
-                  ) : activeCourseObj ? (
+                  {activeCourseObj ? (
                     `Modules ${activeCourseCompletedCount} of ${activeCourseTotalLessons}`
+                  ) : loading ? (
+                    'Checking enrolled courses...'
                   ) : (
                     'Awaiting administrator assignment'
                   )}
@@ -459,9 +459,7 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
                 </span>
               </div>
 
-              {loading ? (
-                <div className="mt-2 h-8 w-28 rounded-xl bg-white/20 animate-pulse" />
-              ) : activeCourseObj ? (
+              {activeCourseObj ? (
                 <button
                   type="button"
                   onClick={() => onPlayCourse?.(activeCourseObj)}
@@ -593,17 +591,9 @@ const Home = ({ onOpenCourse, onPlayCourse }) => {
 
           <div className="flex-1 min-h-0 flex flex-col divide-y divide-slate-100/80 overflow-y-auto pr-1">
             {loading && displayCourses.length === 0 ? (
-              <div className="p-3 space-y-3 animate-pulse">
-                {[1, 2, 3].map((i) => (
-                  <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-100">
-                    <div className="w-10 h-10 rounded-xl bg-slate-200 shrink-0" />
-                    <div className="flex-1 space-y-2 min-w-0">
-                      <div className="h-3.5 w-44 rounded bg-slate-200" />
-                      <div className="h-2 w-full rounded-full bg-slate-200/80" />
-                    </div>
-                    <div className="h-7 w-20 rounded-lg bg-slate-200 shrink-0" />
-                  </div>
-                ))}
+              <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-400 my-auto">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-[#ff7a00] mb-2" />
+                <span className="text-xs font-semibold text-slate-500">Loading assigned courses...</span>
               </div>
             ) : displayCourses.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center text-slate-400 my-auto">

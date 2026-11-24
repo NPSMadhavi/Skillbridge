@@ -70,16 +70,28 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     generatedCourse.fileType = fileType || docResult.fileType;
     generatedCourse.fileName = req.file.originalname;
 
-    // Retain exact original document structure and page/slide visual images in curriculum
+    // Retain clean original document structure without heavy base64 blobs in DB
     if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
-      generatedCourse.slides = docResult.slides;
+      generatedCourse.slides = docResult.slides.map(s => ({
+        ...s,
+        images: (s.images || []).map(im => ({ ...im, dataUrl: undefined }))
+      }));
     }
     if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
-      generatedCourse.pages = docResult.pages;
+      generatedCourse.pages = docResult.pages.map(p => ({
+        ...p,
+        images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
+      }));
     }
     if (Array.isArray(docResult.images) && docResult.images.length > 0) {
-      generatedCourse.visuals = docResult.images;
+      generatedCourse.visuals = docResult.images.map(im => ({ ...im, dataUrl: undefined }));
     }
+
+    // Strip heavy base64 strings so curriculum stored in DB is lightweight (<50KB instead of 100MB)
+    const lightweightCurriculum = JSON.parse(JSON.stringify(generatedCourse, (key, value) => {
+      if (key === 'dataUrl') return undefined;
+      return value;
+    }));
 
     console.log(`[Curriculum Design] Curriculum structured. Saving course to database...`);
     const targetPrisma = req.prisma || prisma;
@@ -89,7 +101,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         description: generatedCourse.description,
         fileName: req.file.originalname,
         fileText: textContent,
-        curriculum: generatedCourse,
+        curriculum: lightweightCurriculum,
       },
     });
 
@@ -763,23 +775,44 @@ router.get('/', authenticateToken, async (req, res) => {
         return res.json(cached.data);
       }
 
-      const courses = await targetPrisma.$queryRaw`
-        SELECT
-          c.id,
-          c.title,
-          c.description,
-          c."fileName",
-          c."createdAt",
-          c."updatedAt",
-          (
-            SELECT COUNT(*)::int
-            FROM "UserCourseAssignment" uca
-            WHERE uca."courseId" = c.id
-          ) AS "assignedUsersCount",
-          c.curriculum AS curriculum
-        FROM "Course" c
-        ORDER BY c."createdAt" DESC;
-      `;
+      let courses = [];
+      try {
+        courses = await targetPrisma.course.findMany({
+          select: {
+            id: true,
+            title: true,
+            description: true,
+            fileName: true,
+            createdAt: true,
+            updatedAt: true,
+            curriculum: true,
+            _count: {
+              select: { assignments: true }
+            }
+          },
+          orderBy: { createdAt: 'desc' }
+        });
+      } catch (err) {
+        console.warn('[Courses] Native findMany fallback:', err.message);
+        courses = await targetPrisma.$queryRaw`
+          SELECT
+            c.id,
+            c.title,
+            c.description,
+            c."fileName",
+            c."createdAt",
+            c."updatedAt",
+            (
+              SELECT COUNT(*)::int
+              FROM "UserCourseAssignment" uca
+              WHERE uca."courseId" = c.id
+            ) AS "assignedUsersCount",
+            c.curriculum AS curriculum
+          FROM "Course" c
+          ORDER BY c."createdAt" DESC;
+        `;
+      }
+
       const formatted = courses.map(formatCourseForCatalog);
       catalogCacheByTenant.set(tenantKey, { data: formatted, time: now });
       return res.json(formatted);
@@ -803,8 +836,26 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.json([]);
     }
 
-    const [courses, progressRecords] = await Promise.all([
-      targetPrisma.$queryRaw`
+    let courses = [];
+    try {
+      courses = await targetPrisma.course.findMany({
+        where: { id: { in: assignedIds } },
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          fileName: true,
+          createdAt: true,
+          updatedAt: true,
+          curriculum: true,
+          _count: {
+            select: { assignments: true }
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+    } catch (_) {
+      courses = await targetPrisma.$queryRaw`
         SELECT
           c.id,
           c.title,
@@ -821,14 +872,15 @@ router.get('/', authenticateToken, async (req, res) => {
         FROM "Course" c
         WHERE c.id = ANY(${assignedIds}::text[])
         ORDER BY c."createdAt" DESC;
-      `,
-      targetPrisma.courseProgress.findMany({
-        where: {
-          userId: { in: userIds },
-          courseId: { in: assignedIds }
-        }
-      })
-    ]);
+      `;
+    }
+
+    const progressRecords = await targetPrisma.courseProgress.findMany({
+      where: {
+        userId: { in: userIds },
+        courseId: { in: assignedIds }
+      }
+    });
 
     const progressByCourse = {};
     for (const pr of progressRecords) {
