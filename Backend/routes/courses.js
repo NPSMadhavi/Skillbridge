@@ -32,6 +32,8 @@ async function extractDocumentContent(file) {
 
 // 1. Admin: Create course module by uploading a document (PDF, Word, PPTX, TXT, etc.)
 router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
   try {
     const { title, description } = req.body;
 

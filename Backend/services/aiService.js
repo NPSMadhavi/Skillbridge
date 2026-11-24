@@ -1549,34 +1549,31 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
       textSlice = String(fullText || '').slice(0, 8000);
     }
 
-    const systemPrompt = `You are SkillBridge's curriculum architect. Build a training curriculum from the local LLM using the slide/page summaries.
+    const systemPrompt = `You are SkillBridge's curriculum architect. Build a concise, high-quality training curriculum from the slide/page summaries.
 
 HARD RULES:
-- Ignore OCR garbage, OLE binary fragments, font names, and symbol strings. Titles like "UT5FAMX%", "#E.R$#E*", "^^~^^~", "Ecz v2b0", ".- AMM,HCC" are INVALID.
-- Every module and lesson title must be readable words a trainer would say (English or Bangla).
-- Do NOT create one lesson per slide or per noisy fragment.
-- Group related consecutive slides into lessons. A typical safety/operations deck has 5-10 structured lessons (aim for 2-5 slides per lesson so each lesson is a substantive training unit, never 1 lesson per slide).
-- Each lesson MUST include sourceSlides: an array of integer slide numbers covered by that lesson.
-- Calculate realistic lesson duration in MM:SS based on slide count and content (e.g. 1-2 slides = "01:45" to "02:30", 3-5 slides = "03:15" to "04:30"). Module duration is the sum of its lessons (e.g. "6m", "9m"). NEVER return "08:00" for all lessons.
-- IMAGE SLIDES: use the vision/OCR meaning, then teach it as a shop-floor trainer would.
+- Ignore OCR noise, symbols, and binary fragments.
+- Keep output concise and fast. Group related slides into 4-8 structured lessons (2-5 slides per lesson).
+- Each lesson MUST include sourceSlides: array of integer slide numbers covered.
+- Include 2-3 concise multiple-choice quiz questions to test core concepts.
 
-Return ONLY JSON:
+Return ONLY valid JSON (no markdown fences, no commentary):
 {
   "title": "Specific Course Title",
-  "description": "2-3 sentence overview",
-  "learning": ["skill 1", "skill 2", "skill 3", "skill 4"],
+  "description": "2-sentence overview",
+  "learning": ["skill 1", "skill 2", "skill 3"],
   "includes": ["Interactive ARIA AI Avatar Tutoring", "Content-driven curriculum", "Voice Q&A", "Assessment & certificate"],
-  "curriculum": [{ "title": "Module title", "lessons": 2, "duration": "6m", "locked": false }],
+  "curriculum": [{ "title": "Module title", "lessons": 2, "duration": "5m", "locked": false }],
   "lessons": [{
     "id": 1,
     "chapterTitle": "Module title",
     "moduleTitle": "Module title",
-    "title": "Readable lesson title",
-    "duration": "02:45",
+    "title": "Clear lesson title",
+    "duration": "02:30",
     "status": "active",
-    "sourceSlides": [1, 2, 3]
+    "sourceSlides": [1, 2]
   }],
-  "quiz": [{ "question": "Question from the real material?", "options": ["A", "B", "C", "D"], "answerIndex": 1, "explanation": "Why." }]
+  "quiz": [{ "question": "Key concept question?", "options": ["Option A", "Option B", "Option C", "Option D"], "answerIndex": 0, "explanation": "Brief reason." }]
 }`;
 
     const userPrompt = `Document Filename: ${fileName}
