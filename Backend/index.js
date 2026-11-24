@@ -87,8 +87,8 @@ if (fs.existsSync(frontendPath)) {
 // SECURITY HEADERS & REVERSE PROXY
 // ============================================================
 
-// Trust 1 hop (reverse proxy like Nginx/Passenger) for secure cookies and rate-limiting
-app.set('trust proxy', 1);
+// Trust reverse proxies (Nginx/Cloudflare) for accurate client IP resolution and rate-limiting
+app.set('trust proxy', true);
 
 // Configure Helmet for secure HTTP headers & HSTS
 app.use(helmet({
