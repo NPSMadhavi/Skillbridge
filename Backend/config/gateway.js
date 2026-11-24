@@ -35,11 +35,16 @@ export function getPythonServiceVarName() {
 }
 
 export function getGatewayApiKey() {
-  const key = process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY || process.env.LLM_GATEWAY_API_KEY || '';
+  const key =
+    process.env.SKILLBRIDGE_API_KEY ||
+    process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY ||
+    process.env.LLM_GATEWAY_API_KEY ||
+    '';
   return String(key).trim();
 }
 
 export function getApiKeyVarName() {
+  if (process.env.SKILLBRIDGE_API_KEY) return 'SKILLBRIDGE_API_KEY';
   if (process.env.SKILLBRIDGE_LLM_GATEWAY_API_KEY) return 'SKILLBRIDGE_LLM_GATEWAY_API_KEY';
   if (process.env.LLM_GATEWAY_API_KEY) return 'LLM_GATEWAY_API_KEY';
   return '(not set)';

@@ -123,9 +123,19 @@ export const faceLogin = async (req, res) => {
 
     const matchedUserId = result.user_id || result.id;
     if (!result.matched || !matchedUserId) {
+      if (result.isAuthError) {
+        return res.status(503).json({
+          error: 'Biometric authentication service configuration error. Please sign in with email and password.'
+        });
+      }
       if (result.serviceUnavailable) {
         return res.status(503).json({
           error: 'Face recognition service is currently unavailable. Please sign in with your email and password.'
+        });
+      }
+      if (result.noFaceDetected) {
+        return res.status(422).json({
+          error: 'No face detected in camera capture. Please face the camera directly in a well-lit room and try again.'
         });
       }
       console.warn(`[FaceLogin] Verification rejected. Confidence: ${result.confidence || 0}`);
@@ -147,15 +157,15 @@ export const faceLogin = async (req, res) => {
 
     const userRole = user.role || 'STUDENT';
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: userRole, tenantCode: finalTenantCode },
+      { id: user.id, email: user.email, role: userRole, tenantCode: effectiveTenantCode },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
 
     res.json({
       token,
-      tenantCode: finalTenantCode,
-      tenant: { code: finalTenantCode },
+      tenantCode: effectiveTenantCode,
+      tenant: { code: effectiveTenantCode },
       user: {
         id: user.id,
         fullName: user.fullName,
@@ -164,7 +174,7 @@ export const faceLogin = async (req, res) => {
         preferredLanguage: user.preferredLanguage,
         country: user.country,
         role: userRole,
-        tenantCode: finalTenantCode,
+        tenantCode: effectiveTenantCode,
       },
     });
   } catch (error) {
