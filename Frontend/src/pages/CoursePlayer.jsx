@@ -1845,19 +1845,11 @@ const CoursePlayer = ({
 
           handleVoiceQuestion(transcription)
         } catch (err) {
-          console.error('[VOICE] Whisper transcription failed:', err)
-          // Stay awake and let browser ASR / retry capture the question
-          if (
-            context.state === TutorState.ACTIVE_LISTENING ||
-            context.state === TutorState.FOLLOW_UP_LISTENING ||
-            manager.state === TutorState.PROCESSING
-          ) {
-            manager.setState(TutorState.ACTIVE_LISTENING)
-            manager.resetFollowUpTimeout()
-            setVoiceStatusText('👂 Mic ready — please ask your question again')
-          } else if (manager.state !== TutorState.SLEEPING) {
+          console.warn('[VOICE] Voice transcription notice:', err?.message || err)
+          if (manager.state !== TutorState.SLEEPING) {
             manager.returnToSleep()
           }
+          setVoiceStatusText(`😴 Sleeping • Say "${aiWakeWord}" to wake`)
         } finally {
           isTranscribingRef.current = false
         }

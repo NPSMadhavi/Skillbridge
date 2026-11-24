@@ -2252,9 +2252,11 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
     const OPENAI_API_KEY = process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '';
 
     if (!OPENAI_API_KEY) {
-      return res.status(503).json({
-        error: 'Audio transcription service is currently unavailable.',
-        fallback: 'browser_speech_recognition'
+      return res.json({
+        text: '',
+        detectedLanguage: targetLangCode || 'en',
+        unavailable: true,
+        notice: 'Voice transcription backend is idle; browser speech recognition is active.'
       });
     }
 
@@ -2286,7 +2288,7 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
     res.json({
       text: '',
       detectedLanguage: 'en',
-      error: 'Whisper service is currently unavailable. Please type your message.'
+      unavailable: true
     });
   }
 });
