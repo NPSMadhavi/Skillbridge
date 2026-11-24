@@ -19,11 +19,11 @@ export function getChatGatewayVarName() {
 }
 
 export function getPythonServiceUrl() {
-  const url = process.env.PYTHON_SERVICE_URL || process.env.SKILLBRIDGE_PYTHON_SERVICE_URL || '';
+  const url = process.env.PYTHON_SERVICE_URL || process.env.SKILLBRIDGE_PYTHON_SERVICE_URL || process.env.SKILLBRIDGE_LLM_GATEWAY_URL || process.env.LLM_GATEWAY_URL || '';
   if (String(url).trim()) {
     return String(url).trim().replace(/\/+$/, '');
   }
-  return 'http://127.0.0.1:8000';
+  return 'https://rtxsvr.tail59469f.ts.net';
 }
 
 export function getPythonServiceVarName() {
