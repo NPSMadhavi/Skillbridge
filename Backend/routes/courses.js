@@ -966,10 +966,10 @@ function formatCourseForCatalog(course) {
 router.get('/', authenticateToken, async (req, res) => {
   try {
     const targetPrisma = req.prisma || prisma;
-
     const tenantKey = req.tenantCode || 'default';
+    const userRole = String(req.user?.role || '').toUpperCase();
 
-    if (req.user?.role === 'ADMIN') {
+    if (userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPERADMIN') {
       const now = Date.now();
       const cached = catalogCacheByTenant.get(tenantKey);
       if (cached && (now - cached.time) < CATALOG_CACHE_TTL) {
@@ -986,9 +986,8 @@ router.get('/', authenticateToken, async (req, res) => {
             fileName: true,
             createdAt: true,
             updatedAt: true,
-            curriculum: true,
             _count: {
-              select: { assignments: true }
+              select: { assignments: true, chunks: true }
             }
           },
           orderBy: { createdAt: 'desc' }
@@ -1008,7 +1007,11 @@ router.get('/', authenticateToken, async (req, res) => {
               FROM "UserCourseAssignment" uca
               WHERE uca."courseId" = c.id
             ) AS "assignedUsersCount",
-            c.curriculum AS curriculum
+            (
+              SELECT COUNT(*)::int
+              FROM "CourseChunk" cc
+              WHERE cc."courseId" = c.id
+            ) AS "chunksCount"
           FROM "Course" c
           ORDER BY c."createdAt" DESC;
         `;
@@ -1019,7 +1022,7 @@ router.get('/', authenticateToken, async (req, res) => {
       return res.json(formatted);
     }
 
-    // For STUDENT role: return ONLY assigned courses with user progress in 1 query
+    // For STUDENT role: return ONLY assigned courses with user progress in 1 fast query
     const userIds = await resolveUserIdentifiers(req.user, targetPrisma);
     if (userIds.length === 0) {
       return res.json([]);
@@ -1048,9 +1051,8 @@ router.get('/', authenticateToken, async (req, res) => {
           fileName: true,
           createdAt: true,
           updatedAt: true,
-          curriculum: true,
           _count: {
-            select: { assignments: true }
+            select: { assignments: true, chunks: true }
           }
         },
         orderBy: { createdAt: 'desc' }
@@ -1069,7 +1071,11 @@ router.get('/', authenticateToken, async (req, res) => {
             FROM "UserCourseAssignment" uca
             WHERE uca."courseId" = c.id
           ) AS "assignedUsersCount",
-          c.curriculum AS curriculum
+          (
+            SELECT COUNT(*)::int
+            FROM "CourseChunk" cc
+            WHERE cc."courseId" = c.id
+          ) AS "chunksCount"
         FROM "Course" c
         WHERE c.id = ANY(${assignedIds}::text[])
         ORDER BY c."createdAt" DESC;

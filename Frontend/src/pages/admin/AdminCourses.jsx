@@ -64,6 +64,14 @@ const AdminCourses = () => {
     fetchCourses()
   }, [])
 
+  const handleOpenView = async (course) => {
+    setViewingCourse(course)
+    try {
+      const detailed = await api.getCourseDetail(course.id)
+      if (detailed) setViewingCourse(detailed)
+    } catch (_) {}
+  }
+
 
   const handleFileChange = (e) => {
     const file = e.target.files[0]
@@ -270,7 +278,7 @@ const AdminCourses = () => {
                       <div className="flex items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => setViewingCourse(course)}
+                          onClick={() => handleOpenView(course)}
                           className="cursor-pointer rounded-lg bg-ink px-2.5 py-1 text-xs font-semibold text-sky hover:border-sky/40 border border-line transition"
                           title="View curriculum details"
                         >
