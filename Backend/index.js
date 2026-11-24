@@ -367,6 +367,11 @@ server.on('error', (err) => {
   }
 });
 
+// Configure server socket timeouts for long-running AI course generation
+server.timeout = 300000; // 300 seconds (matches Nginx proxy_read_timeout 300s)
+server.keepAliveTimeout = 305000;
+server.headersTimeout = 310000;
+
 // ============================================================
 // GLOBAL UNCAUGHT ERROR PROTECTION
 // ============================================================
