@@ -230,7 +230,7 @@ class AIService {
    *   body: { message: string, system_prompt?: string }
    *   response: { model, response, done }
    */
-  async _callGateway(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+  async _callGateway(systemPrompt, userPrompt, jsonMode = false, conversationHistory = [], options = {}) {
     const apiKey = this.getGatewayApiKey();
     if (!apiKey) {
       console.warn('[AIService] SKILLBRIDGE_LLM_GATEWAY_API_KEY is not configured.');
@@ -254,7 +254,11 @@ class AIService {
       throw this._gatewayUnavailableError(503);
     }
 
-    const payload = { message };
+    const defaultModel = process.env.SKILLBRIDGE_MODEL || 'qwen3.5:9b';
+    const payload = {
+      model: defaultModel,
+      message
+    };
     const systemPromptText = systemParts.join('\n\n').trim();
     if (systemPromptText) payload.system_prompt = systemPromptText;
 
@@ -267,10 +271,11 @@ class AIService {
     }
 
     const started = Date.now();
+    const timeout = options.timeoutMs || (jsonMode ? 180000 : 45000);
     try {
       const response = await axios.post(endpoint, payload, {
         headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
-        timeout: jsonMode ? 35000 : 25000
+        timeout
       });
 
       const text = response.data?.response;
@@ -293,9 +298,9 @@ class AIService {
    * The central gateway is primary. Local Ollama and OpenAI run only when
    * SKILLBRIDGE_LLM_ALLOW_OLLAMA or SKILLBRIDGE_LLM_ALLOW_OPENAI is true.
    */
-  async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = []) {
+  async _callLLM(systemPrompt, userPrompt, jsonMode = false, conversationHistory = [], options = {}) {
     try {
-      const gatewayResult = await this._callGateway(systemPrompt, userPrompt, jsonMode, conversationHistory);
+      const gatewayResult = await this._callGateway(systemPrompt, userPrompt, jsonMode, conversationHistory, options);
       if (gatewayResult) return gatewayResult;
     } catch (error) {
       const status = error.response?.status || error.status || error.code || 'error';
@@ -919,6 +924,7 @@ Return ONLY JSON:
     const gatewayUrl = this.getPythonServiceBaseUrl();
     try {
       const response = await axios.post(`${gatewayUrl}/api/v1/embeddings`, {
+        texts: [text.slice(0, 8000)],
         input: text.slice(0, 8000),
         dimensions: dimensions
       }, {
@@ -926,7 +932,7 @@ Return ONLY JSON:
         timeout: 15000
       });
       const data = response.data;
-      const embedding = data?.embedding || data?.data?.[0]?.embedding || (Array.isArray(data) && typeof data[0] === 'number' ? data : null);
+      const embedding = data?.embeddings?.[0] || data?.embedding || data?.data?.[0]?.embedding || (Array.isArray(data) && typeof data[0] === 'number' ? data : null);
       if (Array.isArray(embedding) && embedding.length > 0) {
         return embedding;
       }
@@ -980,6 +986,7 @@ Return ONLY JSON:
     const gatewayUrl = this.getPythonServiceBaseUrl();
     try {
       const response = await axios.post(`${gatewayUrl}/api/v1/embeddings`, {
+        texts: cleanInputs.slice(0, 32),
         input: cleanInputs,
         dimensions: dimensions
       }, {
@@ -988,10 +995,10 @@ Return ONLY JSON:
       });
       const data = response.data;
       let vectors = null;
-      if (Array.isArray(data?.data)) {
-        vectors = data.data.map(d => d.embedding || d);
-      } else if (Array.isArray(data?.embeddings)) {
+      if (Array.isArray(data?.embeddings)) {
         vectors = data.embeddings;
+      } else if (Array.isArray(data?.data)) {
+        vectors = data.data.map(d => d.embedding || d);
       } else if (Array.isArray(data) && Array.isArray(data[0])) {
         vectors = data;
       }
@@ -1532,21 +1539,21 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
    * Generates a dynamic, content-driven Course curriculum from the local LLM.
    * Never uses OCR/binary garbage strings as lesson titles.
    */
-  async generateCourse(fileName, fullText, docMetadata = {}) {
+  async generateCourse(fileName, fullText, docMetadata = {}, options = {}) {
     const { fileType = 'document', slides = [], pages = [] } = docMetadata;
     const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
-    const sampled = this._sampleSlides(slides, 80);
+    const sampled = this._sampleSlides(slides, 60);
 
     let textSlice = '';
     if (isPpt && sampled.length > 0) {
-      textSlice = this._compactSlideSummaries(sampled, 8000);
+      textSlice = this._compactSlideSummaries(sampled, 4000);
       if (slides.length > sampled.length) {
         textSlice = `This deck has ${slides.length} slides. Summaries below are evenly sampled.\n\n${textSlice}`;
       }
     } else if (pages.length > 0) {
-      textSlice = pages.map(p => `[PAGE ${p.page_number}${p.title && !isGarbageTitle(p.title) ? `: ${p.title}` : ''}]\n${String(p.text || '').slice(0, 400)}`).join('\n\n').slice(0, 8000);
+      textSlice = pages.map(p => `[PAGE ${p.page_number}${p.title && !isGarbageTitle(p.title) ? `: ${p.title}` : ''}]\n${String(p.text || '').slice(0, 300)}`).join('\n\n').slice(0, 4000);
     } else {
-      textSlice = String(fullText || '').slice(0, 8000);
+      textSlice = String(fullText || '').slice(0, 4000);
     }
 
     const systemPrompt = `You are SkillBridge's curriculum architect. Build a concise, high-quality training curriculum from the slide/page summaries.
@@ -1583,7 +1590,8 @@ Document Content:
 ${textSlice}`;
 
     try {
-      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
+      const timeoutMs = options.timeoutMs || 180000;
+      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true, [], { timeoutMs });
       const parsed = this._parseJsonObject(aiResponse);
       if (!parsed || !Array.isArray(parsed.lessons) || parsed.lessons.length === 0) {
         throw new Error('Incomplete structure from AI response.');

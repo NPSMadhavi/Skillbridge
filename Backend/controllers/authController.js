@@ -52,21 +52,11 @@ export const passwordLogin = async (req, res) => {
       return res.status(403).json({ error: 'Your account has been deactivated. Contact admin.' });
     }
 
-    let isMatch = false;
-    if (user.passwordHash) {
-      isMatch = await bcrypt.compare(password, user.passwordHash);
-    } else if (user.finNumber) {
-      // Legacy fallback: If no password hash was set, compare with FIN and immediately upgrade to secure hash
-      isMatch = (password.trim() === user.finNumber.trim());
-      if (isMatch) {
-        const upgradedHash = await bcrypt.hash(password.trim(), 12);
-        await targetPrisma.user.update({
-          where: { id: user.id },
-          data: { passwordHash: upgradedHash },
-        }).catch((err) => console.warn('[Auth] Upgrading legacy plain password notice:', err.message));
-      }
+    if (!user.passwordHash) {
+      return res.status(401).json({ error: 'Account password not configured. Please contact administrator.' });
     }
 
+    const isMatch = await bcrypt.compare(password, user.passwordHash);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
@@ -108,9 +98,10 @@ export const faceLogin = async (req, res) => {
     let targetPrisma = req.prisma || prisma;
     let effectiveTenantCode = req.tenantCode || 'default';
 
-    // 1. Fetch candidates from requested tenant database
-    let candidates = await targetPrisma.user.findMany({
+    // 1. Fetch candidates STRICTLY from the authorized tenant database (Zero cross-tenant pooling)
+    const candidates = await targetPrisma.user.findMany({
       where: {
+        status: 'ACTIVE',
         OR: [
           { faceEmbedding: { not: null } },
           { faceImage: { not: null } },
@@ -123,68 +114,26 @@ export const faceLogin = async (req, res) => {
       },
     }).catch(() => []);
 
-    // Track which tenant client each candidate belongs to
-    const candidateTenantMap = new Map();
-    candidates.forEach(c => candidateTenantMap.set(c.id, { client: targetPrisma, tenantCode: effectiveTenantCode }));
-
-    // 2. Also search all active company tenants to pool all enrolled students
-    try {
-      const companies = await masterPrisma.company.findMany({
-        where: { status: 'ACTIVE' },
-        select: { code: true },
-      }).catch(() => []);
-
-      for (const comp of companies) {
-        if (comp.code === effectiveTenantCode) continue;
-        try {
-          const compClient = await tenantService.getTenantClient(comp.code);
-          const compCandidates = await compClient.user.findMany({
-            where: {
-              OR: [
-                { faceEmbedding: { not: null } },
-                { faceImage: { not: null } },
-              ],
-            },
-            select: {
-              id: true,
-              faceEmbedding: true,
-              faceImage: true,
-            },
-          });
-          for (const cc of compCandidates) {
-            if (!candidateTenantMap.has(cc.id)) {
-              candidates.push(cc);
-              candidateTenantMap.set(cc.id, { client: compClient, tenantCode: comp.code });
-            }
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-
     if (candidates.length === 0) {
-      return res.status(400).json({ error: 'No Face ID profiles enrolled in system. Contact admin.' });
+      return res.status(400).json({ error: 'No enrolled Face ID profiles found in your organization. Please log in with password or contact your administrator.' });
     }
 
-    // Format and verify with Python AI service or local biometric matching
+    // Format and verify with authentic Python AI service
     const result = await pythonService.verifyFace(faceIdData, candidates);
 
     const matchedUserId = result.user_id || result.id;
     if (!result.matched || !matchedUserId) {
       if (result.serviceUnavailable) {
         return res.status(503).json({
-          error: `Face recognition service unavailable: ${result.errorMessage || 'gateway unreachable'}. Please sign in with your email and password.`
+          error: 'Face recognition service is currently unavailable. Please sign in with your email and password.'
         });
       }
-      console.warn(`[FaceLogin] Verification rejected. Highest similarity confidence: ${result.confidence || 0}`);
+      console.warn(`[FaceLogin] Verification rejected. Confidence: ${result.confidence || 0}`);
       return res.status(401).json({ error: 'Face verification failed. Face not recognized. Look directly into camera with good lighting and try again.' });
     }
 
-    // Locate the matched user in the corresponding tenant database
-    const tenantInfo = candidateTenantMap.get(matchedUserId) || { client: targetPrisma, tenantCode: effectiveTenantCode };
-    const matchedPrisma = tenantInfo.client;
-    const finalTenantCode = tenantInfo.tenantCode;
-
-    const user = await matchedPrisma.user.findUnique({
+    // Locate the matched user strictly within this tenant
+    const user = await targetPrisma.user.findUnique({
       where: { id: matchedUserId },
     });
 

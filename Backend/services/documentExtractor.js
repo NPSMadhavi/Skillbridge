@@ -22,6 +22,9 @@ const execPromise = util.promisify(exec);
  * Uses Word COM automation on Windows to export to PDF, then renders PDF pages using pypdfium2.
  */
 async function renderDocxPagesToImages(fileBuffer, originalname) {
+  if (process.platform !== 'win32') {
+    return { pageImages: [], pdfBuffer: null };
+  }
   const ext = originalname.split('.').pop()?.toLowerCase() || 'docx';
   const tmpDir = path.join(os.tmpdir(), `docx_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
   const tmpFile = path.join(tmpDir, `document.${ext}`);
@@ -71,6 +74,9 @@ try {
  * Uses PowerPoint COM automation on Windows.
  */
 async function renderPptSlidesToImages(fileBuffer, originalname) {
+  if (process.platform !== 'win32') {
+    return [];
+  }
   const ext = originalname.split('.').pop()?.toLowerCase() || 'pptx';
   const tmpDir = path.join(os.tmpdir(), `ppt_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`);
   const tmpFile = path.join(tmpDir, `presentation.${ext}`);

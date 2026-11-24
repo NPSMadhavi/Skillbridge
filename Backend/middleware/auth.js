@@ -20,6 +20,17 @@ export const authenticateToken = (req, res, next) => {
     if (err) {
       return res.status(403).json({ error: 'Invalid or expired token.' });
     }
+
+    // Tenant boundary integrity: Ensure user token tenant matches request tenant
+    if (decoded && decoded.tenantCode && req.tenantCode) {
+      const isSuperAdmin = decoded.role === 'SUPERADMIN' || decoded.role === 'SUPER_ADMIN';
+      if (!isSuperAdmin && decoded.tenantCode.toLowerCase() !== req.tenantCode.toLowerCase()) {
+        return res.status(403).json({
+          error: `Forbidden: Tenant boundary violation. Authenticated user belongs to tenant '${decoded.tenantCode}', but request is bound to tenant '${req.tenantCode}'.`
+        });
+      }
+    }
+
     req.user = decoded; // { id, email, role, tenantCode }
     next();
   });

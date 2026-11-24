@@ -82,7 +82,8 @@ export const updateCompany = async (req, res) => {
 };
 
 export const deleteCompany = async (req, res) => {
-  const dropDatabase = req.query.dropDatabase !== 'false';
+  // Safe default: Do NOT drop the underlying PostgreSQL database unless explicitly requested with dropDatabase === 'true'
+  const dropDatabase = req.query.dropDatabase === 'true' || req.body?.dropDatabase === true;
   try {
     const result = await tenantService.deleteCompany(req.params.id, { dropDatabase });
     res.json(result);

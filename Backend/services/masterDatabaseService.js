@@ -105,8 +105,20 @@ export async function ensureMasterDatabase() {
     const adminCheck = await client.query('SELECT id, email FROM "SuperAdmin" LIMIT 1');
     if (adminCheck.rowCount === 0) {
       const email = (process.env.SUPER_ADMIN_EMAIL || 'superadmin@skillbridge.com').toLowerCase().trim();
-      const password = process.env.SUPER_ADMIN_PASSWORD || 'SuperAdmin123!';
-      const hash = await bcrypt.hash(password, 10);
+      let password = process.env.SUPER_ADMIN_PASSWORD;
+      if (!password || password.trim() === '') {
+        if (process.env.NODE_ENV === 'production') {
+          password = crypto.randomBytes(16).toString('hex') + '!Aa1';
+          console.warn('================================================================');
+          console.warn('[SECURITY NOTICE] SUPER_ADMIN_PASSWORD was not set in .env.');
+          console.warn(`Generated random initial Super Admin password: ${password}`);
+          console.warn('Please record this password securely and change it immediately.');
+          console.warn('================================================================');
+        } else {
+          password = 'SuperAdmin123!';
+        }
+      }
+      const hash = await bcrypt.hash(password, 12);
       const id = crypto.randomUUID();
 
       await client.query(

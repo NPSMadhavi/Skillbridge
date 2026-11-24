@@ -39,8 +39,11 @@ function getMasterDbUrl() {
       return u.toString();
     } catch (_) {}
   }
-  console.warn('[MasterPrisma] Warning: Neither MASTER_DATABASE_URL nor DATABASE_URL defined. Using default fallback.');
-  return 'postgresql://postgres:postgres@localhost:5432/skillbridge_master?schema=public';
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Master Database configuration error: Neither MASTER_DATABASE_URL nor DATABASE_URL is defined. Please configure database credentials in your .env file.');
+  }
+  console.error('[MasterPrisma] Error: Neither MASTER_DATABASE_URL nor DATABASE_URL defined in environment.');
+  throw new Error('Master Database configuration missing: MASTER_DATABASE_URL must be specified.');
 }
 
 const masterDatabaseUrl = getMasterDbUrl();

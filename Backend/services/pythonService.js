@@ -93,20 +93,9 @@ class PythonService {
         timestamp: Date.now()
       });
     } catch (error) {
-      console.warn('[FaceID] Python face extraction fallback:', error.message);
-      const fallbackHash = crypto.createHash('sha256').update(String(raw)).digest('hex');
-      const fallbackVector = Array.from({ length: 128 }, (_, i) => {
-        const byte = parseInt(fallbackHash.slice((i * 2) % 60, (i * 2) % 60 + 2), 16) || 0;
-        return Number(((byte - 128) / 128).toFixed(6));
-      });
-      return JSON.stringify({
-        type: 'sface_fallback_v1',
-        dimensions: 128,
-        embedding: fallbackVector,
-        hash: fallbackHash,
-        timestamp: Date.now(),
-        warning: 'Enrolled via fallback mode'
-      });
+      console.error('[FaceID] Face registration failed — Python biometric service unreachable:', error.message);
+      // Fail safely: Never generate synthetic hash-based face embeddings
+      throw new Error('Face registration service is currently unavailable. Please verify the Python face microservice is running.');
     }
   }
 
@@ -206,79 +195,14 @@ class PythonService {
       console.warn('[FaceID] Face extraction attempt notice:', extractErr.message);
     }
 
-    // 3. Resilient fallback matching: Compare visual biometric features with enrolled faceImage
-    const queryBuf = bufferFromBase64(singleImage);
-    if (queryBuf && queryBuf.length > 500) {
-      const sampleLuminance = (buf) => {
-        let sum = 0;
-        const step = Math.max(1, Math.floor(buf.length / 256));
-        const samples = [];
-        for (let i = 0; i < buf.length && samples.length < 256; i += step) {
-          samples.push(buf[i]);
-          sum += buf[i];
-        }
-        const mean = sum / (samples.length || 1);
-        return { samples, mean };
-      };
-
-      const queryLuma = sampleLuminance(queryBuf);
-      let bestVisualCand = null;
-      let highestVisualSim = -1;
-
-      for (const cand of formattedCandidates) {
-        if (!cand.face_image) continue;
-        const candBuf = bufferFromBase64(cand.face_image);
-        if (!candBuf || candBuf.length < 500) continue;
-
-        const candLuma = sampleLuminance(candBuf);
-        let num = 0;
-        let denA = 0;
-        let denB = 0;
-        const minLen = Math.min(queryLuma.samples.length, candLuma.samples.length);
-        for (let i = 0; i < minLen; i++) {
-          const diffA = queryLuma.samples[i] - queryLuma.mean;
-          const diffB = candLuma.samples[i] - candLuma.mean;
-          num += diffA * diffB;
-          denA += diffA * diffA;
-          denB += diffB * diffB;
-        }
-        const sim = (denA > 0 && denB > 0) ? (num / (Math.sqrt(denA) * Math.sqrt(denB))) : 0;
-        if (sim > highestVisualSim) {
-          highestVisualSim = sim;
-          bestVisualCand = cand;
-        }
-      }
-
-      if (bestVisualCand && highestVisualSim >= 0.70) {
-        console.log(`[FaceID] Match verified via visual biometric fallback. User: ${bestVisualCand.id}, sim: ${highestVisualSim.toFixed(4)}`);
-        return {
-          matched: true,
-          id: bestVisualCand.id,
-          user_id: bestVisualCand.id,
-          confidence: highestVisualSim
-        };
-      }
-    }
-
-    // 4. Resilient fallback matching for exact hash-based enrollments
-    const rawQuery = singleImage;
-    const queryHash = crypto.createHash('sha256').update(rawQuery || '').digest('hex');
-    for (const cand of formattedCandidates) {
-      try {
-        const parsed = JSON.parse(cand.encrypted_embedding);
-        if (parsed && (parsed.hash === queryHash || parsed.fallbackHash === queryHash)) {
-          return { matched: true, id: cand.id, user_id: cand.id, confidence: 0.99 };
-        }
-      } catch (_) {}
-    }
-
+    // Fallback: If neither primary microservice nor local SFace matched, report safe failure
     return {
       matched: false,
       id: null,
       user_id: null,
       confidence: 0,
       serviceUnavailable: true,
-      errorMessage: `Python face recognition service on Ubuntu server is not reachable at ${serviceUrl}. Ensure python face microservice is running on port 8000 and reverse-proxied in Nginx.`
+      errorMessage: `Face verification could not be completed via biometric service at ${serviceUrl}. Please sign in with email and password.`
     };
   }
 
@@ -316,43 +240,22 @@ class PythonService {
         headers: getServiceHeaders({ 'Content-Type': 'application/json' }),
         timeout: 8000
       });
-      if (response.data?.encrypted_embedding) return response.data;
-    } catch (_) {}
-
-    const straightFrame = payload.frames?.look_straight || Object.values(payload.frames || {})[0] || '';
-    let embeddingPayload = null;
-
-    try {
-      const embedding = await extractFaceEmbedding(straightFrame);
-      embeddingPayload = JSON.stringify({
-        type: 'sface_embedding_v1',
-        dimensions: embedding.length,
-        embedding,
-        timestamp: Date.now()
-      });
-    } catch (_) {
-      const fallbackHash = crypto.createHash('sha256').update(String(straightFrame)).digest('hex');
-      const fallbackVector = Array.from({ length: 128 }, (_, i) => {
-        const byte = parseInt(fallbackHash.slice((i * 2) % 60, (i * 2) % 60 + 2), 16) || 0;
-        return Number(((byte - 128) / 128).toFixed(6));
-      });
-      embeddingPayload = JSON.stringify({
-        type: 'sface_fallback_v1',
-        dimensions: 128,
-        embedding: fallbackVector,
-        hash: fallbackHash,
-        timestamp: Date.now()
-      });
+      if (response.data?.encrypted_embedding) {
+        return {
+          success: true,
+          session_id: response.data.session_id || payload.session_id,
+          encrypted_embedding: response.data.encrypted_embedding,
+          thumbnail_image: response.data.thumbnail_image || payload.frames?.look_straight,
+          liveness_verified: Boolean(response.data.liveness_verified),
+          poses_completed: response.data.poses_completed || Object.keys(payload.frames || {})
+        };
+      }
+    } catch (err) {
+      console.warn('[FaceID] Python face enrollment complete notice:', err.message);
     }
 
-    return {
-      success: true,
-      session_id: payload.session_id || crypto.randomUUID(),
-      encrypted_embedding: embeddingPayload,
-      thumbnail_image: straightFrame,
-      liveness_verified: true,
-      poses_completed: Object.keys(payload.frames || ['look_straight'])
-    };
+    // Fail safely: Never report fake liveness or synthetic embeddings when biometric microservice is unreachable
+    throw new Error('Face enrollment failed: Biometric verification service is unreachable. Real-time liveness verification could not be completed.');
   }
 }
 

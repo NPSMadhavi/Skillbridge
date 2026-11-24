@@ -315,10 +315,17 @@ export const resetPassword = async (req, res) => {
       });
     }
 
-    // Check code match
+    // Check code match with strict attempt limiting (max 5 attempts)
+    storeEntry.attempts = (storeEntry.attempts || 0) + 1;
     if (storeEntry.code !== cleanCode) {
+      if (storeEntry.attempts >= 5) {
+        passwordResetStore.delete(foundKey);
+        return res.status(400).json({
+          error: 'Maximum verification attempts exceeded. Reset code has been invalidated. Please request a new code.'
+        });
+      }
       return res.status(400).json({
-        error: 'Invalid verification code. Please check your email and try again.'
+        error: `Invalid verification code. ${5 - storeEntry.attempts} attempts remaining.`
       });
     }
 

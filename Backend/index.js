@@ -87,8 +87,8 @@ if (fs.existsSync(frontendPath)) {
 // SECURITY HEADERS & REVERSE PROXY
 // ============================================================
 
-// Trust reverse proxies (Nginx/Cloudflare) for accurate client IP resolution and rate-limiting
-app.set('trust proxy', true);
+// Trust reverse proxy (Nginx front-proxy = 1 hop) for accurate client IP resolution and rate-limiting
+app.set('trust proxy', 1);
 
 // Configure Helmet for secure HTTP headers & HSTS
 app.use(helmet({
@@ -266,7 +266,7 @@ app.get(spaWildcard, (req, res, next) => {
     <html lang="en">
       <head>
         <meta charset="UTF-8">
-        <title>BrutallyHired / SkillBridge</title>
+        <title>SkillBridge</title>
       </head>
       <body style="font-family: system-ui, -apple-system, sans-serif; text-align: center; padding: 60px 20px; color: #1e293b;">
         <h2>Backend Service is Running</h2>

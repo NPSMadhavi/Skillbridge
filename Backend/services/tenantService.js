@@ -838,10 +838,14 @@ export const tenantService = {
   /**
    * Delete company and optionally drop the isolated tenant database
    */
-  async deleteCompany(id, { dropDatabase = true } = {}) {
+  async deleteCompany(id, { dropDatabase = false } = {}) {
     const company = await masterPrisma.company.findUnique({ where: { id } });
     if (!company) {
       throw new Error('Company not found.');
+    }
+
+    if (company.code === 'default') {
+      throw new Error('Protected Tenant: The default company organization cannot be deleted.');
     }
 
     console.log(`[Multi-Tenant] Deleting company: ${company.name} (${company.code})...`);
@@ -981,14 +985,26 @@ export const tenantService = {
       // 5. Ensure default admin user exists
       const adminCount = await defaultPrisma.admin.count().catch(() => 0);
       if (adminCount === 0) {
-        const defaultAdminPassword = process.env.ADMIN_PASSWORD || 'ChangeThisAdminPassword123!';
+        let defaultAdminPassword = process.env.ADMIN_PASSWORD;
+        if (!defaultAdminPassword || defaultAdminPassword.trim() === '') {
+          if (process.env.NODE_ENV === 'production') {
+            defaultAdminPassword = crypto.randomBytes(16).toString('hex') + '!Aa1';
+            console.warn('================================================================');
+            console.warn('[SECURITY NOTICE] ADMIN_PASSWORD was not set in .env.');
+            console.warn(`Generated random initial Company Admin password: ${defaultAdminPassword}`);
+            console.warn('Please record this password securely and change it immediately.');
+            console.warn('================================================================');
+          } else {
+            defaultAdminPassword = 'ChangeThisAdminPassword123!';
+          }
+        }
         const defaultAdminEmail = (process.env.ADMIN_EMAIL || 'admin@skillbridge.com').toLowerCase().trim();
         const passwordHash = await bcrypt.hash(defaultAdminPassword, 12);
         await defaultPrisma.admin.create({
           data: {
             email: defaultAdminEmail,
             passwordHash,
-            mustChangePassword: false
+            mustChangePassword: process.env.NODE_ENV === 'production'
           }
         }).catch(err => {
           console.warn('[Multi-Tenant] Notice creating default admin:', err.message);

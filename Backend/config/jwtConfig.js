@@ -11,8 +11,8 @@ if (!secret || secret.trim() === '' || secret === 'super-secret-key-change-in-pr
     console.error('Please configure a strong, random 64-character JWT_SECRET in your .env file.');
     console.error('================================================================');
   }
-  // Generate an ephemeral cryptographically strong secret rather than using a known static default
-  if (!secret || secret.trim() === '') {
+  // In production, NEVER use a known static default. Generate a cryptographically strong secret if missing or default.
+  if (!secret || secret.trim() === '' || (process.env.NODE_ENV === 'production' && secret === 'super-secret-key-change-in-prod')) {
     secret = crypto.randomBytes(48).toString('hex');
     process.env.JWT_SECRET = secret;
   }

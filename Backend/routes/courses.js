@@ -131,44 +131,50 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
     console.log(`[Document Extraction] Document extracted successfully. Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}).`);
 
-    console.log(`[Curriculum Design] Generating dynamic content-driven curriculum from document...`);
-    const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
+    console.log(`[Curriculum Design] Structuring baseline curriculum from document slides...`);
+    let initialCurriculum;
+    if (slides.length > 0) {
+      initialCurriculum = aiService._groupSlidesIntoLessons(slides, req.file.originalname);
+    } else {
+      initialCurriculum = aiService._getMockCourse(req.file.originalname, textContent, docResult);
+    }
 
     // Override the title/description with Admin input if needed, but preserve structure
-    generatedCourse.title = title.trim();
-    generatedCourse.description = description.trim();
-    generatedCourse.fileType = fileType || docResult.fileType;
-    generatedCourse.fileName = req.file.originalname;
+    initialCurriculum.title = title.trim();
+    initialCurriculum.description = description.trim();
+    initialCurriculum.fileType = fileType || docResult.fileType;
+    initialCurriculum.fileName = req.file.originalname;
+    initialCurriculum.isAiGenerating = true;
 
     // Retain clean original document structure without heavy base64 blobs in DB
     if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
-      generatedCourse.slides = docResult.slides.map(s => ({
+      initialCurriculum.slides = docResult.slides.map(s => ({
         ...s,
         images: (s.images || []).map(im => ({ ...im, dataUrl: undefined }))
       }));
     }
     if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
-      generatedCourse.pages = docResult.pages.map(p => ({
+      initialCurriculum.pages = docResult.pages.map(p => ({
         ...p,
         images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
       }));
     }
     if (Array.isArray(docResult.images) && docResult.images.length > 0) {
-      generatedCourse.visuals = docResult.images.map(im => ({ ...im, dataUrl: undefined }));
+      initialCurriculum.visuals = docResult.images.map(im => ({ ...im, dataUrl: undefined }));
     }
 
     // Strip heavy base64 strings so curriculum stored in DB is lightweight (<50KB instead of 100MB)
-    const lightweightCurriculum = JSON.parse(JSON.stringify(generatedCourse, (key, value) => {
+    const lightweightCurriculum = JSON.parse(JSON.stringify(initialCurriculum, (key, value) => {
       if (key === 'dataUrl') return undefined;
       return value;
     }));
 
-    console.log(`[Curriculum Design] Curriculum structured. Saving course to database...`);
+    console.log(`[Curriculum Design] Initializing course in database...`);
     const targetPrisma = req.prisma || prisma;
     const newCourse = await targetPrisma.course.create({
       data: {
-        title: generatedCourse.title,
-        description: generatedCourse.description,
+        title: initialCurriculum.title,
+        description: initialCurriculum.description,
         fileName: req.file.originalname,
         fileText: textContent,
         curriculum: lightweightCurriculum,
@@ -186,8 +192,8 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       console.log(`[File Storage] Saved original file to ${path.join(courseUploadDir, req.file.originalname)}`);
 
       // Extract slide images to disk
-      if (Array.isArray(generatedCourse.slides)) {
-        generatedCourse.slides = generatedCourse.slides.map((s, idx) => {
+      if (Array.isArray(initialCurriculum.slides)) {
+        initialCurriculum.slides = initialCurriculum.slides.map((s, idx) => {
           const sNum = s.slideNumber || idx + 1;
           const slidePngFile = path.join(slidesDir, `Slide${sNum}.png`);
           const slideSvgFile = path.join(slidesDir, `Slide${sNum}.svg`);
@@ -213,12 +219,12 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
             try {
               const svgContent = generateSlideSvg({
                 slideNumber: sNum,
-                totalSlides: generatedCourse.slides.length,
+                totalSlides: initialCurriculum.slides.length,
                 title: s.title,
                 headings: s.headings,
                 bulletPoints: s.bulletPoints,
                 paragraphs: s.paragraphs,
-                courseTitle: generatedCourse.title
+                courseTitle: initialCurriculum.title
               });
               fs.writeFileSync(slideSvgFile, svgContent, 'utf-8');
               imageSaved = true;
@@ -249,8 +255,8 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       }
 
       // Extract page images to disk
-      if (Array.isArray(generatedCourse.pages)) {
-        generatedCourse.pages = generatedCourse.pages.map((p, idx) => {
+      if (Array.isArray(initialCurriculum.pages)) {
+        initialCurriculum.pages = initialCurriculum.pages.map((p, idx) => {
           const pNum = p.page_number || p.pageNumber || idx + 1;
           const pagePngFile = path.join(pagesDir, `Page${pNum}.png`);
           const pageSvgFile = path.join(pagesDir, `Page${pNum}.svg`);
@@ -275,10 +281,10 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
             try {
               const svgContent = generateSlideSvg({
                 slideNumber: pNum,
-                totalSlides: generatedCourse.pages.length,
+                totalSlides: initialCurriculum.pages.length,
                 title: p.title || `Page ${pNum}`,
                 paragraphs: p.text ? [p.text] : [],
-                courseTitle: generatedCourse.title
+                courseTitle: initialCurriculum.title
               });
               fs.writeFileSync(pageSvgFile, svgContent, 'utf-8');
               imageSaved = true;
@@ -308,7 +314,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       // Update course in DB with lightweight sanitized curriculum
       await targetPrisma.course.update({
         where: { id: newCourse.id },
-        data: { curriculum: generatedCourse }
+        data: { curriculum: initialCurriculum }
       });
       console.log(`[File Storage] Saved slide/page PNGs to disk and sanitized course payload in database.`);
     } catch (saveErr) {
@@ -317,31 +323,59 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
 
     invalidateCoursesCatalogCache(req.tenantCode);
 
-    // Return immediate success to prevent web server 504 Gateway Timeouts
+    // Return immediate success in ~2-4 seconds to prevent web server 504 Gateway Timeouts
     res.status(201).json({
-      message: 'Course published successfully.',
+      message: 'Course published successfully. AI curriculum generation and vector indexing in progress.',
       course: {
         id: newCourse.id,
         title: newCourse.title,
         description: newCourse.description,
         fileName: newCourse.fileName,
-        curriculum: generatedCourse,
+        curriculum: initialCurriculum,
         createdAt: newCourse.createdAt,
       },
     });
 
-    // Run semantic chunking, vector indexing and modulesSummary asynchronously in background
+    // Run deep AI curriculum generation, semantic chunking, and vector indexing in background
     setImmediate(async () => {
+      let finalCurriculum = initialCurriculum;
+      try {
+        console.log(`[Curriculum Design] Running deep AI curriculum generation for course ${newCourse.id} in background...`);
+        const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
+        generatedCourse.title = title.trim();
+        generatedCourse.description = description.trim();
+        generatedCourse.fileType = fileType || docResult.fileType;
+        generatedCourse.fileName = req.file.originalname;
+        generatedCourse.slides = initialCurriculum.slides || generatedCourse.slides;
+        generatedCourse.pages = initialCurriculum.pages || generatedCourse.pages;
+        generatedCourse.visuals = initialCurriculum.visuals || generatedCourse.visuals;
+        generatedCourse.isAiGenerating = false;
+
+        const lightweightAiCurriculum = JSON.parse(JSON.stringify(generatedCourse, (key, value) => {
+          if (key === 'dataUrl') return undefined;
+          return value;
+        }));
+
+        await targetPrisma.course.update({
+          where: { id: newCourse.id },
+          data: { curriculum: lightweightAiCurriculum }
+        });
+        finalCurriculum = lightweightAiCurriculum;
+        console.log(`[Curriculum Design] Background AI curriculum generation completed for course ${newCourse.id}.`);
+      } catch (aiErr) {
+        console.warn(`[Curriculum Design] Background AI generation notice for course ${newCourse.id} (baseline curriculum preserved):`, aiErr.message);
+      }
+
       try {
         console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension in background...`);
-        await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, generatedCourse);
+        await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, finalCurriculum);
         console.log(`[pgvector] Course chunks and vector embeddings stored successfully for course ${newCourse.id}.`);
       } catch (vectorErr) {
         console.warn(`[pgvector] Background indexing notice for course ${newCourse.id}:`, vectorErr.message);
       }
 
       try {
-        const summary = generateModulesSummary(generatedCourse);
+        const summary = generateModulesSummary(finalCurriculum);
         await targetPrisma.$executeRaw`
           UPDATE "Course"
           SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
@@ -2278,26 +2312,40 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
       }
 
       const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
-      console.log(`[Document Extraction] Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}). Generating updated dynamic curriculum...`);
-      const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
-      generatedCourse.title = finalTitle;
-      generatedCourse.description = finalDescription;
-      generatedCourse.fileType = fileType || docResult.fileType;
-      generatedCourse.fileName = req.file.originalname;
+      console.log(`[Document Extraction] Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}). Structuring updated curriculum...`);
+
+      let initialCurriculum;
+      if (slides.length > 0) {
+        initialCurriculum = aiService._groupSlidesIntoLessons(slides, req.file.originalname);
+      } else {
+        initialCurriculum = aiService._getMockCourse(req.file.originalname, textContent, docResult);
+      }
+
+      initialCurriculum.title = finalTitle;
+      initialCurriculum.description = finalDescription;
+      initialCurriculum.fileType = fileType || docResult.fileType;
+      initialCurriculum.fileName = req.file.originalname;
+      initialCurriculum.isAiGenerating = true;
 
       if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
-        generatedCourse.slides = docResult.slides;
+        initialCurriculum.slides = docResult.slides.map(s => ({
+          ...s,
+          images: (s.images || []).map(im => ({ ...im, dataUrl: undefined }))
+        }));
       }
       if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
-        generatedCourse.pages = docResult.pages;
+        initialCurriculum.pages = docResult.pages.map(p => ({
+          ...p,
+          images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
+        }));
       }
       if (Array.isArray(docResult.images) && docResult.images.length > 0) {
-        generatedCourse.visuals = docResult.images;
+        initialCurriculum.visuals = docResult.images.map(im => ({ ...im, dataUrl: undefined }));
       }
 
       updateData.fileName = req.file.originalname;
       updateData.fileText = textContent;
-      updateData.curriculum = generatedCourse;
+      updateData.curriculum = initialCurriculum;
 
       // Save updated original file buffer to disk
       try {
@@ -2308,14 +2356,54 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
         console.warn(`[File Storage] Notice updating course file on disk:`, fErr.message);
       }
 
-      // Re-index vector chunks and embeddings for the new document
-      try {
-        console.log(`[pgvector] Re-indexing course ${courseId} with semantic comprehension...`);
-        await vectorChunkService.indexCourse(targetPrisma, courseId, docResult, generatedCourse);
-        console.log(`[pgvector] Vector embeddings updated successfully.`);
-      } catch (vectorErr) {
-        console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);
-      }
+      // Run deep AI refinement and vector indexing asynchronously
+      setImmediate(async () => {
+        let finalCurriculum = initialCurriculum;
+        try {
+          console.log(`[Curriculum Design] Running background AI curriculum update for course ${courseId}...`);
+          const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
+          generatedCourse.title = finalTitle;
+          generatedCourse.description = finalDescription;
+          generatedCourse.fileType = fileType || docResult.fileType;
+          generatedCourse.fileName = req.file.originalname;
+          generatedCourse.slides = initialCurriculum.slides || generatedCourse.slides;
+          generatedCourse.pages = initialCurriculum.pages || generatedCourse.pages;
+          generatedCourse.visuals = initialCurriculum.visuals || generatedCourse.visuals;
+          generatedCourse.isAiGenerating = false;
+
+          const lightweightCurriculum = JSON.parse(JSON.stringify(generatedCourse, (key, value) => {
+            if (key === 'dataUrl') return undefined;
+            return value;
+          }));
+
+          await targetPrisma.course.update({
+            where: { id: courseId },
+            data: { curriculum: lightweightCurriculum }
+          });
+          finalCurriculum = lightweightCurriculum;
+          console.log(`[Curriculum Design] Background AI curriculum update completed for course ${courseId}.`);
+        } catch (aiErr) {
+          console.warn(`[Curriculum Design] Notice updating AI curriculum for course ${courseId}:`, aiErr.message);
+        }
+
+        try {
+          console.log(`[pgvector] Re-indexing course ${courseId} with semantic comprehension in background...`);
+          await vectorChunkService.indexCourse(targetPrisma, courseId, docResult, finalCurriculum);
+          console.log(`[pgvector] Vector embeddings updated successfully for course ${courseId}.`);
+        } catch (vectorErr) {
+          console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);
+        }
+
+        try {
+          const summary = generateModulesSummary(finalCurriculum);
+          await targetPrisma.$executeRaw`
+            UPDATE "Course"
+            SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+            WHERE id = ${courseId};
+          `;
+        } catch (_) { }
+        invalidateCoursesCatalogCache(req.tenantCode);
+      });
     } else {
       let curriculumObj = curriculum !== undefined ? curriculum : existingCourse.curriculum;
       if (typeof curriculumObj === 'string') {
