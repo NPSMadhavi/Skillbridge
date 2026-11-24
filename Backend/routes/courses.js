@@ -893,8 +893,10 @@ function formatCourseForCatalog(course) {
       curriculumSummary = {};
     }
 
+    const chunksCount = course.chunksCount ?? course._count?.chunks ?? (Array.isArray(course.chunks) ? course.chunks.length : 0);
+
     // Extract lightweight lessons list for catalog presentation
-    const rawLessons = (Array.isArray(curriculumSummary.lessons) && curriculumSummary.lessons.length > 0)
+    let rawLessons = (Array.isArray(curriculumSummary.lessons) && curriculumSummary.lessons.length > 0)
       ? curriculumSummary.lessons
       : (Array.isArray(course.chunks) && course.chunks.length > 0)
         ? course.chunks.map((c, cIdx) => ({
@@ -907,6 +909,72 @@ function formatCourseForCatalog(course) {
         }))
         : [];
 
+    let rawModules = Array.isArray(curriculumSummary.curriculum) ? curriculumSummary.curriculum : [];
+
+    // Fallback 1: If rawLessons is empty but rawModules exists, extract lessons from modules
+    if (rawLessons.length === 0 && rawModules.length > 0) {
+      rawLessons = rawModules.flatMap((m, mIdx) =>
+        Array.isArray(m.lessons) ? m.lessons.map((l, lIdx) => ({
+          ...l,
+          id: l.id || lIdx + 1,
+          title: cleanUnsupportedWords(l.title, `Lesson ${lIdx + 1}`),
+          duration: l.duration || '02:30',
+          moduleId: m.id || `mod_${mIdx + 1}`,
+          moduleTitle: cleanUnsupportedWords(m.title, `Module ${mIdx + 1}`)
+        })) : []
+      );
+    }
+
+    // Fallback 2: If rawModules is empty but rawLessons exists, synthesize module groupings
+    if (rawModules.length === 0 && rawLessons.length > 0) {
+      const moduleMap = new Map();
+      rawLessons.forEach((l, idx) => {
+        const modKey = l.moduleTitle || l.moduleId || `Module ${Math.floor(idx / 4) + 1}`;
+        if (!moduleMap.has(modKey)) {
+          moduleMap.set(modKey, {
+            id: l.moduleId || `mod_${moduleMap.size + 1}`,
+            title: modKey,
+            description: '',
+            lessons: []
+          });
+        }
+        moduleMap.get(modKey).lessons.push({
+          id: l.id || idx + 1,
+          title: cleanUnsupportedWords(l.title, `Lesson ${idx + 1}`),
+          duration: l.duration || '02:30'
+        });
+      });
+      rawModules = Array.from(moduleMap.values());
+    }
+
+    // Fallback 3: If both rawLessons and rawModules are empty but chunksCount > 0, generate structured units
+    if (rawLessons.length === 0 && rawModules.length === 0 && chunksCount > 0) {
+      const numModules = Math.max(1, Math.ceil(chunksCount / 4));
+      for (let m = 1; m <= numModules; m++) {
+        const chunkStart = (m - 1) * 4 + 1;
+        const chunkEnd = Math.min(chunksCount, m * 4);
+        const moduleLessons = [];
+        for (let l = chunkStart; l <= chunkEnd; l++) {
+          const lessonObj = {
+            id: l,
+            title: `Lesson ${l}: Learning Unit`,
+            duration: '02:30',
+            moduleId: `mod_${m}`,
+            moduleTitle: `Module ${m}`,
+            chapterTitle: `Module ${m}`
+          };
+          moduleLessons.push(lessonObj);
+          rawLessons.push(lessonObj);
+        }
+        rawModules.push({
+          id: `mod_${m}`,
+          title: `Module ${m}: Core Knowledge`,
+          description: `Key learning points and concepts`,
+          lessons: moduleLessons
+        });
+      }
+    }
+
     const sanitizedLessons = rawLessons.map((l, lIdx) => ({
       id: l.id || lIdx + 1,
       title: cleanUnsupportedWords(l.title, `Lesson ${lIdx + 1}`),
@@ -917,7 +985,6 @@ function formatCourseForCatalog(course) {
       chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, course.title),
     }));
 
-    const rawModules = Array.isArray(curriculumSummary.curriculum) ? curriculumSummary.curriculum : [];
     const sanitizedModules = rawModules.map((m, mIdx) => ({
       id: m.id || mIdx + 1,
       title: cleanUnsupportedWords(m.title, `Module ${mIdx + 1}`),
@@ -952,6 +1019,9 @@ function formatCourseForCatalog(course) {
       }))
       : [];
 
+    const computedModulesCount = sanitizedModules.length || (sanitizedLessons.length > 0 ? Math.ceil(sanitizedLessons.length / 4) : 0) || chunksCount || 0;
+    const computedLessonsCount = sanitizedLessons.length || chunksCount || (sanitizedModules.reduce((acc, m) => acc + (m.lessons?.length || 0), 0)) || 0;
+
     return {
       id: course.id,
       title: cleanUnsupportedWords(course.title),
@@ -973,6 +1043,9 @@ function formatCourseForCatalog(course) {
         lessons: sanitizedLessons
       },
       lessons: sanitizedLessons,
+      modulesCount: computedModulesCount,
+      lessonsCount: computedLessonsCount,
+      chunksCount: chunksCount,
       createdAt: course.createdAt,
       updatedAt: course.updatedAt,
       assignedUsersCount: course.assignedUsersCount ?? course._count?.assignments ?? 0,
@@ -989,6 +1062,9 @@ function formatCourseForCatalog(course) {
       pages: [],
       curriculum: { lessons: [], curriculum: [] },
       lessons: [],
+      modulesCount: 0,
+      lessonsCount: 0,
+      chunksCount: 0,
       createdAt: course?.createdAt || new Date().toISOString(),
       updatedAt: course?.updatedAt || new Date().toISOString(),
       assignedUsersCount: 0
@@ -1020,6 +1096,7 @@ router.get('/', authenticateToken, async (req, res) => {
             fileName: true,
             createdAt: true,
             updatedAt: true,
+            curriculum: true,
             _count: {
               select: { assignments: true, chunks: true }
             }
@@ -1034,6 +1111,7 @@ router.get('/', authenticateToken, async (req, res) => {
             c.title,
             c.description,
             c."fileName",
+            c.curriculum,
             c."createdAt",
             c."updatedAt",
             (
@@ -1085,6 +1163,7 @@ router.get('/', authenticateToken, async (req, res) => {
           fileName: true,
           createdAt: true,
           updatedAt: true,
+          curriculum: true,
           _count: {
             select: { assignments: true, chunks: true }
           }
@@ -1098,6 +1177,7 @@ router.get('/', authenticateToken, async (req, res) => {
           c.title,
           c.description,
           c."fileName",
+          c.curriculum,
           c."createdAt",
           c."updatedAt",
           (

@@ -254,8 +254,13 @@ const AdminCourses = () => {
               const curriculumData = typeof course.curriculum === 'string'
                 ? JSON.parse(course.curriculum)
                 : (course.curriculum || {})
-              const lessons = curriculumData.lessons || []
-              const lessonCount = lessons.length || (curriculumData.curriculum?.length || 0)
+              const lessons = (Array.isArray(course.lessons) && course.lessons.length > 0)
+                ? course.lessons
+                : (Array.isArray(curriculumData.lessons) ? curriculumData.lessons : [])
+              const modules = Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : []
+              const rawChunkCount = course.chunksCount ?? course._count?.chunks ?? 0
+              const moduleCount = course.modulesCount || modules.length || (lessons.length > 0 ? Math.ceil(lessons.length / 4) : 0) || rawChunkCount || (course.slides?.length) || 0
+              const displayCount = moduleCount || lessons.length || rawChunkCount || 0
 
               return (
                 <article
@@ -265,7 +270,7 @@ const AdminCourses = () => {
                   <div className="h-32 bg-gradient-to-br from-navy to-sky relative p-5 flex flex-col justify-end text-white">
                     <div className="absolute top-4 right-4 flex items-center gap-1.5">
                       <span className="rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
-                        {lessonCount} Modules
+                        {displayCount} {displayCount === 1 ? 'Module' : 'Modules'}
                       </span>
                     </div>
                     <h3 className="font-display text-base font-bold truncate">{course.title}</h3>
@@ -656,8 +661,11 @@ const AdminCourses = () => {
                 const curriculumData = typeof viewingCourse.curriculum === 'string'
                   ? JSON.parse(viewingCourse.curriculum)
                   : (viewingCourse.curriculum || {})
-                const lessons = curriculumData.lessons || []
-                const modules = curriculumData.curriculum || []
+                const lessons = (Array.isArray(viewingCourse.lessons) && viewingCourse.lessons.length > 0)
+                  ? viewingCourse.lessons
+                  : (Array.isArray(curriculumData.lessons) ? curriculumData.lessons : [])
+                const modules = Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : []
+                const rawChunkCount = viewingCourse.chunksCount ?? viewingCourse._count?.chunks ?? 0
 
                 const formatLessonDuration = (lesson, idx) => {
                   if (lesson.duration && lesson.duration !== '08:00' && lesson.duration !== '8m' && lesson.duration !== '10 mins') {
@@ -695,10 +703,18 @@ const AdminCourses = () => {
                           <div key={idx} className="p-3 rounded-lg bg-ink border border-line text-xs space-y-1">
                             <div className="flex justify-between font-bold text-fg">
                               <span>Module {idx + 1}: {m.title}</span>
-                              <span className="text-muted text-[10px]">{m.lessons} Lessons • {m.duration && !m.duration.endsWith('88m') && m.duration !== `${m.lessons * 8}m` ? m.duration : `${Math.max(1, Math.round(m.lessons * 2.2))}m`}</span>
+                              <span className="text-muted text-[10px]">{m.lessons ? `${m.lessons} Lessons • ` : ''}{m.duration && !m.duration.endsWith('88m') && m.duration !== `${m.lessons * 8}m` ? m.duration : `${Math.max(1, Math.round((m.lessons || 1) * 2.2))}m`}</span>
                             </div>
                           </div>
                         ))}
+                      </div>
+                    ) : rawChunkCount > 0 ? (
+                      <div className="p-3 rounded-lg bg-ink border border-line text-xs space-y-1">
+                        <div className="flex justify-between font-bold text-fg">
+                          <span>AI Curriculum Active</span>
+                          <span className="text-muted text-[10px]">{rawChunkCount} Vector Chunks</span>
+                        </div>
+                        <p className="text-[11px] text-muted">Knowledge vectors indexed and ready for interactive learning and assessment.</p>
                       </div>
                     ) : (
                       <p className="text-xs text-muted italic">Standard dynamic curriculum enabled.</p>
