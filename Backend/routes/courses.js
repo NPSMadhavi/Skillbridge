@@ -193,8 +193,15 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     // Poll Ubuntu AI Server in background and persist extracted content, curriculum, chunks & 768-d vectors to PostgreSQL
     setImmediate(async () => {
       try {
-        console.log(`[Ubuntu Doc Pipeline] Polling job ${ubuntuJob.job_id} for course ${newCourse.id}...`);
-        const result = await pollDocumentJobResult(ubuntuJob.job_id, { timeoutMs: 240000, pollIntervalMs: 2000 });
+        let result;
+        if (ubuntuJob._isLegacy) {
+          // Legacy fallback: result was computed synchronously during submitDocumentJob
+          console.log(`[Ubuntu Doc Pipeline] Legacy extract result for course ${newCourse.id} (new service not yet deployed).`);
+          result = ubuntuJob._legacyResult;
+        } else {
+          console.log(`[Ubuntu Doc Pipeline] Polling job ${ubuntuJob.job_id} for course ${newCourse.id}...`);
+          result = await pollDocumentJobResult(ubuntuJob.job_id, { timeoutMs: 240000, pollIntervalMs: 2000 });
+        }
         const doc = result.document || {};
         const finalCurriculum = {
           ...(result.curriculum || {}),
@@ -220,6 +227,22 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         if (Array.isArray(result.chunks) && result.chunks.length > 0) {
           await vectorChunkService.storeChunks(targetPrisma, newCourse.id, result.chunks, result.embeddings || null);
           console.log(`[pgvector] Stored ${result.chunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${newCourse.id}.`);
+        } else if (doc.text && doc.text.trim().length > 40) {
+          // Legacy fallback: new service did not return pre-chunked data.
+          // Generate semantic chunks locally using vectorChunkService, then store with embeddings.
+          console.log(`[Ubuntu Doc Pipeline] No chunks from Ubuntu — generating semantic chunks from extracted text (${doc.text.length} chars) for course ${newCourse.id}...`);
+          try {
+            const generatedChunks = await vectorChunkService.createSemanticChunks(
+              doc.text,
+              { fileName: req.file.originalname, fileType: doc.fileType || fileType, slides: doc.slides || [], pages: doc.pages || [], curriculum: finalCurriculum }
+            );
+            if (generatedChunks && generatedChunks.length > 0) {
+              await vectorChunkService.storeChunks(targetPrisma, newCourse.id, generatedChunks, null);
+              console.log(`[pgvector] Stored ${generatedChunks.length} locally-generated semantic chunks for course ${newCourse.id}.`);
+            }
+          } catch (chunkErr) {
+            console.warn(`[Ubuntu Doc Pipeline] Semantic chunking error for course ${newCourse.id}:`, chunkErr.message);
+          }
         }
 
         try {
