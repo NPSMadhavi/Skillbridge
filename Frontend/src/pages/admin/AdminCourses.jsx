@@ -65,12 +65,12 @@ const AdminCourses = () => {
     fetchCourses()
   }, [])
 
-  // Auto-poll courses list while any course is being processed by the Ubuntu AI service
+  // Auto-poll courses list while any course is being processed by the AI service
   useEffect(() => {
     const hasProcessing = coursesList.some((c) => {
       try {
         const curr = typeof c.curriculum === 'string' ? JSON.parse(c.curriculum || '{}') : (c.curriculum || {})
-        return curr.processingStatus === 'PROCESSING' || curr.isAiGenerating
+        return c.isAiGenerating || curr.isAiGenerating || c.processingStatus === 'PROCESSING' || curr.processingStatus === 'PROCESSING'
       } catch (_) {
         return false
       }
@@ -79,7 +79,7 @@ const AdminCourses = () => {
 
     const timer = setInterval(() => {
       fetchCourses()
-    }, 4000)
+    }, 3000)
     return () => clearInterval(timer)
   }, [coursesList])
 
@@ -282,11 +282,11 @@ const AdminCourses = () => {
                 ? course.lessons
                 : (Array.isArray(curriculumData.lessons) ? curriculumData.lessons : [])
               const modules = Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : []
-              const rawChunkCount = course.chunksCount ?? course._count?.chunks ?? 0
+              const rawChunkCount = course.chunksCount ?? course._count?.chunks ?? (Array.isArray(course.chunks) ? course.chunks.length : 0)
               const moduleCount = course.modulesCount || modules.length || (lessons.length > 0 ? Math.ceil(lessons.length / 4) : 0) || rawChunkCount || (course.slides?.length) || 0
               const displayCount = moduleCount || lessons.length || rawChunkCount || 0
-              const isProcessing = curriculumData.processingStatus === 'PROCESSING' || curriculumData.isAiGenerating || (!curriculumData.processingStatus && displayCount === 0 && !curriculumData.lessons)
-              const isFailed = curriculumData.processingStatus === 'FAILED'
+              const isProcessing = course.isAiGenerating || curriculumData.isAiGenerating || course.processingStatus === 'PROCESSING' || curriculumData.processingStatus === 'PROCESSING' || (displayCount === 0 && (!lessons || lessons.length === 0) && curriculumData.processingStatus !== 'FAILED' && course.processingStatus !== 'FAILED')
+              const isFailed = course.processingStatus === 'FAILED' || curriculumData.processingStatus === 'FAILED'
 
               return (
                 <article

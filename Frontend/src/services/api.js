@@ -746,6 +746,7 @@ export const api = {
       }
       throw new Error(errMsg);
     }
+    try { sessionStorage.removeItem('skillbridge_cached_courses'); } catch (_) {}
     return res.json();
   },
 
@@ -759,6 +760,7 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Failed to create course.');
     }
+    try { sessionStorage.removeItem('skillbridge_cached_courses'); } catch (_) {}
     return res.json();
   },
 
@@ -778,6 +780,7 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Failed to update course.');
     }
+    try { sessionStorage.removeItem('skillbridge_cached_courses'); } catch (_) {}
     return res.json();
   },
 
@@ -1011,6 +1014,7 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Failed to delete course module.');
     }
+    try { sessionStorage.removeItem('skillbridge_cached_courses'); } catch (_) {}
     return res.json();
   },
 

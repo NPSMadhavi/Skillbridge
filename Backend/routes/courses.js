@@ -216,6 +216,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
           slides: doc.slides || result.curriculum?.slides || [],
           pages: doc.pages || result.curriculum?.pages || [],
         };
+        synchronizeCurriculumStructure(finalCurriculum, title.trim());
 
         await targetPrisma.course.update({
           where: { id: newCourse.id },
@@ -280,6 +281,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
           fallbackCurriculum.isAiGenerating = false;
           fallbackCurriculum.slides = slides.map(s => ({ ...s, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
           fallbackCurriculum.pages = pages.map(p => ({ ...p, images: (p.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
+          synchronizeCurriculumStructure(fallbackCurriculum, title.trim());
 
           await targetPrisma.course.update({
             where: { id: newCourse.id },
@@ -827,6 +829,57 @@ const checkCourseAccess = async (req, courseId, customPrisma = null) => {
   }
 };
 
+// Helper to synchronize and ensure both curriculum (modules) and lessons are properly structured
+export function synchronizeCurriculumStructure(curriculum, courseTitle = 'Course') {
+  if (!curriculum || typeof curriculum !== 'object') {
+    curriculum = {};
+  }
+  let rawLessons = Array.isArray(curriculum.lessons) ? curriculum.lessons : [];
+  let rawModules = Array.isArray(curriculum.curriculum) ? curriculum.curriculum : [];
+
+  // 1. If lessons exist but modules are empty, synthesize modules from lessons
+  if (rawModules.length === 0 && rawLessons.length > 0) {
+    const moduleMap = new Map();
+    rawLessons.forEach((l, idx) => {
+      const modKey = l.moduleTitle || l.chapterTitle || l.moduleId || `Module ${Math.floor(idx / 4) + 1}`;
+      if (!moduleMap.has(modKey)) {
+        moduleMap.set(modKey, {
+          id: l.moduleId || `mod_${moduleMap.size + 1}`,
+          title: cleanUnsupportedWords(modKey, `Module ${moduleMap.size + 1}`),
+          description: '',
+          lessons: []
+        });
+      }
+      moduleMap.get(modKey).lessons.push({
+        id: l.id || idx + 1,
+        title: cleanUnsupportedWords(l.title, `Lesson ${idx + 1}`),
+        duration: l.duration || '02:30'
+      });
+    });
+    rawModules = Array.from(moduleMap.values());
+    curriculum.curriculum = rawModules;
+  }
+  // 2. If modules exist but lessons are empty, extract lessons from modules
+  else if (rawLessons.length === 0 && rawModules.length > 0) {
+    rawLessons = rawModules.flatMap((m, mIdx) =>
+      Array.isArray(m.lessons) ? m.lessons.map((l, lIdx) => ({
+        ...l,
+        id: l.id || lIdx + 1,
+        title: cleanUnsupportedWords(l.title, `Lesson ${lIdx + 1}`),
+        duration: l.duration || '02:30',
+        moduleId: m.id || `mod_${mIdx + 1}`,
+        moduleTitle: cleanUnsupportedWords(m.title, `Module ${mIdx + 1}`)
+      })) : []
+    );
+    curriculum.lessons = rawLessons;
+  }
+
+  curriculum.modulesCount = rawModules.length || (rawLessons.length > 0 ? Math.ceil(rawLessons.length / 4) : 0);
+  curriculum.lessonsCount = rawLessons.length;
+
+  return curriculum;
+}
+
 // Helper to generate fast lightweight modules summary
 export function generateModulesSummary(curriculum) {
   if (!curriculum) return {};
@@ -1013,6 +1066,9 @@ function formatCourseForCatalog(course) {
     const computedModulesCount = sanitizedModules.length || (sanitizedLessons.length > 0 ? Math.ceil(sanitizedLessons.length / 4) : 0) || chunksCount || 0;
     const computedLessonsCount = sanitizedLessons.length || chunksCount || (sanitizedModules.reduce((acc, m) => acc + (m.lessons?.length || 0), 0)) || 0;
 
+    const currentProcessingStatus = curriculumSummary.processingStatus || (chunksCount > 0 ? 'COMPLETED' : 'UNKNOWN');
+    const currentIsAiGenerating = Boolean(curriculumSummary.isAiGenerating);
+
     return {
       id: course.id,
       title: cleanUnsupportedWords(course.title),
@@ -1021,17 +1077,23 @@ function formatCourseForCatalog(course) {
       fileType: detectedFileType,
       slides: slideSummaries,
       pages: pageSummaries,
+      processingStatus: currentProcessingStatus,
+      isAiGenerating: currentIsAiGenerating,
       curriculum: {
         title: cleanUnsupportedWords(curriculumSummary.title || course.title),
         description: cleanUnsupportedWords(curriculumSummary.description || course.description),
         fileType: detectedFileType,
         fileName: course.fileName,
+        processingStatus: currentProcessingStatus,
+        isAiGenerating: currentIsAiGenerating,
         slides: slideSummaries,
         pages: pageSummaries,
         includes: curriculumSummary.includes,
         learning: curriculumSummary.learning,
         curriculum: sanitizedModules,
-        lessons: sanitizedLessons
+        lessons: sanitizedLessons,
+        modulesCount: computedModulesCount,
+        lessonsCount: computedLessonsCount,
       },
       lessons: sanitizedLessons,
       modulesCount: computedModulesCount,
@@ -1118,6 +1180,21 @@ router.get('/', authenticateToken, async (req, res) => {
           FROM "Course" c
           ORDER BY c."createdAt" DESC;
         `;
+      }
+
+      // Auto-recover any existing courses with empty module groupings in database
+      for (const c of courses) {
+        let cur = c.curriculum;
+        if (typeof cur === 'string') {
+          try { cur = JSON.parse(cur); } catch(_) { cur = null; }
+        }
+        if (cur && (!Array.isArray(cur.curriculum) || cur.curriculum.length === 0) && Array.isArray(cur.lessons) && cur.lessons.length > 0) {
+          synchronizeCurriculumStructure(cur, c.title);
+          targetPrisma.course.update({
+            where: { id: c.id },
+            data: { curriculum: cur }
+          }).catch(() => {});
+        }
       }
 
       const formatted = courses.map(formatCourseForCatalog);
