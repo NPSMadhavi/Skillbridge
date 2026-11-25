@@ -59,12 +59,6 @@ export function validateDocumentFile(file) {
  */
 export async function submitDocumentJob(file, { title = '', description = '', generateCurriculum = true } = {}) {
   validateDocumentFile(file);
-  // Fast check: Ubuntu server has a hard 25 MB payload limit. Files >= 25 MB fall back to local extraction immediately.
-  if (file.buffer && file.buffer.length > 24.5 * 1024 * 1024) {
-    const err = new Error('File exceeds remote Ubuntu server limit (25 MB). Switching to local document extraction engine.');
-    err.status = 413;
-    throw err;
-  }
   const serviceUrl = getPythonServiceUrl();
   const form = new FormData();
   form.append('file', file.buffer, {
