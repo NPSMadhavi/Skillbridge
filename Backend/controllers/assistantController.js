@@ -258,6 +258,9 @@ export const askVoiceAssistant = async (req, res) => {
       language: targetLangInfo.code,
       context: context || '',
       conversationHistory: conversationHistory || []
+    }, {
+      signal: req.abortController?.signal,
+      timeoutMs: 25000
     });
 
     res.json({

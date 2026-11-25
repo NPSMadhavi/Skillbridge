@@ -30,6 +30,7 @@ import { tenantService } from './services/tenantService.js';
 import { ensureMasterDatabase } from './services/masterDatabaseService.js';
 import { runDailyBackup } from './scripts/daily_backup.js';
 import { runStartupDiagnostics } from './services/diagnosticService.js';
+import { requestTelemetryMiddleware } from './middleware/requestTelemetry.js';
 
 // Auto-detect development mode from npm script or flag
 const isDevScript = process.env.npm_lifecycle_event === 'dev' || process.argv.includes('--dev');
@@ -168,11 +169,8 @@ app.options('*', cors());
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// Request logging (sanitizes URLs, avoiding raw query params)
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  next();
-});
+// Structured API response-time telemetry and cancellation handling
+app.use(requestTelemetryMiddleware);
 
 // General DoS and endpoint scraping protection
 app.use('/api/', generalApiLimiter);

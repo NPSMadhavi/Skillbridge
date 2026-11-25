@@ -135,15 +135,24 @@ Return your response in clean Markdown.`;
 
     const userPrompt = `Source material for lesson "${lessonTitle}":\n\n${effectiveSource}\n\nPlease deliver the complete classroom lecture for this lesson now.`;
 
-    let lecture = await aiService._callLLM(systemPrompt, userPrompt, false);
+    const lectureStart = Date.now();
+    let lecture = await aiService._callLLM(systemPrompt, userPrompt, false, [], options);
 
-    // Audit quality: verify narration is explanatory rather than verbatim slide reading
+    // Audit quality: verify narration is explanatory rather than verbatim slide reading.
+    // To prevent Nginx 110 upstream timeouts, only trigger a synchronous rewrite pass
+    // if the first pass finished quickly (< 12s) and client signal is still active.
     const audit = this.auditNarrationQuality(effectiveSource, lecture);
-    if (!audit.passesAudit) {
-      console.warn(`[InteractiveCourseService] Narration audit warning (${audit.similarityScore} > ${this.auditThreshold}): Triggering single pedagogical rewrite pass...`);
+    const timeSpent = Date.now() - lectureStart;
+    const canSafelyRetry = timeSpent < 12000 && !options.signal?.aborted;
+
+    if (!audit.passesAudit && canSafelyRetry) {
+      console.warn(`[InteractiveCourseService] Narration audit notice (${audit.similarityScore} > ${this.auditThreshold}) after ${timeSpent}ms: Triggering single pedagogical rewrite pass...`);
       const retrySystem = `${systemPrompt}\n\nCRITICAL TEACHING REWRITE: Your previous response was too close to reading the source bullets verbatim. You MUST re-explain using practical analogies, real-world shop floor examples, and deep conceptual breakdown while keeping all technical facts and safety instructions 100% accurate.`;
       try {
-        const rewritten = await aiService._callLLM(retrySystem, userPrompt, false);
+        const rewritten = await aiService._callLLM(retrySystem, userPrompt, false, [], {
+          ...options,
+          timeoutMs: Math.min(options.timeoutMs || 25000, 15000)
+        });
         if (rewritten && rewritten.length > 50) {
           lecture = rewritten;
         }

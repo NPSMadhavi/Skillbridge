@@ -312,12 +312,18 @@ class AIService {
     }
 
     const started = Date.now();
-    const timeout = options.timeoutMs || (jsonMode ? 180000 : 45000);
+    // Default interactive timeouts: 35s for JSON structured output, 25s for natural voice/text.
+    // Explicit higher timeouts can still be passed via options.timeoutMs (e.g. background document jobs).
+    const timeout = options.timeoutMs || (jsonMode ? 35000 : 25000);
     try {
-      const response = await axios.post(endpoint, payload, {
+      const axiosConfig = {
         headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
         timeout
-      });
+      };
+      if (options.signal) {
+        axiosConfig.signal = options.signal;
+      }
+      const response = await axios.post(endpoint, payload, axiosConfig);
 
       const text = response.data?.response;
       if (typeof text !== 'string' || !text.trim()) {
@@ -328,6 +334,10 @@ class AIService {
       console.log(`[AIService] Gateway chat served by ${model} in ${Date.now() - started}ms.`);
       return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     } catch (error) {
+      if (axios.isCancel(error) || error.name === 'CanceledError' || error.code === 'ERR_CANCELED') {
+        console.warn(`[AIService] Gateway request canceled by client or timeout after ${Date.now() - started}ms.`);
+        throw error;
+      }
       const mapped = formatGatewayError(error);
       console.warn(`[AIService] Gateway chat error: ${mapped}`);
       throw error;
@@ -373,7 +383,7 @@ class AIService {
    * Generates a voice-optimized assistant response for arbitrary questions,
    * dynamically adopting the configured assistant name.
    */
-  async askAssistant({ question, assistantName = 'ARIA', language = 'en', context = '', conversationHistory = [] }) {
+  async askAssistant({ question, assistantName = 'ARIA', language = 'en', context = '', conversationHistory = [] }, options = {}) {
     const cleanQuestion = String(question || '').trim();
     const cleanName = String(assistantName || 'ARIA').trim();
 
@@ -414,7 +424,10 @@ ${context ? `Relevant context: ${context.slice(0, 3000)}` : ''}`;
 
     const userPrompt = `User Question: ${cleanQuestion}`;
 
-    const rawReply = await this._callLLM(systemPrompt, userPrompt, false, conversationHistory);
+    const rawReply = await this._callLLM(systemPrompt, userPrompt, false, conversationHistory, {
+      ...options,
+      timeoutMs: options.timeoutMs || 25000
+    });
     const cleanReply = String(rawReply || '')
       .replace(/<think>[\s\S]*?<\/think>/gi, '')
       .replace(/[*#_~`]/g, '')
@@ -504,7 +517,7 @@ ${context ? `Relevant context: ${context.slice(0, 3000)}` : ''}`;
    *   suggested_next_transition: string
    * }
    */
-  async explainVisibleContent(contentInfo, courseTitle = '', language = 'en') {
+  async explainVisibleContent(contentInfo, courseTitle = '', language = 'en', options = {}) {
     const pageNum = contentInfo.pageNumber || contentInfo.page_number || contentInfo.slideNumber || 1;
     const rawTitle = contentInfo.title || `Slide ${pageNum}`;
     const pageTitle = isPlaceholderTitle(rawTitle) || isGarbageTitle(rawTitle)
@@ -554,7 +567,7 @@ ${cleanSourceContent.slice(0, 10000)}
 Deliver your instructional lecture for this slide.`;
 
     try {
-      const response = await this._callLLM(systemPrompt, userPrompt, true);
+      const response = await this._callLLM(systemPrompt, userPrompt, true, [], options);
       const parsed = this._parseJsonObject(response);
       if (parsed && (parsed.spoken_explanation || parsed.title)) {
         const spoken = cleanUnsupportedWords(stripSlidePlaceholders(parsed.spoken_explanation || parsed.explanation || ''));
@@ -599,9 +612,9 @@ Deliver your instructional lecture for this slide.`;
     const keyPoints = bulletList.length > 0
       ? bulletList.slice(0, 5)
       : [
-          `Master all required procedures for ${pageTitle}`,
-          `Maintain strict compliance with workplace safety protocols and operational standards`
-        ];
+        `Master all required procedures for ${pageTitle}`,
+        `Maintain strict compliance with workplace safety protocols and operational standards`
+      ];
 
     return {
       page_or_slide_number: pageNum,
@@ -1251,7 +1264,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
     const userPrompt = `Document Filename: ${fileName}\nDocument Format: ${fileType.toUpperCase()}\nDocument Content:\n\n${docContext}`;
 
     try {
-      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
+      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true, [], options);
       const parsed = this._parseJsonObject(aiResponse);
 
       if (parsed && Array.isArray(parsed.chunks) && parsed.chunks.length > 0) {
@@ -1751,7 +1764,7 @@ ${textSlice}`;
     return course;
   }
 
-  async generateLessonQuiz(courseTitle, lessonTitle, contextText, language = 'English') {
+  async generateLessonQuiz(courseTitle, lessonTitle, contextText, language = 'English', options = {}) {
     const systemPrompt = `You are ARIA, the expert AI Tutor for SkillBridge.
 Generate an interactive multiple-choice assessment quiz for the specific lesson: "${lessonTitle}" in course: "${courseTitle}".
 Target Language: ${language}.
@@ -1776,7 +1789,7 @@ CRITICAL QUIZ GENERATION RULES:
     const userPrompt = `Document context for lesson "${lessonTitle}":\n${contextText}\n\nTarget Language: ${language}`;
 
     try {
-      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true);
+      const aiResponse = await this._callLLM(systemPrompt, userPrompt, true, [], options);
       const parsed = this._parseJsonObject(aiResponse);
       if (parsed.quiz && Array.isArray(parsed.quiz) && parsed.quiz.length > 0) {
         return parsed.quiz;

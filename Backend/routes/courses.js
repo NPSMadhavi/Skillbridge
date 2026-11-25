@@ -671,10 +671,31 @@ const resolveUserIdentifiers = async (user, targetPrisma = prisma) => {
   return Array.from(identifiers);
 };
 
+// In-memory cache mapping courseId -> tenantCode to eliminate repeated multi-tenant database sweeps
+const courseTenantCache = new Map();
+const COURSE_TENANT_CACHE_TTL = 10 * 60 * 1000; // 10 minutes TTL
+
 // Helper to resolve a course and its active database client across tenant boundaries
 export async function findCourseAcrossTenants(courseId, initialPrisma, includeOptions = null) {
   let targetPrisma = initialPrisma || prisma;
   let course = null;
+
+  // 0. Check cache first for rapid resolution
+  const cached = courseTenantCache.get(courseId);
+  if (cached && (Date.now() - cached.time < COURSE_TENANT_CACHE_TTL)) {
+    try {
+      const client = cached.tenantCode === 'default'
+        ? defaultPrisma
+        : await tenantService.getTenantClient(cached.tenantCode);
+      if (client) {
+        course = await client.course.findUnique({
+          where: { id: courseId },
+          ...(includeOptions ? { include: includeOptions } : {})
+        });
+        if (course) return { course, targetPrisma: client };
+      }
+    } catch (_) {}
+  }
 
   // 1. Check specified / active tenant database
   try {
@@ -682,6 +703,10 @@ export async function findCourseAcrossTenants(courseId, initialPrisma, includeOp
       where: { id: courseId },
       ...(includeOptions ? { include: includeOptions } : {})
     });
+    if (course) {
+      courseTenantCache.set(courseId, { tenantCode: 'active', time: Date.now() });
+      return { course, targetPrisma };
+    }
   } catch (_) { }
 
   // 2. Check default database if not found in active tenant
@@ -691,14 +716,18 @@ export async function findCourseAcrossTenants(courseId, initialPrisma, includeOp
         where: { id: courseId },
         ...(includeOptions ? { include: includeOptions } : {})
       });
-      if (course) targetPrisma = defaultPrisma;
+      if (course) {
+        targetPrisma = defaultPrisma;
+        courseTenantCache.set(courseId, { tenantCode: 'default', time: Date.now() });
+        return { course, targetPrisma };
+      }
     } catch (_) { }
   }
 
   // 3. Scan other tenant databases if course belongs to another company
   if (!course) {
     try {
-      const companies = await masterPrisma.company.findMany().catch(() => []);
+      const companies = await masterPrisma.company.findMany({ select: { code: true } }).catch(() => []);
       for (const comp of companies) {
         try {
           const client = await tenantService.getTenantClient(comp.code);
@@ -710,6 +739,7 @@ export async function findCourseAcrossTenants(courseId, initialPrisma, includeOp
             if (found) {
               course = found;
               targetPrisma = client;
+              courseTenantCache.set(courseId, { tenantCode: comp.code, time: Date.now() });
               break;
             }
           }
@@ -1534,6 +1564,17 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     }
 
     const { lessonTitle, language } = req.body;
+    const lessonIdStr = String(req.params.lessonId);
+    const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
+    const targetLanguage = targetLangInfo.name;
+
+    // 1. FAST PATH 1: Check if lesson explanation is already stored in Course.curriculum database record
+    let curriculum = course.curriculum;
+    if (typeof curriculum === 'string') {
+      try { curriculum = JSON.parse(curriculum); } catch { curriculum = {}; }
+    }
+    if (!curriculum || typeof curriculum !== 'object') curriculum = {};
+
     let effectiveLessonTitle = lessonTitle;
     if (!effectiveLessonTitle && Array.isArray(curriculum.lessons)) {
       const found = curriculum.lessons.find(l => String(l.id) === lessonIdStr);
@@ -1542,18 +1583,6 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     if (!effectiveLessonTitle) {
       return res.status(400).json({ error: 'Lesson title is required.' });
     }
-
-    const targetLangInfo = resolveLanguageInfo(language || req.user?.preferredLanguage);
-    const targetLanguage = targetLangInfo.name;
-    const lessonIdStr = String(req.params.lessonId);
-
-
-    // 1. FAST PATH 1: Check if lesson explanation is already stored in Course.curriculum database record
-    let curriculum = course.curriculum;
-    if (typeof curriculum === 'string') {
-      try { curriculum = JSON.parse(curriculum); } catch { curriculum = {}; }
-    }
-    if (!curriculum || typeof curriculum !== 'object') curriculum = {};
 
     const isRawSlideBulletNoise = (text) => {
       if (!text || typeof text !== 'string') return true;
@@ -1629,18 +1658,25 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     let explanation;
     const sourceScript = hasCleanStored ? storedScript : synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
 
+    let lectureTimer;
     try {
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Teacher lecture generation timeout (50s)')), 50000));
+      const timeoutPromise = new Promise((_, reject) => {
+        lectureTimer = setTimeout(() => reject(new Error('Teacher lecture generation timeout (25s)')), 25000);
+      });
       explanation = await Promise.race([
         interactiveCourseService.generateTeacherLecture(effectiveLessonTitle, course.title, sourceScript, {
           language: targetLangInfo.code,
-          targetWpm: 130
+          targetWpm: 130,
+          signal: req.abortController?.signal,
+          timeoutMs: 25000
         }),
         timeoutPromise
       ]);
     } catch (lectureErr) {
       console.warn(`[PERF:LLM_END] AI teacher engine fallback triggered for ${targetLanguage}:`, lectureErr.message);
       explanation = aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
+    } finally {
+      if (lectureTimer) clearTimeout(lectureTimer);
     }
 
     if (explanation && !textMatchesLanguage(explanation, targetLangInfo.code)) {
@@ -1815,8 +1851,11 @@ router.post('/:id/page/:pageNum/explain', optionalAuthenticateToken, async (req,
     const cleanFullContent = cleanUnsupportedWords(stripSlidePlaceholders(fullSlideContent));
 
     let structured;
+    let pageTimer;
     try {
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('LLM slide explanation timeout (15s)')), 15000));
+      const timeoutPromise = new Promise((_, reject) => {
+        pageTimer = setTimeout(() => reject(new Error('LLM slide explanation timeout (15s)')), 15000);
+      });
       structured = await Promise.race([
         aiService.explainVisibleContent({
           pageNumber: pageNum,
@@ -1824,7 +1863,10 @@ router.post('/:id/page/:pageNum/explain', optionalAuthenticateToken, async (req,
           text: cleanFullContent,
           bulletPoints: cleanBullets,
           visuals
-        }, course.title, targetLangInfo.name),
+        }, course.title, targetLangInfo.name, {
+          signal: req.abortController?.signal,
+          timeoutMs: 15000
+        }),
         timeoutPromise
       ]);
     } catch (llmErr) {
@@ -1840,6 +1882,8 @@ router.post('/:id/page/:pageNum/explain', optionalAuthenticateToken, async (req,
         safety_warnings: [`Follow standard safety guidelines for ${title}`],
         suggested_next_transition: 'Let us proceed to the next section.'
       };
+    } finally {
+      if (pageTimer) clearTimeout(pageTimer);
     }
 
     // Save into curriculum DB record for future instant hits
@@ -1923,7 +1967,10 @@ router.post('/:id/lessons/:lessonId/quiz', optionalAuthenticateToken, async (req
       : (course.fileText || '').slice(0, 15000);
 
     // Call AI Service to generate multiple-choice questions for this chapter in preferred language
-    const quiz = await aiService.generateLessonQuiz(course.title, lessonTitle, contextText, targetLanguage);
+    const quiz = await aiService.generateLessonQuiz(course.title, lessonTitle, contextText, targetLanguage, {
+      signal: req.abortController?.signal,
+      timeoutMs: 30000
+    });
     res.json({ quiz, language: targetLangInfo });
   } catch (error) {
     console.error('Failed to generate chapter assessment quiz:', error);
@@ -2228,12 +2275,16 @@ Deliver your expert teacher explanation in ${targetLanguage} (2 to 3 spoken sent
     const llmChatStartTime = Date.now();
 
     let reply;
+    let tutorTimer;
     try {
-      // 55-second timeout to allow GPU LLM to produce thoughtful native-language responses
-      const llmPromise = aiService._callLLM(systemPrompt, userPrompt, false, conversationHistory || []);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Tutor voice latency threshold reached (55s).')), 55000)
-      );
+      // 25-second timeout to safely stay well within Nginx 60s proxy timeout
+      const llmPromise = aiService._callLLM(systemPrompt, userPrompt, false, conversationHistory || [], {
+        signal: req.abortController?.signal,
+        timeoutMs: 25000
+      });
+      const timeoutPromise = new Promise((_, reject) => {
+        tutorTimer = setTimeout(() => reject(new Error('Tutor voice latency threshold reached (25s).')), 25000);
+      });
       reply = await Promise.race([llmPromise, timeoutPromise]);
       const llmChatDuration = Date.now() - llmChatStartTime;
       console.log(`[PERF:LLM_END] Generated tutor answer via central AI gateway in ${llmChatDuration}ms.`);
@@ -2252,6 +2303,8 @@ Deliver your expert teacher explanation in ${targetLanguage} (2 to 3 spoken sent
         en: 'Thank you for asking. On the work site, always ensure you follow the standard operating procedures and wear the required protective equipment to stay safe.'
       };
       reply = FALLBACK_TUTOR_REPLIES[targetLangInfo.code] || FALLBACK_TUTOR_REPLIES.en;
+    } finally {
+      if (tutorTimer) clearTimeout(tutorTimer);
     }
 
     // Prepare reply for neural speech: clean markdown, expand acronyms, normalize numbers
