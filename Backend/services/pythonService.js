@@ -285,9 +285,10 @@ class PythonService {
     }
 
     // 2. Score query embedding against all enrolled candidates in tenant
-    // SFace cosine similarity threshold for normalized 128-d vectors:
-    // Identical person = 0.96 - 1.0; Different person = <= 0.92
-    const MATCH_THRESHOLD = 0.94;
+    // OpenCV SFace cosine similarity threshold for 128-d vectors:
+    // Official SFace threshold is 0.363; different people typically score ~0.0-0.25,
+    // while live captures of the same person score ~0.45-0.90.
+    const MATCH_THRESHOLD = 0.42;
     let bestCandidate = null;
     let highestSimilarity = -1;
 
@@ -350,19 +351,42 @@ class PythonService {
    * Verifies multi-pose frames, extracts SFace biometric vector, and completes enrollment.
    */
   async completeFaceEnrollment(payload) {
-    const primaryFrame =
-      payload.frames?.look_straight ||
-      payload.frames?.look_up ||
-      payload.frame ||
-      payload.imageBase64 ||
-      (Array.isArray(payload.frames) ? payload.frames[0] : null);
+    const candidateFrames = [
+      payload.frames?.look_straight,
+      payload.frames?.look_up,
+      payload.frames?.look_down,
+      payload.frames?.turn_left,
+      payload.frames?.turn_right,
+      payload.frame,
+      payload.imageBase64,
+      ...(Array.isArray(payload.frames) ? payload.frames : [])
+    ].filter(Boolean);
 
-    if (!primaryFrame) {
+    if (candidateFrames.length === 0) {
       throw new Error('Face enrollment failed: No valid face frames provided.');
     }
 
-    // Extract actual neural embedding via Central AI Gateway
-    const embedding = await extractFaceEmbedding(primaryFrame);
+    let embedding = null;
+    let selectedFrame = candidateFrames[0];
+    let lastError = null;
+
+    for (const frame of candidateFrames) {
+      try {
+        embedding = await extractFaceEmbedding(frame);
+        selectedFrame = frame;
+        break;
+      } catch (err) {
+        lastError = err;
+        // Only retry with next frame if no face was detected in this frame
+        if (!err.noFaceDetected && err.status !== 422) {
+          throw err;
+        }
+      }
+    }
+
+    if (!embedding) {
+      throw lastError || new Error('No face detected in any captured frame. Please retry in good lighting.');
+    }
 
     return {
       success: true,
@@ -373,7 +397,7 @@ class PythonService {
         embedding,
         timestamp: Date.now()
       }),
-      thumbnail_image: primaryFrame,
+      thumbnail_image: selectedFrame,
       liveness_verified: true,
       poses_completed: Object.keys(payload.frames || { look_straight: true })
     };

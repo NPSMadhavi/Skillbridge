@@ -97,13 +97,15 @@ function verifyStepPose(stepId, pose) {
       return { valid: false, message: 'Tilt your chin and head UP slightly' }
     }
     case 'turn_left': {
-      if (rawYaw < -0.10 && rawPitchRatio >= 0.35 && rawPitchRatio <= 1.25) {
+      // Video preview is mirrored (scale-x-[-1]), so turning user's head left moves nose right in raw frame (rawYaw > 0)
+      if (rawYaw > 0.10 && rawPitchRatio >= 0.35 && rawPitchRatio <= 1.25) {
         return { valid: true, message: 'Perfect! Hold position...' }
       }
       return { valid: false, message: 'Turn your head to the LEFT' }
     }
     case 'turn_right': {
-      if (rawYaw > 0.10 && rawPitchRatio >= 0.35 && rawPitchRatio <= 1.25) {
+      // Video preview is mirrored (scale-x-[-1]), so turning user's head right moves nose left in raw frame (rawYaw < 0)
+      if (rawYaw < -0.10 && rawPitchRatio >= 0.35 && rawPitchRatio <= 1.25) {
         return { valid: true, message: 'Great! Hold position...' }
       }
       return { valid: false, message: 'Turn your head to the RIGHT' }
