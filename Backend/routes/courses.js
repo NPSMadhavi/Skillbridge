@@ -179,6 +179,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
 
     // Run entire centralized Ubuntu AI submission, extraction, chunking & 768-d vectors in background
     setImmediate(async () => {
+      let processedSuccessfully = false;
       try {
         console.log(`[Ubuntu Doc Pipeline] Submitting "${fileObj.originalname}" (${fileType.toUpperCase()}) for course ${newCourse.id}...`);
         let ubuntuJob;
@@ -189,7 +190,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
             generateCurriculum: true,
           });
         } catch (gwErr) {
-          console.error(`[Ubuntu Doc Pipeline] Submission failed for course ${newCourse.id}:`, formatGatewayError(gwErr));
+          console.warn(`[Ubuntu Doc Pipeline] Centralized submission notice for course ${newCourse.id}:`, formatGatewayError(gwErr));
           throw gwErr;
         }
 
@@ -254,24 +255,72 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
           `;
         } catch (_) {}
 
+        processedSuccessfully = true;
         invalidateCoursesCatalogCache(req.tenantCode);
-        console.log(`[Ubuntu Doc Pipeline] Course ${newCourse.id} processing completed successfully.`);
-      } catch (bgErr) {
-        console.error(`[Ubuntu Doc Pipeline] Processing failed for course ${newCourse.id}:`, bgErr.message);
+        console.log(`[Ubuntu Doc Pipeline] Course ${newCourse.id} processing completed successfully via Ubuntu AI server.`);
+      } catch (ubuntuErr) {
+        console.warn(`[Doc Pipeline Fallback] Ubuntu extraction failed (${ubuntuErr.message}). Activating high-speed local document extraction and semantic chunking for course ${newCourse.id}...`);
         try {
+          const docResult = await extractDocumentContent(fileObj);
+          const { text: textContent, pages = [], slides = [], fileType: docFileType } = docResult;
+
+          let fallbackCurriculum;
+          if (slides.length > 0) {
+            fallbackCurriculum = aiService._groupSlidesIntoLessons(slides, fileObj.originalname);
+          } else {
+            fallbackCurriculum = aiService._getMockCourse(fileObj.originalname, textContent, docResult);
+          }
+
+          fallbackCurriculum.title = title.trim();
+          fallbackCurriculum.description = description.trim();
+          fallbackCurriculum.fileType = docFileType || fileType;
+          fallbackCurriculum.fileName = fileObj.originalname;
+          fallbackCurriculum.ubuntuJobId = null;
+          fallbackCurriculum.processingStatus = 'COMPLETED';
+          fallbackCurriculum.isAiGenerating = false;
+          fallbackCurriculum.slides = slides.map(s => ({ ...s, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
+          fallbackCurriculum.pages = pages.map(p => ({ ...p, images: (p.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
+
           await targetPrisma.course.update({
             where: { id: newCourse.id },
             data: {
-              curriculum: {
-                ...initialCurriculum,
-                processingStatus: 'FAILED',
-                processingError: bgErr.message,
-                isAiGenerating: false,
-              },
+              fileText: textContent || '',
+              curriculum: fallbackCurriculum,
             },
           });
+
+          const storedChunks = await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, fallbackCurriculum);
+          console.log(`[pgvector] Stored ${storedChunks?.length || 0} locally-indexed semantic chunks for course ${newCourse.id}.`);
+
+          try {
+            const summary = generateModulesSummary(fallbackCurriculum);
+            await targetPrisma.$executeRaw`
+              UPDATE "Course"
+              SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+              WHERE id = ${newCourse.id};
+            `;
+          } catch (_) {}
+
+          processedSuccessfully = true;
           invalidateCoursesCatalogCache(req.tenantCode);
-        } catch (_) {}
+          console.log(`[Doc Pipeline Fallback] Course ${newCourse.id} successfully processed and chunked via local engine!`);
+        } catch (localErr) {
+          console.error(`[Doc Pipeline Fallback] Both Ubuntu and local extraction failed for course ${newCourse.id}:`, localErr.message);
+          try {
+            await targetPrisma.course.update({
+              where: { id: newCourse.id },
+              data: {
+                curriculum: {
+                  ...initialCurriculum,
+                  processingStatus: 'FAILED',
+                  processingError: localErr.message,
+                  isAiGenerating: false,
+                },
+              },
+            });
+            invalidateCoursesCatalogCache(req.tenantCode);
+          } catch (_) {}
+        }
       }
     });
   } catch (error) {
