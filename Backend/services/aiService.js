@@ -50,25 +50,66 @@ class AIService {
   }
 
   /**
-   * GET ${SKILLBRIDGE_LLM_GATEWAY_URL}/health
+   * Performs comprehensive health check on the Central AI Gateway,
+   * querying both /health and /api/v1/models to detect the active model.
    */
   async checkGatewayHealth() {
     const gatewayUrl = this.getGatewayBaseUrl();
+    if (!gatewayUrl) {
+      const err = new Error('Central AI Gateway URL is not configured.');
+      err.status = 503;
+      throw err;
+    }
+
+    const headers = this.getGatewayHeaders();
+
     try {
       const response = await axios.get(`${gatewayUrl}/health`, {
-        timeout: 10000,
-        headers: this.getGatewayHeaders()
+        timeout: 8000,
+        headers
       });
+
       if (response.status < 200 || response.status >= 300) {
         const err = new Error('Central AI gateway health check failed.');
         err.status = 503;
         throw err;
       }
-      return response.data;
+
+      const healthData = response.data || {};
+      let activeModel = healthData.model || healthData.active_model || null;
+      let modelDetails = null;
+
+      // Query /api/v1/models to discover the exact active model served by the Central AI Gateway
+      try {
+        const modelsRes = await axios.get(`${gatewayUrl}/api/v1/models`, {
+          timeout: 5000,
+          headers
+        });
+        const modelsList = modelsRes.data?.models;
+        if (Array.isArray(modelsList) && modelsList.length > 0) {
+          const first = modelsList[0];
+          activeModel = first.name || first.model || activeModel;
+          const paramSize = first.details?.parameter_size ? ` (${first.details.parameter_size})` : '';
+          modelDetails = `${activeModel}${paramSize}`;
+        }
+      } catch (_) {
+        if (!activeModel) {
+          activeModel = process.env.OLLAMA_MODEL || 'qwen3.5:9b';
+          modelDetails = activeModel;
+        }
+      }
+
+      return {
+        ...healthData,
+        model: activeModel || 'qwen3.5:9b',
+        modelDetails: modelDetails || activeModel || 'qwen3.5:9b'
+      };
     } catch (error) {
       const mapped = formatGatewayError(error);
       const err = new Error(`Central AI gateway health check failed: ${mapped}`);
       err.status = error.response?.status || 503;
+      err.statusCode = error.response?.status;
+      err.code = error.code;
       throw err;
     }
   }

@@ -3,7 +3,7 @@
  *
  * Routing Rules:
  * - Chat calls (/api/v1/chat, /health, /api/v1/models) use SKILLBRIDGE_LLM_GATEWAY_URL / LLM_GATEWAY_URL
- * - Face, STT, TTS, Document/OCR and Embeddings calls use PYTHON_SERVICE_URL (with fallback)
+ * - Face, STT, TTS, Document/OCR and Embeddings calls use PYTHON_SERVICE_URL (or dedicated service URLs if set)
  * - Headers send X-API-Key using SKILLBRIDGE_LLM_GATEWAY_API_KEY first, then LLM_GATEWAY_API_KEY
  */
 
@@ -31,7 +31,33 @@ export function getPythonServiceVarName() {
   if (process.env.SKILLBRIDGE_PYTHON_SERVICE_URL) return 'SKILLBRIDGE_PYTHON_SERVICE_URL';
   if (process.env.SKILLBRIDGE_LLM_GATEWAY_URL) return 'SKILLBRIDGE_LLM_GATEWAY_URL (fallback)';
   if (process.env.LLM_GATEWAY_URL) return 'LLM_GATEWAY_URL (fallback)';
-  return 'default fallback (http://localhost:8000)';
+  return 'default fallback';
+}
+
+// Dedicated microservice URLs with fallback to pythonServiceUrl
+export function getFaceServiceUrl() {
+  const url = process.env.FACE_SERVICE_URL || getPythonServiceUrl();
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+export function getSttServiceUrl() {
+  const url = process.env.STT_SERVICE_URL || getPythonServiceUrl();
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+export function getTtsServiceUrl() {
+  const url = process.env.TTS_SERVICE_URL || getPythonServiceUrl();
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+export function getDocServiceUrl() {
+  const url = process.env.DOC_SERVICE_URL || process.env.UBUNTU_DOCUMENT_SERVICE_URL || getPythonServiceUrl();
+  return String(url).trim().replace(/\/+$/, '');
+}
+
+export function getEmbeddingServiceUrl() {
+  const url = process.env.EMBEDDING_SERVICE_URL || getPythonServiceUrl();
+  return String(url).trim().replace(/\/+$/, '');
 }
 
 export function getGatewayApiKey() {
@@ -69,6 +95,11 @@ export default {
   getChatGatewayVarName,
   getPythonServiceUrl,
   getPythonServiceVarName,
+  getFaceServiceUrl,
+  getSttServiceUrl,
+  getTtsServiceUrl,
+  getDocServiceUrl,
+  getEmbeddingServiceUrl,
   getGatewayBaseUrl,
   getGatewayApiKey,
   getApiKeyVarName,

@@ -29,20 +29,33 @@ import aiService from './services/aiService.js';
 import { tenantService } from './services/tenantService.js';
 import { ensureMasterDatabase } from './services/masterDatabaseService.js';
 import { runDailyBackup } from './scripts/daily_backup.js';
+import { runStartupDiagnostics } from './services/diagnosticService.js';
+
+// Auto-detect development mode from npm script or flag
+const isDevScript = process.env.npm_lifecycle_event === 'dev' || process.argv.includes('--dev');
+if (isDevScript && (!process.env.NODE_ENV || process.env.NODE_ENV === 'production')) {
+  process.env.NODE_ENV = 'development';
+}
 
 // Load environment variables with resilient fallback paths
-dotenv.config();
-const potentialEnvPaths = [
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '.env'),
-  path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env'),
-  path.join(process.cwd(), '.env'),
-  path.join(process.cwd(), 'Backend', '.env')
+const isDevMode = process.env.NODE_ENV === 'development';
+const candidateEnvFiles = isDevMode ? ['.env.development', '.env.local', '.env'] : ['.env'];
+const candidateEnvDirs = [
+  path.dirname(fileURLToPath(import.meta.url)),
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '..'),
+  process.cwd(),
+  path.join(process.cwd(), 'Backend')
 ];
-for (const envFile of potentialEnvPaths) {
-  if (fs.existsSync(envFile)) {
-    dotenv.config({ path: envFile, override: false });
+
+for (const envName of candidateEnvFiles) {
+  for (const envDir of candidateEnvDirs) {
+    const fullPath = path.join(envDir, envName);
+    if (fs.existsSync(fullPath)) {
+      dotenv.config({ path: fullPath, override: false });
+    }
   }
 }
+dotenv.config();
 
 const app = express();
 
@@ -322,31 +335,11 @@ function getUrlHost(rawUrl) {
 }
 
 const server = app.listen(PORT, async () => {
-  console.log('========================================');
-  console.log('SKILLBRIDGE / BRUTALLYHIRED BACKEND STARTED');
-  console.log(`Port / Socket: ${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('Production URL: https://brutallyhired.com/');
-  console.log('========================================');
-
-  // AI Subsystems Configuration Logging (Variable names only, never secrets)
-  console.log('=== Gateway Subsystems Configuration ===');
-  console.log(`- Chat: [${getChatGatewayVarName()}]`);
-  console.log(`- Face: [${getPythonServiceVarName()}]`);
-  console.log(`- STT: [${getPythonServiceVarName()}]`);
-  console.log(`- TTS: [${getPythonServiceVarName()}]`);
-  console.log(`- Documents/OCR: [${getPythonServiceVarName()}]`);
-  console.log(`- Embeddings: [${getPythonServiceVarName()}]`);
-  console.log(`- API key: [${getApiKeyVarName()}]`);
-  console.log('========================================');
-
-  await checkDatabaseConnection();
-
+  // Execute comprehensive startup diagnostics across all subsystems
   try {
-    const health = await aiService.checkGatewayHealth();
-    console.log(`[LLM Gateway] Health OK (model: ${health?.model || 'unknown'})`);
-  } catch (e) {
-    console.warn('[LLM Gateway] Notice: Central gateway health check failed.');
+    await runStartupDiagnostics({ port: PORT, isProduction: IS_PROD });
+  } catch (diagErr) {
+    console.warn('[Startup Diagnostics] Notice running diagnostics:', diagErr.message);
   }
 
   // Schedule automated daily database backup (every 24 hours)

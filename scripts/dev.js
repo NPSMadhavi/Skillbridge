@@ -1,28 +1,78 @@
 import { spawn } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 
 const isWin = process.platform === 'win32';
-const npmCmd = isWin ? 'npm.cmd' : 'npm';
+
+/**
+ * Resolves safe npm command invocation without triggering Node.js DEP0190:
+ * "DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities."
+ * Uses node executable directly with npm-cli.js (or cmd.exe on Windows fallback) with shell: false.
+ */
+function getSafeNpmInvocation(args) {
+  if (isWin) {
+    const candidateCliPaths = [
+      path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      path.join(process.env.APPDATA || '', 'npm', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    ];
+    for (const cliPath of candidateCliPaths) {
+      if (fs.existsSync(cliPath)) {
+        return {
+          command: process.execPath,
+          args: [cliPath, ...args],
+          shell: false,
+        };
+      }
+    }
+    return {
+      command: 'cmd.exe',
+      args: ['/d', '/s', '/c', 'npm', ...args],
+      shell: false,
+    };
+  }
+  return {
+    command: 'npm',
+    args,
+    shell: false,
+  };
+}
 
 console.log('\x1b[36m%s\x1b[0m', '>>> Starting SkillBridge Backend and Frontend in development mode...\n');
 
-const backend = spawn(npmCmd, ['run', 'dev', '--prefix', 'Backend'], {
+// Force development environment for local startup
+const devEnv = {
+  ...process.env,
+  NODE_ENV: 'development',
+  PORT: process.env.PORT || '5000',
+  FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:5173',
+  FORCE_COLOR: '1',
+};
+
+const backendInv = getSafeNpmInvocation(['run', 'dev', '--prefix', 'Backend']);
+const backend = spawn(backendInv.command, backendInv.args, {
   stdio: 'inherit',
-  shell: true
+  shell: backendInv.shell,
+  env: devEnv,
 });
 
-const frontend = spawn(npmCmd, ['run', 'dev', '--prefix', 'Frontend'], {
+const frontendInv = getSafeNpmInvocation(['run', 'dev', '--prefix', 'Frontend']);
+const frontend = spawn(frontendInv.command, frontendInv.args, {
   stdio: 'inherit',
-  shell: true
+  shell: frontendInv.shell,
+  env: devEnv,
 });
 
+let isCleaningUp = false;
 const cleanup = () => {
+  if (isCleaningUp) return;
+  isCleaningUp = true;
   try {
     if (isWin) {
-      if (backend.pid) spawn('taskkill', ['/pid', backend.pid, '/f', '/t'], { stdio: 'ignore' });
-      if (frontend.pid) spawn('taskkill', ['/pid', frontend.pid, '/f', '/t'], { stdio: 'ignore' });
+      if (backend?.pid) spawn('taskkill', ['/pid', String(backend.pid), '/f', '/t'], { stdio: 'ignore', shell: false });
+      if (frontend?.pid) spawn('taskkill', ['/pid', String(frontend.pid), '/f', '/t'], { stdio: 'ignore', shell: false });
     } else {
-      backend.kill('SIGTERM');
-      frontend.kill('SIGTERM');
+      backend?.kill('SIGTERM');
+      frontend?.kill('SIGTERM');
     }
   } catch (_) {}
   process.exit();
@@ -33,13 +83,13 @@ process.on('SIGTERM', cleanup);
 process.on('exit', cleanup);
 
 backend.on('close', (code) => {
-  if (code !== 0 && code !== null) {
+  if (code !== 0 && code !== null && !isCleaningUp) {
     console.log(`Backend exited with code ${code}`);
   }
 });
 
 frontend.on('close', (code) => {
-  if (code !== 0 && code !== null) {
+  if (code !== 0 && code !== null && !isCleaningUp) {
     console.log(`Frontend exited with code ${code}`);
   }
 });
