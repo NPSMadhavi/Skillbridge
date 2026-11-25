@@ -5,7 +5,7 @@
  */
 import aiService from './aiService.js';
 import { detectDominantScript } from '../utils/language.js';
-import { isGarbageTitle, stripSlidePlaceholders, cleanUnsupportedWords, isBinaryNoiseText } from '../utils/contentQuality.js';
+import { isGarbageTitle, isPlaceholderTitle, stripSlidePlaceholders, cleanUnsupportedWords, isBinaryNoiseText, firstUsefulTitleLine } from '../utils/contentQuality.js';
 
 export class VectorChunkService {
   constructor() {
