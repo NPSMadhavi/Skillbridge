@@ -123,31 +123,18 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       return res.status(valErr.status || 415).json({ error: valErr.message });
     }
 
-    console.log(`[Ubuntu Doc Pipeline] Submitting "${req.file.originalname}" (${fileType.toUpperCase()}) for centralized AI processing...`);
-    let ubuntuJob;
-    try {
-      ubuntuJob = await submitDocumentJob(req.file, {
-        title: title.trim(),
-        description: description.trim(),
-        generateCurriculum: true,
-      });
-    } catch (gwErr) {
-      const status = gwErr.response?.status || gwErr.status || 503;
-      if (status === 415 || status === 413 || status === 400) {
-        return res.status(status).json({ error: gwErr.response?.data?.detail || gwErr.message });
-      }
-      console.error('[Ubuntu Doc Pipeline] Gateway submission failed:', formatGatewayError(gwErr));
-      return res.status(503).json({
-        error: `Central Ubuntu AI document service unavailable: ${formatGatewayError(gwErr)}`
-      });
-    }
+    const fileObj = {
+      buffer: Buffer.from(req.file.buffer),
+      originalname: req.file.originalname,
+      mimetype: req.file.mimetype,
+    };
 
     const initialCurriculum = {
       title: title.trim(),
       description: description.trim(),
       fileType,
       fileName: req.file.originalname,
-      ubuntuJobId: ubuntuJob.job_id,
+      ubuntuJobId: null,
       processingStatus: 'PROCESSING',
       isAiGenerating: true,
       slides: [],
@@ -170,16 +157,16 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     try {
       const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(newCourse.id));
       fs.mkdirSync(courseUploadDir, { recursive: true });
-      fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), req.file.buffer);
+      fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), fileObj.buffer);
     } catch (saveErr) {
       console.warn('[File Storage] Notice saving original file:', saveErr.message);
     }
 
     invalidateCoursesCatalogCache(req.tenantCode);
 
+    // Return 201 Created immediately (< 100ms) to prevent Nginx 504 Gateway Timeouts
     res.status(201).json({
       message: 'Course uploaded and queued for centralized Ubuntu AI processing.',
-      jobId: ubuntuJob.job_id,
       course: {
         id: newCourse.id,
         title: newCourse.title,
@@ -190,9 +177,22 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       },
     });
 
-    // Poll Ubuntu AI Server in background and persist extracted content, curriculum, chunks & 768-d vectors to PostgreSQL
+    // Run entire centralized Ubuntu AI submission, extraction, chunking & 768-d vectors in background
     setImmediate(async () => {
       try {
+        console.log(`[Ubuntu Doc Pipeline] Submitting "${fileObj.originalname}" (${fileType.toUpperCase()}) for course ${newCourse.id}...`);
+        let ubuntuJob;
+        try {
+          ubuntuJob = await submitDocumentJob(fileObj, {
+            title: title.trim(),
+            description: description.trim(),
+            generateCurriculum: true,
+          });
+        } catch (gwErr) {
+          console.error(`[Ubuntu Doc Pipeline] Submission failed for course ${newCourse.id}:`, formatGatewayError(gwErr));
+          throw gwErr;
+        }
+
         let result;
         if (ubuntuJob._isLegacy) {
           // Legacy fallback: result was computed synchronously during submitDocumentJob
@@ -208,8 +208,8 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
           title: title.trim(),
           description: description.trim(),
           fileType: doc.fileType || fileType,
-          fileName: req.file.originalname,
-          ubuntuJobId: ubuntuJob.job_id,
+          fileName: fileObj.originalname,
+          ubuntuJobId: ubuntuJob?.job_id || null,
           processingStatus: 'COMPLETED',
           isAiGenerating: false,
           slides: doc.slides || result.curriculum?.slides || [],
@@ -234,7 +234,7 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
           try {
             const generatedChunks = await vectorChunkService.createSemanticChunks(
               doc.text,
-              { fileName: req.file.originalname, fileType: doc.fileType || fileType, slides: doc.slides || [], pages: doc.pages || [], curriculum: finalCurriculum }
+              { fileName: fileObj.originalname, fileType: doc.fileType || fileType, slides: doc.slides || [], pages: doc.pages || [], curriculum: finalCurriculum }
             );
             if (generatedChunks && generatedChunks.length > 0) {
               await vectorChunkService.storeChunks(targetPrisma, newCourse.id, generatedChunks, null);
@@ -255,8 +255,9 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         } catch (_) {}
 
         invalidateCoursesCatalogCache(req.tenantCode);
+        console.log(`[Ubuntu Doc Pipeline] Course ${newCourse.id} processing completed successfully.`);
       } catch (bgErr) {
-        console.error(`[Ubuntu Doc Pipeline] Job ${ubuntuJob.job_id} failed for course ${newCourse.id}:`, bgErr.message);
+        console.error(`[Ubuntu Doc Pipeline] Processing failed for course ${newCourse.id}:`, bgErr.message);
         try {
           await targetPrisma.course.update({
             where: { id: newCourse.id },

@@ -64,6 +64,24 @@ const AdminCourses = () => {
     fetchCourses()
   }, [])
 
+  // Auto-poll courses list while any course is being processed by the Ubuntu AI service
+  useEffect(() => {
+    const hasProcessing = coursesList.some((c) => {
+      try {
+        const curr = typeof c.curriculum === 'string' ? JSON.parse(c.curriculum || '{}') : (c.curriculum || {})
+        return curr.processingStatus === 'PROCESSING' || curr.isAiGenerating
+      } catch (_) {
+        return false
+      }
+    })
+    if (!hasProcessing) return
+
+    const timer = setInterval(() => {
+      fetchCourses()
+    }, 4000)
+    return () => clearInterval(timer)
+  }, [coursesList])
+
   const handleOpenView = async (course) => {
     setViewingCourse(course)
     try {
@@ -113,7 +131,7 @@ const AdminCourses = () => {
       setIsGenerating(false)
       setShowModal(false)
       resetCreateForm()
-      toast.success('Course created and AI curriculum generated successfully!')
+      toast.success('Course uploaded! AI curriculum and knowledge chunks are being processed...')
       fetchCourses()
     } catch (err) {
       clearTimeout(t1)
@@ -261,6 +279,8 @@ const AdminCourses = () => {
               const rawChunkCount = course.chunksCount ?? course._count?.chunks ?? 0
               const moduleCount = course.modulesCount || modules.length || (lessons.length > 0 ? Math.ceil(lessons.length / 4) : 0) || rawChunkCount || (course.slides?.length) || 0
               const displayCount = moduleCount || lessons.length || rawChunkCount || 0
+              const isProcessing = curriculumData.processingStatus === 'PROCESSING' || curriculumData.isAiGenerating || (!curriculumData.processingStatus && displayCount === 0 && !curriculumData.lessons)
+              const isFailed = curriculumData.processingStatus === 'FAILED'
 
               return (
                 <article
@@ -269,9 +289,20 @@ const AdminCourses = () => {
                 >
                   <div className="h-32 bg-gradient-to-br from-navy to-sky relative p-5 flex flex-col justify-end text-white">
                     <div className="absolute top-4 right-4 flex items-center gap-1.5">
-                      <span className="rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
-                        {displayCount} {displayCount === 1 ? 'Module' : 'Modules'}
-                      </span>
+                      {isProcessing ? (
+                        <span className="rounded-full bg-amber-500/30 text-amber-200 border border-amber-400/40 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide flex items-center gap-1.5 animate-pulse">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping"></span>
+                          Processing AI...
+                        </span>
+                      ) : isFailed ? (
+                        <span className="rounded-full bg-rose-500/30 text-rose-200 border border-rose-400/40 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide" title={curriculumData.processingError || 'Document processing failed'}>
+                          Failed
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-white/15 backdrop-blur-md px-2.5 py-0.5 text-[10px] font-bold tracking-wide">
+                          {displayCount} {displayCount === 1 ? 'Module' : 'Modules'}
+                        </span>
+                      )}
                     </div>
                     <h3 className="font-display text-base font-bold truncate">{course.title}</h3>
                   </div>
