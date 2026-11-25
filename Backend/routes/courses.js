@@ -1851,23 +1851,25 @@ router.post('/:id/page/:pageNum/explain', optionalAuthenticateToken, async (req,
       });
     }
 
-    // 1b. Lesson explanation fallback: if slide has no direct explanation, reuse matching lesson's verified curriculum
-    const lessonExp = matchingLesson?.explanations?.[targetLangInfo.code] ||
-      (targetLangInfo.code === 'en' ? (matchingLesson?.explanation || matchingLesson?.spoken_explanation) : null);
-    if (lessonExp && typeof lessonExp === 'string' && lessonExp.trim().length > 30) {
-      const cleanLessonExp = cleanUnsupportedWords(stripSlidePlaceholders(lessonExp));
-      return res.json({
-        page_or_slide_number: pageNum,
-        title: stripSlidePlaceholders(title) || `Slide ${pageNum}`,
-        spoken_explanation: cleanLessonExp,
-        explanation: cleanLessonExp,
-        key_points: (targetSlide?.key_points || matchingLesson?.key_points || []).map(stripSlidePlaceholders),
-        safety_warnings: (targetSlide?.safety_warnings || matchingLesson?.safety_warnings || []).map(stripSlidePlaceholders),
-        suggested_next_transition: `Proceed to next section when ready.`,
-        visuals,
-        language: targetLangInfo,
-        cached: true
-      });
+    // 1b. Lesson explanation fallback: ONLY if the lesson is exclusively mapped to this single slide
+    if (matchingLesson && Array.isArray(matchingLesson.sourceSlides) && matchingLesson.sourceSlides.length === 1) {
+      const lessonExp = matchingLesson.explanations?.[targetLangInfo.code] ||
+        (targetLangInfo.code === 'en' ? (matchingLesson.explanation || matchingLesson.spoken_explanation) : null);
+      if (lessonExp && typeof lessonExp === 'string' && lessonExp.trim().length > 30) {
+        const cleanLessonExp = cleanUnsupportedWords(stripSlidePlaceholders(lessonExp));
+        return res.json({
+          page_or_slide_number: pageNum,
+          title: stripSlidePlaceholders(title) || `Slide ${pageNum}`,
+          spoken_explanation: cleanLessonExp,
+          explanation: cleanLessonExp,
+          key_points: (targetSlide?.key_points || matchingLesson.key_points || []).map(stripSlidePlaceholders),
+          safety_warnings: (targetSlide?.safety_warnings || matchingLesson.safety_warnings || []).map(stripSlidePlaceholders),
+          suggested_next_transition: `Proceed to next section when ready.`,
+          visuals,
+          language: targetLangInfo,
+          cached: true
+        });
+      }
     }
 
     const rawTeachingText = targetSlide
