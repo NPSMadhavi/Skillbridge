@@ -418,7 +418,10 @@ export class VectorChunkService {
     const savedChunks = [];
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const embeddingArr = embeddings && embeddings[i] ? embeddings[i] : null;
+      const rawEmbeddingArr = embeddings && embeddings[i] ? embeddings[i] : null;
+      const embeddingArr = Array.isArray(rawEmbeddingArr) && rawEmbeddingArr.length > 0
+        ? aiService._alignEmbeddingDimension(rawEmbeddingArr, 768)
+        : null;
 
       let inserted = null;
       const sourceSlidesJson = chunk.sourceSlides ? JSON.stringify(chunk.sourceSlides) : null;
@@ -427,7 +430,7 @@ export class VectorChunkService {
       const metadataJson = chunk.metadata ? JSON.stringify(chunk.metadata) : null;
 
       // 1. Primary: Insert with pgvector 768-dim embedding and full semantic metadata
-      if (embeddingArr && Array.isArray(embeddingArr) && embeddingArr.length > 0) {
+      if (embeddingArr && embeddingArr.length === 768) {
         try {
           const vectorStr = `[${embeddingArr.join(',')}]`;
           const rows = await prisma.$queryRawUnsafe(

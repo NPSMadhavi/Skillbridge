@@ -10,6 +10,7 @@ import aiService from '../services/aiService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
 import interactiveCourseService from '../services/interactiveCourseService.js';
 import documentExtractor from '../services/documentExtractor.js';
+import { validateDocumentFile, submitDocumentJob, pollDocumentJobResult } from '../services/ubuntuDocumentClient.js';
 import tenantService from '../services/tenantService.js';
 import { authenticateToken, optionalAuthenticateToken, requireRole } from '../middleware/auth.js';
 import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
@@ -100,7 +101,7 @@ function generateSlideSvg({ slideNumber, totalSlides = 1, title = '', headings =
   </svg>`;
 }
 
-// 1. Admin: Create course module by uploading a document (PDF, Word, PPTX, TXT, etc.)
+// 1. Admin: Create course module by uploading a document (delegates all AI/OCR/chunking/embeddings to Ubuntu AI server)
 router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
@@ -112,220 +113,73 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     }
 
     if (!req.file) {
-      return res.status(400).json({ error: 'Please upload a course document (PDF, DOCX, DOC, PPTX, PPT, TXT, etc.).' });
+      return res.status(400).json({ error: 'Please upload a supported course document (PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, CSV, RTF, HTML, PNG, JPG, JPEG).' });
     }
 
-    console.log(`[Document Extraction] Admin creating course: "${title}", parsing file: ${req.file.originalname}...`);
-    const docResult = await extractDocumentContent(req.file);
-    const { text: textContent, pages, slides, fileType } = docResult;
+    let fileType;
+    try {
+      fileType = validateDocumentFile(req.file);
+    } catch (valErr) {
+      return res.status(valErr.status || 415).json({ error: valErr.message });
+    }
 
-    const imageCount = (slides || []).reduce((n, s) => n + ((s.images || []).length), 0) + ((docResult.images || []).length);
-    if (!textContent || textContent.length < 30) {
-      return res.status(400).json({
-        error: imageCount > 0
-          ? 'The PowerPoint is image-based, but no readable training text could be found in the slide pictures. Try a PPTX with clearer photos, or add slide titles/notes.'
-          : 'Failed to extract text from document. The file might be empty, password-protected, or scanned images only.'
+    console.log(`[Ubuntu Doc Pipeline] Submitting "${req.file.originalname}" (${fileType.toUpperCase()}) for centralized AI processing...`);
+    let ubuntuJob;
+    try {
+      ubuntuJob = await submitDocumentJob(req.file, {
+        title: title.trim(),
+        description: description.trim(),
+        generateCurriculum: true,
+      });
+    } catch (gwErr) {
+      const status = gwErr.response?.status || gwErr.status || 503;
+      if (status === 415 || status === 413 || status === 400) {
+        return res.status(status).json({ error: gwErr.response?.data?.detail || gwErr.message });
+      }
+      console.error('[Ubuntu Doc Pipeline] Gateway submission failed:', formatGatewayError(gwErr));
+      return res.status(503).json({
+        error: `Central Ubuntu AI document service unavailable: ${formatGatewayError(gwErr)}`
       });
     }
 
-    const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
-    console.log(`[Document Extraction] Document extracted successfully. Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}).`);
+    const initialCurriculum = {
+      title: title.trim(),
+      description: description.trim(),
+      fileType,
+      fileName: req.file.originalname,
+      ubuntuJobId: ubuntuJob.job_id,
+      processingStatus: 'PROCESSING',
+      isAiGenerating: true,
+      slides: [],
+      pages: [],
+      curriculum: [],
+      lessons: [],
+    };
 
-    console.log(`[Curriculum Design] Structuring baseline curriculum from document slides...`);
-    let initialCurriculum;
-    if (slides.length > 0) {
-      initialCurriculum = aiService._groupSlidesIntoLessons(slides, req.file.originalname);
-    } else {
-      initialCurriculum = aiService._getMockCourse(req.file.originalname, textContent, docResult);
-    }
-
-    // Override the title/description with Admin input if needed, but preserve structure
-    initialCurriculum.title = title.trim();
-    initialCurriculum.description = description.trim();
-    initialCurriculum.fileType = fileType || docResult.fileType;
-    initialCurriculum.fileName = req.file.originalname;
-    initialCurriculum.isAiGenerating = true;
-
-    // Retain clean original document structure without heavy base64 blobs in DB
-    if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
-      initialCurriculum.slides = docResult.slides.map(s => ({
-        ...s,
-        images: (s.images || []).map(im => ({ ...im, dataUrl: undefined }))
-      }));
-    }
-    if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
-      initialCurriculum.pages = docResult.pages.map(p => ({
-        ...p,
-        images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
-      }));
-    }
-    if (Array.isArray(docResult.images) && docResult.images.length > 0) {
-      initialCurriculum.visuals = docResult.images.map(im => ({ ...im, dataUrl: undefined }));
-    }
-
-    // Strip heavy base64 strings so curriculum stored in DB is lightweight (<50KB instead of 100MB)
-    const lightweightCurriculum = JSON.parse(JSON.stringify(initialCurriculum, (key, value) => {
-      if (key === 'dataUrl') return undefined;
-      return value;
-    }));
-
-    console.log(`[Curriculum Design] Initializing course in database...`);
     const targetPrisma = req.prisma || prisma;
     const newCourse = await targetPrisma.course.create({
       data: {
-        title: initialCurriculum.title,
-        description: initialCurriculum.description,
+        title: title.trim(),
+        description: description.trim(),
         fileName: req.file.originalname,
-        fileText: textContent,
-        curriculum: lightweightCurriculum,
+        fileText: '',
+        curriculum: initialCurriculum,
       },
     });
 
-    // Save original file buffer and individual slide/page images to disk for lightweight streaming
     try {
       const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(newCourse.id));
-      const slidesDir = path.join(courseUploadDir, 'slides');
-      const pagesDir = path.join(courseUploadDir, 'pages');
-      fs.mkdirSync(slidesDir, { recursive: true });
-      fs.mkdirSync(pagesDir, { recursive: true });
+      fs.mkdirSync(courseUploadDir, { recursive: true });
       fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), req.file.buffer);
-      console.log(`[File Storage] Saved original file to ${path.join(courseUploadDir, req.file.originalname)}`);
-
-      // Extract slide images to disk
-      if (Array.isArray(initialCurriculum.slides)) {
-        initialCurriculum.slides = initialCurriculum.slides.map((s, idx) => {
-          const sNum = s.slideNumber || idx + 1;
-          const slidePngFile = path.join(slidesDir, `Slide${sNum}.png`);
-          const slideSvgFile = path.join(slidesDir, `Slide${sNum}.svg`);
-          const origSlide = (docResult.slides && docResult.slides[idx]) || {};
-          const rawData = origSlide.fullSlideImage?.dataUrl || origSlide.images?.[0]?.dataUrl || origSlide.dataUrl || s.fullSlideImage?.dataUrl || s.dataUrl;
-          let imageSaved = false;
-
-          if (rawData && typeof rawData === 'string' && rawData.startsWith('data:image')) {
-            const base64Part = rawData.split(',')[1];
-            if (base64Part) {
-              fs.writeFileSync(slidePngFile, Buffer.from(base64Part, 'base64'));
-              imageSaved = true;
-            }
-          } else if (origSlide.images?.[0]?.buffer && Buffer.isBuffer(origSlide.images[0].buffer)) {
-            fs.writeFileSync(slidePngFile, origSlide.images[0].buffer);
-            imageSaved = true;
-          } else if (fs.existsSync(slidePngFile) || fs.existsSync(slideSvgFile)) {
-            imageSaved = true;
-          }
-
-          // If no raster graphic found, generate clean high-res branded presentation SVG card
-          if (!imageSaved) {
-            try {
-              const svgContent = generateSlideSvg({
-                slideNumber: sNum,
-                totalSlides: initialCurriculum.slides.length,
-                title: s.title,
-                headings: s.headings,
-                bulletPoints: s.bulletPoints,
-                paragraphs: s.paragraphs,
-                courseTitle: initialCurriculum.title
-              });
-              fs.writeFileSync(slideSvgFile, svgContent, 'utf-8');
-              imageSaved = true;
-            } catch (svgErr) {
-              console.warn(`[File Storage] Notice generating SVG for slide ${sNum}:`, svgErr.message);
-            }
-          }
-
-          const imageUrl = `/api/v1/courses/${newCourse.id}/slides/${sNum}/image`;
-          return {
-            ...s,
-            slideNumber: sNum,
-            image: imageUrl,
-            fullSlideImage: {
-              id: `full_slide_${sNum}`,
-              url: imageUrl,
-              slideNumber: sNum,
-              fileName: `Slide${sNum}.png`,
-              mimetype: 'image/png'
-            },
-            images: (s.images || []).map((im, imIdx) => ({
-              ...im,
-              dataUrl: undefined,
-              url: imageUrl
-            }))
-          };
-        });
-      }
-
-      // Extract page images to disk
-      if (Array.isArray(initialCurriculum.pages)) {
-        initialCurriculum.pages = initialCurriculum.pages.map((p, idx) => {
-          const pNum = p.page_number || p.pageNumber || idx + 1;
-          const pagePngFile = path.join(pagesDir, `Page${pNum}.png`);
-          const pageSvgFile = path.join(pagesDir, `Page${pNum}.svg`);
-          const origPage = (docResult.pages && docResult.pages[idx]) || {};
-          const rawData = origPage.pageImage?.dataUrl || origPage.images?.[0]?.dataUrl || origPage.dataUrl || p.pageImage?.dataUrl || p.dataUrl;
-          let imageSaved = false;
-
-          if (rawData && typeof rawData === 'string' && rawData.startsWith('data:image')) {
-            const base64Part = rawData.split(',')[1];
-            if (base64Part) {
-              fs.writeFileSync(pagePngFile, Buffer.from(base64Part, 'base64'));
-              imageSaved = true;
-            }
-          } else if (origPage.images?.[0]?.buffer && Buffer.isBuffer(origPage.images[0].buffer)) {
-            fs.writeFileSync(pagePngFile, origPage.images[0].buffer);
-            imageSaved = true;
-          } else if (fs.existsSync(pagePngFile) || fs.existsSync(pageSvgFile)) {
-            imageSaved = true;
-          }
-
-          if (!imageSaved) {
-            try {
-              const svgContent = generateSlideSvg({
-                slideNumber: pNum,
-                totalSlides: initialCurriculum.pages.length,
-                title: p.title || `Page ${pNum}`,
-                paragraphs: p.text ? [p.text] : [],
-                courseTitle: initialCurriculum.title
-              });
-              fs.writeFileSync(pageSvgFile, svgContent, 'utf-8');
-              imageSaved = true;
-            } catch (svgErr) {
-              console.warn(`[File Storage] Notice generating SVG for page ${pNum}:`, svgErr.message);
-            }
-          }
-
-          const imageUrl = `/api/v1/courses/${newCourse.id}/pages/${pNum}/image`;
-          return {
-            ...p,
-            page_number: pNum,
-            pageNumber: pNum,
-            image: imageUrl,
-            pageImage: {
-              id: `full_page_${pNum}`,
-              url: imageUrl,
-              pageNumber: pNum,
-              fileName: `Page${pNum}.png`,
-              mimetype: 'image/png'
-            },
-            images: (p.images || []).map(im => ({ ...im, dataUrl: undefined, url: imageUrl }))
-          };
-        });
-      }
-
-      // Update course in DB with lightweight sanitized curriculum
-      await targetPrisma.course.update({
-        where: { id: newCourse.id },
-        data: { curriculum: initialCurriculum }
-      });
-      console.log(`[File Storage] Saved slide/page PNGs to disk and sanitized course payload in database.`);
     } catch (saveErr) {
-      console.warn(`[File Storage] Notice saving course files:`, saveErr.message);
+      console.warn('[File Storage] Notice saving original file:', saveErr.message);
     }
 
     invalidateCoursesCatalogCache(req.tenantCode);
 
-    // Return immediate success in ~2-4 seconds to prevent web server 504 Gateway Timeouts
     res.status(201).json({
-      message: 'Course published successfully. AI curriculum generation and vector indexing in progress.',
+      message: 'Course uploaded and queued for centralized Ubuntu AI processing.',
+      jobId: ubuntuJob.job_id,
       course: {
         id: newCourse.id,
         title: newCourse.title,
@@ -336,57 +190,91 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
       },
     });
 
-    // Run deep AI curriculum generation, semantic chunking, and vector indexing in background
+    // Poll Ubuntu AI Server in background and persist extracted content, curriculum, chunks & 768-d vectors to PostgreSQL
     setImmediate(async () => {
-      let finalCurriculum = initialCurriculum;
       try {
-        console.log(`[Curriculum Design] Running deep AI curriculum generation for course ${newCourse.id} in background...`);
-        const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
-        generatedCourse.title = title.trim();
-        generatedCourse.description = description.trim();
-        generatedCourse.fileType = fileType || docResult.fileType;
-        generatedCourse.fileName = req.file.originalname;
-        generatedCourse.slides = initialCurriculum.slides || generatedCourse.slides;
-        generatedCourse.pages = initialCurriculum.pages || generatedCourse.pages;
-        generatedCourse.visuals = initialCurriculum.visuals || generatedCourse.visuals;
-        generatedCourse.isAiGenerating = false;
-
-        const lightweightAiCurriculum = JSON.parse(JSON.stringify(generatedCourse, (key, value) => {
-          if (key === 'dataUrl') return undefined;
-          return value;
-        }));
+        console.log(`[Ubuntu Doc Pipeline] Polling job ${ubuntuJob.job_id} for course ${newCourse.id}...`);
+        const result = await pollDocumentJobResult(ubuntuJob.job_id, { timeoutMs: 240000, pollIntervalMs: 2000 });
+        const doc = result.document || {};
+        const finalCurriculum = {
+          ...(result.curriculum || {}),
+          title: title.trim(),
+          description: description.trim(),
+          fileType: doc.fileType || fileType,
+          fileName: req.file.originalname,
+          ubuntuJobId: ubuntuJob.job_id,
+          processingStatus: 'COMPLETED',
+          isAiGenerating: false,
+          slides: doc.slides || result.curriculum?.slides || [],
+          pages: doc.pages || result.curriculum?.pages || [],
+        };
 
         await targetPrisma.course.update({
           where: { id: newCourse.id },
-          data: { curriculum: lightweightAiCurriculum }
+          data: {
+            fileText: doc.text || '',
+            curriculum: finalCurriculum,
+          },
         });
-        finalCurriculum = lightweightAiCurriculum;
-        console.log(`[Curriculum Design] Background AI curriculum generation completed for course ${newCourse.id}.`);
-      } catch (aiErr) {
-        console.warn(`[Curriculum Design] Background AI generation notice for course ${newCourse.id} (baseline curriculum preserved):`, aiErr.message);
-      }
 
-      try {
-        console.log(`[pgvector] Indexing course ${newCourse.id} with semantic comprehension in background...`);
-        await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, finalCurriculum);
-        console.log(`[pgvector] Course chunks and vector embeddings stored successfully for course ${newCourse.id}.`);
-      } catch (vectorErr) {
-        console.warn(`[pgvector] Background indexing notice for course ${newCourse.id}:`, vectorErr.message);
-      }
+        if (Array.isArray(result.chunks) && result.chunks.length > 0) {
+          await vectorChunkService.storeChunks(targetPrisma, newCourse.id, result.chunks, result.embeddings || null);
+          console.log(`[pgvector] Stored ${result.chunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${newCourse.id}.`);
+        }
 
-      try {
-        const summary = generateModulesSummary(finalCurriculum);
-        await targetPrisma.$executeRaw`
-          UPDATE "Course"
-          SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
-          WHERE id = ${newCourse.id};
-        `;
-      } catch (_) { }
-      invalidateCoursesCatalogCache(req.tenantCode);
+        try {
+          const summary = generateModulesSummary(finalCurriculum);
+          await targetPrisma.$executeRaw`
+            UPDATE "Course"
+            SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+            WHERE id = ${newCourse.id};
+          `;
+        } catch (_) {}
+
+        invalidateCoursesCatalogCache(req.tenantCode);
+      } catch (bgErr) {
+        console.error(`[Ubuntu Doc Pipeline] Job ${ubuntuJob.job_id} failed for course ${newCourse.id}:`, bgErr.message);
+        try {
+          await targetPrisma.course.update({
+            where: { id: newCourse.id },
+            data: {
+              curriculum: {
+                ...initialCurriculum,
+                processingStatus: 'FAILED',
+                processingError: bgErr.message,
+                isAiGenerating: false,
+              },
+            },
+          });
+          invalidateCoursesCatalogCache(req.tenantCode);
+        } catch (_) {}
+      }
     });
   } catch (error) {
-    console.error('[Document Extraction] Failed to publish course:', error);
-    res.status(500).json({ error: error.message || 'Failed to process document and publish course.' });
+    console.error('[Ubuntu Doc Pipeline] Failed to publish course:', error);
+    res.status(500).json({ error: error.message || 'Failed to submit document for centralized processing.' });
+  }
+});
+
+// Get centralized Ubuntu processing status for a course
+router.get('/:id/processing-status', authenticateToken, async (req, res) => {
+  try {
+    const targetPrisma = req.prisma || prisma;
+    const course = await targetPrisma.course.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, curriculum: true, _count: { select: { chunks: true } } },
+    });
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+    const curr = typeof course.curriculum === 'string' ? JSON.parse(course.curriculum) : (course.curriculum || {});
+    return res.json({
+      courseId: course.id,
+      processingStatus: curr.processingStatus || (course._count?.chunks > 0 ? 'COMPLETED' : 'UNKNOWN'),
+      ubuntuJobId: curr.ubuntuJobId || null,
+      processingError: curr.processingError || null,
+      chunksCount: course._count?.chunks || 0,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: 'Failed to check course processing status.' });
   }
 });
 

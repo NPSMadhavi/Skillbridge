@@ -914,6 +914,21 @@ Return ONLY JSON:
   }
 
   /**
+   * Aligns an embedding vector to targetDim (768 for pgvector(768)) and L2-normalizes it.
+   */
+  _alignEmbeddingDimension(vec, targetDim = 768) {
+    if (!Array.isArray(vec) || vec.length === 0) return null;
+    if (vec.length === targetDim) return vec;
+    const aligned = vec.length > targetDim
+      ? vec.slice(0, targetDim)
+      : [...vec, ...new Array(targetDim - vec.length).fill(0)];
+    let normSq = 0;
+    for (let i = 0; i < aligned.length; i++) normSq += aligned[i] * aligned[i];
+    const norm = Math.sqrt(normSq);
+    return norm > 0 ? aligned.map((v) => v / norm) : aligned;
+  }
+
+  /**
    * Generates a single vector embedding using Central AI Gateway,
    * falling back to OpenAI text-embedding-3-small, and finally to local 768-d hash embedding.
    */
@@ -934,7 +949,7 @@ Return ONLY JSON:
       const data = response.data;
       const embedding = data?.embeddings?.[0] || data?.embedding || data?.data?.[0]?.embedding || (Array.isArray(data) && typeof data[0] === 'number' ? data : null);
       if (Array.isArray(embedding) && embedding.length > 0) {
-        return embedding;
+        return this._alignEmbeddingDimension(embedding, dimensions);
       }
     } catch (err) {
       console.warn('[AIService] Gateway embeddings unavailable:', formatGatewayError(err));
@@ -966,7 +981,7 @@ Return ONLY JSON:
         },
         timeout: 30000
       });
-      return response.data?.data?.[0]?.embedding || this._localHashEmbedding(text, dimensions);
+      return this._alignEmbeddingDimension(response.data?.data?.[0]?.embedding, dimensions) || this._localHashEmbedding(text, dimensions);
     } catch (err) {
       this._openaiEmbedUnavailable = true;
       console.warn('[AIService] OpenAI embeddings unavailable. Using local 768-d embeddings:', err.response?.data?.error?.message || err.message);
@@ -975,35 +990,46 @@ Return ONLY JSON:
   }
 
   /**
-   * Generates batch vector embeddings using Central AI Gateway,
-   * falling back to OpenAI text-embedding-3-small, and finally to local 768-d hash embeddings.
+   * Generates batch vector embeddings using Central AI Gateway (in batches of 32),
+   * aligning dimensions to pgvector(768) and falling back cleanly if gateway is unavailable.
    */
   async getEmbeddings(textArray, dimensions = 768) {
     if (!textArray || !Array.isArray(textArray) || textArray.length === 0) return [];
-    const cleanInputs = textArray.map(t => (typeof t === 'string' ? t.slice(0, 8000) : ''));
+    const cleanInputs = textArray.map(t => (typeof t === 'string' && t.trim() ? t.slice(0, 8000) : ' '));
 
-    // 1. Primary: Central AI Gateway batch embeddings (Python Service)
+    // 1. Primary: Central AI Gateway batch embeddings in batches of 32
     const gatewayUrl = this.getPythonServiceBaseUrl();
+    const BATCH_SIZE = 32;
     try {
-      const response = await axios.post(`${gatewayUrl}/api/v1/embeddings`, {
-        texts: cleanInputs.slice(0, 32),
-        input: cleanInputs,
-        dimensions: dimensions
-      }, {
-        headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
-        timeout: 30000
-      });
-      const data = response.data;
-      let vectors = null;
-      if (Array.isArray(data?.embeddings)) {
-        vectors = data.embeddings;
-      } else if (Array.isArray(data?.data)) {
-        vectors = data.data.map(d => d.embedding || d);
-      } else if (Array.isArray(data) && Array.isArray(data[0])) {
-        vectors = data;
+      const allVectors = [];
+      for (let i = 0; i < cleanInputs.length; i += BATCH_SIZE) {
+        const batch = cleanInputs.slice(i, i + BATCH_SIZE);
+        const response = await axios.post(`${gatewayUrl}/api/v1/embeddings`, {
+          texts: batch,
+          input: batch,
+          dimensions: dimensions
+        }, {
+          headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
+          timeout: 30000
+        });
+        const data = response.data;
+        let vectors = null;
+        if (Array.isArray(data?.embeddings)) {
+          vectors = data.embeddings;
+        } else if (Array.isArray(data?.data)) {
+          vectors = data.data.map(d => d.embedding || d);
+        } else if (Array.isArray(data) && Array.isArray(data[0])) {
+          vectors = data;
+        }
+        if (!vectors || vectors.length !== batch.length) {
+          throw new Error(`Gateway returned ${vectors?.length || 0} vectors for batch of ${batch.length}`);
+        }
+        for (const vec of vectors) {
+          allVectors.push(this._alignEmbeddingDimension(vec, dimensions));
+        }
       }
-      if (vectors && vectors.length === cleanInputs.length) {
-        return vectors;
+      if (allVectors.length === cleanInputs.length) {
+        return allVectors;
       }
     } catch (err) {
       console.warn('[AIService] Gateway batch embeddings unavailable:', formatGatewayError(err));
