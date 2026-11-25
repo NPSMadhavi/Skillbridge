@@ -32,15 +32,14 @@ import { runDailyBackup } from './scripts/daily_backup.js';
 import { runStartupDiagnostics } from './services/diagnosticService.js';
 import { requestTelemetryMiddleware } from './middleware/requestTelemetry.js';
 
-// Auto-detect development mode from npm script or flag
-const isDevScript = process.env.npm_lifecycle_event === 'dev' || process.argv.includes('--dev');
-if (isDevScript && (!process.env.NODE_ENV || process.env.NODE_ENV === 'production')) {
+// Auto-detect development mode from npm script, runner, or flag
+const isDevScript = process.env.npm_lifecycle_event === 'dev' || process.argv.includes('--dev') || process.env.NODE_ENV === 'development';
+if (isDevScript) {
   process.env.NODE_ENV = 'development';
 }
 
 // Load environment variables with resilient fallback paths
 const isDevMode = process.env.NODE_ENV === 'development';
-const candidateEnvFiles = isDevMode ? ['.env.development', '.env.local', '.env'] : ['.env'];
 const candidateEnvDirs = [
   path.dirname(fileURLToPath(import.meta.url)),
   path.join(path.dirname(fileURLToPath(import.meta.url)), '..'),
@@ -48,12 +47,22 @@ const candidateEnvDirs = [
   path.join(process.cwd(), 'Backend')
 ];
 
-for (const envName of candidateEnvFiles) {
+// In development mode, load .env.development first with override so dev settings take priority
+if (isDevMode) {
   for (const envDir of candidateEnvDirs) {
-    const fullPath = path.join(envDir, envName);
-    if (fs.existsSync(fullPath)) {
-      dotenv.config({ path: fullPath, override: false });
+    const devPath = path.join(envDir, '.env.development');
+    if (fs.existsSync(devPath)) {
+      dotenv.config({ path: devPath, override: true });
+      break;
     }
+  }
+}
+
+// Fallback to standard .env without overriding already active variables
+for (const envDir of candidateEnvDirs) {
+  const envPath = path.join(envDir, '.env');
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath, override: false });
   }
 }
 dotenv.config();
@@ -157,7 +166,7 @@ app.use(cors({
     ) {
       return callback(null, true);
     }
-    return callback(null, true);
+    return callback(new Error(`CORS origin "${origin}" not allowed by policy`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
@@ -232,12 +241,16 @@ app.use('/api/voice', resolveTenant, voiceRoutes);
 app.get('/api/health', async (req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
+    const host = req.headers.host || '';
+    const proto = req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+    const computedAppUrl = process.env.APP_URL || (host ? `${proto}://${host}` : (IS_PROD ? 'https://brutallyhired.com/' : `http://localhost:${PORT}`));
 
     res.json({
       status: 'ok',
       server: 'running',
       database: 'connected',
-      appUrl: 'https://brutallyhired.com/',
+      environment: process.env.NODE_ENV || (IS_PROD ? 'production' : 'development'),
+      appUrl: computedAppUrl,
       timestamp: new Date().toISOString()
     });
   } catch (error) {

@@ -21,6 +21,7 @@ ai-service/.env
 Frontend/.env
 !.env.example
 !Backend/.env.example
+!Backend/.env.production.example
 !Frontend/.env.example
 !ai-service/.env.example
 

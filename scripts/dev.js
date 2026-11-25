@@ -1,8 +1,34 @@
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
 const isWin = process.platform === 'win32';
+
+/**
+ * Ensures required ports are free before launching Vite and Express
+ */
+function freePortIfOccupied(port) {
+  if (isWin) {
+    try {
+      const output = execSync(`netstat -ano -p tcp | findstr :${port} | findstr LISTENING`, {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore']
+      });
+      const lines = output.trim().split('\n');
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        const pid = parts[parts.length - 1];
+        if (pid && pid !== '0' && pid !== String(process.pid)) {
+          console.log(`[Dev Runner] Freeing occupied port ${port} (orphaned PID: ${pid})...`);
+          execSync(`taskkill /pid ${pid} /f /t`, { stdio: 'ignore' });
+        }
+      }
+    } catch (_) {}
+  }
+}
+
+freePortIfOccupied(5000);
+freePortIfOccupied(5173);
 
 /**
  * Resolves safe npm command invocation without triggering Node.js DEP0190:
