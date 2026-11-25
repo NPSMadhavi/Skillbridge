@@ -115,9 +115,14 @@ export class VectorChunkService {
       const text = stripSlidePlaceholders(cleanUnsupportedWords(rawText));
       const concept = cleanUnsupportedWords((c.concept || c.title || '').trim());
 
-      // Filter out trivial noise, broken headers, or fragments under 35 chars
-      if (text.length < 35) continue;
-      if (concept && isGarbageTitle(concept) && text.length < 120) continue;
+      // Filter out trivial noise, broken headers, binary noise, or fragments under 35 chars
+      if (text.length < 35 || isBinaryNoiseText(text)) continue;
+
+      let cleanConcept = concept;
+      if (!cleanConcept || isGarbageTitle(cleanConcept) || isPlaceholderTitle(cleanConcept)) {
+        const fallback = firstUsefulTitleLine(text);
+        cleanConcept = (fallback && !isGarbageTitle(fallback)) ? fallback : (c.topic && !isGarbageTitle(c.topic) ? c.topic : `Core Concept ${cleanIndex + 1}`);
+      }
 
       // Filter exact duplicate texts
       const normalizedText = text.toLowerCase().replace(/\s+/g, ' ');
@@ -125,7 +130,7 @@ export class VectorChunkService {
       seenTexts.add(normalizedText);
 
       // Deduplicate identical concept titles with similar content
-      const conceptKey = concept.toLowerCase();
+      const conceptKey = cleanConcept.toLowerCase();
       if (conceptKey && seenConcepts.has(conceptKey) && text.length < 120) {
         continue;
       }
@@ -161,7 +166,7 @@ export class VectorChunkService {
         chunkText: text,
         topic: c.topic || 'Core Curriculum',
         subtopic: c.subtopic || null,
-        concept: concept || `Core Concept ${cleanIndex}`,
+        concept: cleanConcept || `Core Concept ${cleanIndex}`,
         chunkType: c.chunkType || 'concept',
         sourcePage,
         sourceSlides,

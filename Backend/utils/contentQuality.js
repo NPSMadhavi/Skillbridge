@@ -29,6 +29,45 @@ export function isGarbageTitle(value) {
   if (FONT_SOFTWARE_PATTERN.test(t)) return true;
   if (/^[A-Z]{2,6}$/.test(t)) return false;
 
+  // Unmatched brackets or isolated trailing/leading brackets/braces (e.g. "aOJCyy }", "rEK]mEi 5")
+  if (/[{}[\]<>]/.test(t)) {
+    const openBraces = (t.match(/\{/g) || []).length;
+    const closeBraces = (t.match(/\}/g) || []).length;
+    const openSquare = (t.match(/\[/g) || []).length;
+    const closeSquare = (t.match(/\]/g) || []).length;
+    if (openBraces !== closeBraces || openSquare !== closeSquare) return true;
+    if (/^[}\])>]|[{\[(<]$/.test(t)) return true;
+  }
+
+  // Fragmented slashes with single letters (e.g. "YXadc/f O")
+  if (/\/[a-zA-Z]\b|\b[a-zA-Z]\//.test(t)) return true;
+
+  // Mixed random casing within a single word (e.g. "aOJCyy", "rEKmEi")
+  const rawWords = t.split(/[^A-Za-z0-9\u0900-\u097F\u0980-\u09FF\u0B80-\u0BFF\u0C00-\u0C7F\u4E00-\u9FFF]+/).filter(Boolean);
+  for (const w of rawWords) {
+    if (/^[a-z]+[A-Z]{2,}/.test(w)) return true; // e.g. aOJC...
+    if (/[a-z][A-Z]{2,}[a-z]/.test(w)) return true; // e.g. rEKmEi
+    if (/[A-Z]{2,}[a-z]+[A-Z]/.test(w)) return true; // e.g. YXadC
+  }
+
+  // Fragmented labels ending with "only" or dangling prepositions (e.g. "horizon only")
+  if (/^(?:horizon|image|picture|photo|graphic|figure|view|illustration|diagram|chart)\s+(?:only|view|cut|crop|frame|layout)$/i.test(t)) {
+    return true;
+  }
+  if (/^(?:only|and|or|the|with|for|at|in|on|by|from|to)\s*$/i.test(t)) {
+    return true;
+  }
+
+  // Vowel check for words >= 4 chars (must have at least one vowel unless all uppercase acronym)
+  for (const w of rawWords) {
+    if (/^[A-Za-z]+$/.test(w) && w.length >= 4 && !/^[A-Z]+$/.test(w)) {
+      if (!/[aeiouyAEIOUY]/.test(w)) return true; // e.g. dtttll
+    }
+  }
+
+  // Symbol density in short strings (< 15 chars)
+  if (t.length < 15 && /[\/\\}[\]<>=+_~^$*#|]/.test(t)) return true;
+
   const letters = (t.match(LETTER_RE) || []).length;
   const punct = (t.match(/[^A-Za-z0-9\s\u0900-\u097F\u0980-\u09FF\u0B80-\u0BFF\u0C00-\u0C7F\u4E00-\u9FFF]/g) || []).length;
   const digits = (t.match(/\d/g) || []).length;

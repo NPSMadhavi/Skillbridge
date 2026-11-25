@@ -1301,10 +1301,12 @@ export async function extractDocument(file) {
             const pageText = await renderPdfPageText(pageData);
             const cleanText = (pageText || '').trim();
             if (cleanText.length > 0) {
+              const detectedTitle = firstUsefulTitleLine(cleanText);
+              const pNum = collectedPages.length + 1;
               collectedPages.push({
-                page_number: collectedPages.length + 1,
+                page_number: pNum,
                 text: cleanText,
-                title: cleanText.split('\n').find(l => l.trim())?.slice(0, 80) || `Page ${collectedPages.length + 1}`
+                title: (!detectedTitle || isGarbageTitle(detectedTitle)) ? `Page ${pNum}` : detectedTitle.slice(0, 80)
               });
             }
             return pageText || '';
@@ -1315,11 +1317,14 @@ export async function extractDocument(file) {
         if (pages.length === 0 && text.trim().length > 10) {
           const formFeedPages = text.split(/\f|\u000c/).map(p => p.trim()).filter(p => p.length > 10);
           pages = formFeedPages.length > 1
-            ? formFeedPages.map((cleanText, idx) => ({
-              page_number: idx + 1,
-              text: cleanText,
-              title: cleanText.split('\n')[0]?.slice(0, 80) || `Page ${idx + 1}`
-            }))
+            ? formFeedPages.map((cleanText, idx) => {
+              const detectedTitle = firstUsefulTitleLine(cleanText);
+              return {
+                page_number: idx + 1,
+                text: cleanText,
+                title: (!detectedTitle || isGarbageTitle(detectedTitle)) ? `Page ${idx + 1}` : detectedTitle.slice(0, 80)
+              };
+            })
             : splitTextIntoPages(text);
         }
         parsed = true;
@@ -1406,8 +1411,26 @@ export async function extractDocument(file) {
         const result = await mammoth.extractRawText({ buffer });
         text = result.value || '';
       } catch (docxErr) {
-        console.warn(`[Doc Extractor] Mammoth parsing failed for ${originalname}, trying text fallback:`, docxErr.message);
-        text = buffer.toString('utf-8').replace(/[^\x20-\x7E\t\r\n]/g, ' ');
+        console.warn(`[Doc Extractor] Mammoth parsing failed for ${originalname}, trying clean text fallback:`, docxErr.message);
+        // Safely extract valid ASCII/UTF-16 runs without dumping raw binary OLE bytes
+        const rawStr = buffer.toString('binary');
+        const extractedRuns = [];
+        const utf16Regex = /(?:[\x20-\x7E]\x00){6,}/g;
+        let m;
+        while ((m = utf16Regex.exec(rawStr)) !== null) {
+          const dec = Buffer.from(m[0], 'binary').toString('utf16le').trim();
+          if (dec.length >= 8 && !isBinaryNoiseText(dec) && !isGarbageTitle(dec)) {
+            extractedRuns.push(stripSlidePlaceholders(dec));
+          }
+        }
+        const asciiRegex = /[\x20-\x7E\t\r\n]{10,}/g;
+        while ((m = asciiRegex.exec(rawStr)) !== null) {
+          const dec = m[0].replace(/\0/g, '').trim();
+          if (dec.length >= 10 && !isBinaryNoiseText(dec) && !isGarbageTitle(dec)) {
+            extractedRuns.push(stripSlidePlaceholders(dec));
+          }
+        }
+        text = extractedRuns.join('\n\n');
       }
     }
 

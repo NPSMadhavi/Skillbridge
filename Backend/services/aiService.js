@@ -809,7 +809,15 @@ Deliver your instructional lecture for this slide.`;
       if (!title && group[0] && !isGarbageTitle(group[0].title) && !isPlaceholderTitle(group[0].title)) {
         title = stripSlidePlaceholders(group[0].title);
       }
-      if (!title) title = `${cleanName} — Section ${lessons.length + 1}`;
+      if (!title) {
+        for (const s of group) {
+          if (s.title && !isGarbageTitle(s.title) && !isPlaceholderTitle(s.title)) {
+            title = stripSlidePlaceholders(s.title);
+            break;
+          }
+        }
+      }
+      if (!title || isGarbageTitle(title)) title = `${cleanName} — Section ${lessons.length + 1}`;
       const moduleIdx = Math.floor(lessons.length / 3);
       lessons.push({
         title,
@@ -1639,7 +1647,9 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
     const systemPrompt = `You are SkillBridge's curriculum architect. Build a concise, high-quality training curriculum from the slide/page summaries.
 
 HARD RULES:
-- Ignore OCR noise, symbols, and binary fragments.
+- CRITICAL: Every lesson title MUST be a meaningful, clear, professional educational topic in plain language (e.g. "Personal Protective Equipment", "Vehicle Inspection Protocol", "Emergency Action Plans").
+- NEVER output OCR noise, random characters, unclosed brackets, single-letter runs, or image tags as titles (STRICTLY FORBIDDEN: e.g. "aOJCyy }", "rEK]mEi 5", "horizon only", "YXadc/f O").
+- Ignore OCR noise, symbols, and binary fragments completely.
 - Keep output concise and fast. Group related slides into 4-8 structured lessons (2-5 slides per lesson).
 - Each lesson MUST include sourceSlides: array of integer slide numbers covered.
 - Include 2-3 concise multiple-choice quiz questions to test core concepts.

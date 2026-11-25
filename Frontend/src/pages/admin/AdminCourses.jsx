@@ -32,6 +32,7 @@ const AdminCourses = () => {
 
   // View details modal state
   const [viewingCourse, setViewingCourse] = useState(null)
+  const [viewDetailsLoading, setViewDetailsLoading] = useState(false)
 
 
   const totalPages = Math.max(1, Math.ceil(coursesList.length / pageSize))
@@ -84,10 +85,15 @@ const AdminCourses = () => {
 
   const handleOpenView = async (course) => {
     setViewingCourse(course)
+    setViewDetailsLoading(true)
     try {
       const detailed = await api.getCourseDetail(course.id)
       if (detailed) setViewingCourse(detailed)
-    } catch (_) {}
+    } catch (err) {
+      console.warn('[AdminCourses] Detailed view fetch notice:', err.message)
+    } finally {
+      setViewDetailsLoading(false)
+    }
   }
 
 
@@ -696,7 +702,12 @@ const AdminCourses = () => {
                   ? viewingCourse.lessons
                   : (Array.isArray(curriculumData.lessons) ? curriculumData.lessons : [])
                 const modules = Array.isArray(curriculumData.curriculum) ? curriculumData.curriculum : []
-                const rawChunkCount = viewingCourse.chunksCount ?? viewingCourse._count?.chunks ?? 0
+                const slides = (Array.isArray(viewingCourse.slides) && viewingCourse.slides.length > 0)
+                  ? viewingCourse.slides
+                  : (Array.isArray(curriculumData.slides) ? curriculumData.slides : [])
+                const chunks = Array.isArray(viewingCourse.chunks) ? viewingCourse.chunks : []
+                const rawChunkCount = viewingCourse.chunksCount ?? viewingCourse._count?.chunks ?? chunks.length ?? 0
+                const isProcessing = curriculumData.processingStatus === 'PROCESSING' || curriculumData.isAiGenerating || viewingCourse.isAiGenerating
 
                 const formatLessonDuration = (lesson, idx) => {
                   if (lesson.duration && lesson.duration !== '08:00' && lesson.duration !== '8m' && lesson.duration !== '10 mins') {
@@ -717,14 +728,35 @@ const AdminCourses = () => {
                   return `${m}:${s}`;
                 };
 
+                if (viewDetailsLoading && lessons.length === 0) {
+                  return (
+                    <div className="p-4 rounded-xl bg-ink border border-line text-xs text-muted flex items-center gap-2.5">
+                      <div className="w-3.5 h-3.5 border-2 border-sky border-t-transparent rounded-full animate-spin"></div>
+                      <span>Loading curriculum lessons and knowledge assets...</span>
+                    </div>
+                  )
+                }
+
+                if (isProcessing && lessons.length === 0) {
+                  return (
+                    <div className="p-4 rounded-xl bg-sky/10 border border-sky/30 text-xs text-sky flex items-center gap-2.5">
+                      <div className="w-4 h-4 border-2 border-sky border-t-transparent rounded-full animate-spin shrink-0"></div>
+                      <div>
+                        <p className="font-bold">AI Curriculum Generation in Progress</p>
+                        <p className="text-[11px] text-muted mt-0.5">The system is currently extracting slides, indexing vector concepts, and building structured lessons.</p>
+                      </div>
+                    </div>
+                  )
+                }
+
                 return (
                   <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
                     {lessons.length > 0 ? (
                       <div className="space-y-1.5">
                         {lessons.map((l, idx) => (
-                          <div key={idx} className="flex items-center justify-between p-2.5 rounded-lg bg-ink border border-line text-xs">
-                            <span className="font-medium text-fg">{idx + 1}. {l.title}</span>
-                            <span className="text-[10px] text-muted font-mono">{formatLessonDuration(l, idx)}</span>
+                          <div key={idx} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-ink border border-line text-xs">
+                            <span className="font-medium text-fg break-words min-w-0 flex-1">{idx + 1}. {l.title}</span>
+                            <span className="text-[10px] text-muted font-mono shrink-0 whitespace-nowrap">{formatLessonDuration(l, idx)}</span>
                           </div>
                         ))}
                       </div>
@@ -733,9 +765,27 @@ const AdminCourses = () => {
                         {modules.map((m, idx) => (
                           <div key={idx} className="p-3 rounded-lg bg-ink border border-line text-xs space-y-1">
                             <div className="flex justify-between font-bold text-fg">
-                              <span>Module {idx + 1}: {m.title}</span>
-                              <span className="text-muted text-[10px]">{m.lessons ? `${m.lessons} Lessons • ` : ''}{m.duration && !m.duration.endsWith('88m') && m.duration !== `${m.lessons * 8}m` ? m.duration : `${Math.max(1, Math.round((m.lessons || 1) * 2.2))}m`}</span>
+                              <span className="break-words min-w-0 flex-1">Module {idx + 1}: {m.title}</span>
+                              <span className="text-muted text-[10px] shrink-0 whitespace-nowrap">{m.lessons ? `${m.lessons} Lessons • ` : ''}{m.duration && !m.duration.endsWith('88m') && m.duration !== `${m.lessons * 8}m` ? m.duration : `${Math.max(1, Math.round((m.lessons || 1) * 2.2))}m`}</span>
                             </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : slides.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {slides.map((s, idx) => (
+                          <div key={idx} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-ink border border-line text-xs">
+                            <span className="font-medium text-fg break-words min-w-0 flex-1">Slide {s.slideNumber || idx + 1}: {s.title || `Lesson ${idx + 1}`}</span>
+                            <span className="text-[10px] text-muted font-mono shrink-0 whitespace-nowrap">02:30</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : chunks.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {chunks.map((c, idx) => (
+                          <div key={idx} className="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-ink border border-line text-xs">
+                            <span className="font-medium text-fg break-words min-w-0 flex-1">{idx + 1}. {c.concept || c.topic || `Topic ${idx + 1}`}</span>
+                            <span className="text-[10px] text-muted font-mono shrink-0 whitespace-nowrap">02:30</span>
                           </div>
                         ))}
                       </div>
@@ -748,7 +798,7 @@ const AdminCourses = () => {
                         <p className="text-[11px] text-muted">Knowledge vectors indexed and ready for interactive learning and assessment.</p>
                       </div>
                     ) : (
-                      <p className="text-xs text-muted italic">Standard dynamic curriculum enabled.</p>
+                      <p className="text-xs text-muted italic">Curriculum is being prepared. Knowledge vectors and lessons will appear automatically once document processing completes.</p>
                     )}
                   </div>
                 )
