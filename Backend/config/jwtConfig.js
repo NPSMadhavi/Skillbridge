@@ -1,5 +1,22 @@
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+// Resilient .env loading so JWT_SECRET is loaded regardless of current working directory or ESM hoisting
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const potentialEnvPaths = [
+  path.join(currentDir, '..', '.env'),
+  path.join(currentDir, '..', '..', '.env'),
+  path.join(process.cwd(), '.env'),
+  path.join(process.cwd(), 'Backend', '.env')
+];
+for (const envFile of potentialEnvPaths) {
+  if (fs.existsSync(envFile)) {
+    dotenv.config({ path: envFile, override: false });
+  }
+}
 dotenv.config();
 
 let secret = process.env.JWT_SECRET;
