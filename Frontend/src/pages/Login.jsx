@@ -73,6 +73,7 @@ const Login = ({ onSuccess }) => {
   const [message, setMessage] = useState(null)
   const [faceState, setFaceState] = useState('idle')
   const [faceCopy, setFaceCopy] = useState('Tap to authenticate with Face ID')
+  const [scanProgress, setScanProgress] = useState(0)
   const abortRef = useRef(null)
   const videoRef = useRef(null)
   const streamRef = useRef(null)
@@ -165,6 +166,33 @@ const Login = ({ onSuccess }) => {
     }
   }
 
+  const waitForVideoReady = async (video, signal) => {
+    const deadline = Date.now() + 3500
+    while (Date.now() < deadline) {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      if (video && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        return true
+      }
+      await wait(80, signal)
+    }
+    return Boolean(video && video.videoWidth > 0 && video.videoHeight > 0)
+  }
+
+  const measureFrameLuma = (ctx, size) => {
+    try {
+      const data = ctx.getImageData(0, 0, size, size).data
+      let sum = 0
+      let samples = 0
+      for (let i = 0; i < data.length; i += 64) {
+        sum += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2])
+        samples += 1
+      }
+      return samples > 0 ? sum / samples : 0
+    } catch (_) {
+      return 128
+    }
+  }
+
   const runFaceId = async () => {
     if (faceState === 'scanning' || faceState === 'success') return
 
@@ -174,7 +202,8 @@ const Login = ({ onSuccess }) => {
     const { signal } = controller
 
     setFaceState('scanning')
-    setFaceCopy('Scanning your face…')
+    setScanProgress(12)
+    setFaceCopy('Initializing biometric camera…')
     setMessage(null)
 
     let stream = null
@@ -194,42 +223,70 @@ const Login = ({ onSuccess }) => {
       }
     } catch (err) {
       setFaceState('error')
+      setScanProgress(0)
       setFaceCopy('Camera access denied or unavailable.')
+      setMessage({ type: 'error', text: 'Camera access denied or unavailable. Please allow camera permission.' })
       return
     }
 
     try {
-      setFaceCopy('Look directly into the camera…')
-      // Camera stabilization delay for auto-exposure & white balance
-      await wait(750, signal)
-      if (signal.aborted) return
-
-      setFaceCopy('Scanning face biometric…')
-
       const video = videoRef.current
       if (!video) throw new Error('Video stream is not ready.')
 
+      setScanProgress(28)
+      setFaceCopy('Stabilizing lens & exposure…')
+      const ready = await waitForVideoReady(video, signal)
+      if (!ready) {
+        throw new Error('Camera feed did not initialize in time. Please try again.')
+      }
+      await wait(550, signal)
+      if (signal.aborted) return
+
+      // Optional native FaceDetector pre-check when supported by browser
+      if (typeof window !== 'undefined' && 'FaceDetector' in window) {
+        try {
+          const detector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 })
+          const detected = await detector.detect(video)
+          if (!detected || detected.length === 0) {
+            setFaceCopy('Center your face inside the ring…')
+            await wait(450, signal)
+          }
+        } catch (_) {}
+      }
+
+      setScanProgress(50)
+      setFaceCopy('Deep scanning facial landmarks…')
+
+      const captureSize = 640
       const frames = []
       const canvas = document.createElement('canvas')
-      canvas.width = 480
-      canvas.height = 480
-      const ctx = canvas.getContext('2d')
+      canvas.width = captureSize
+      canvas.height = captureSize
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
 
-      // Capture a multi-frame burst for high biometric stability
+      // Capture a crisp 3-frame burst spaced 220ms apart
       for (let i = 0; i < 3; i++) {
         if (signal.aborted) return
-        const size = Math.min(video.videoWidth, video.videoHeight) || 480
-        const sx = (video.videoWidth - size) / 2
-        const sy = (video.videoHeight - size) / 2
-        ctx.clearRect(0, 0, 480, 480)
-        ctx.drawImage(video, sx, sy, size, size, 0, 0, 480, 480)
+        const size = Math.min(video.videoWidth, video.videoHeight) || captureSize
+        const sx = Math.max(0, (video.videoWidth - size) / 2)
+        const sy = Math.max(0, (video.videoHeight - size) / 2)
+        ctx.clearRect(0, 0, captureSize, captureSize)
+        ctx.drawImage(video, sx, sy, size, size, 0, 0, captureSize, captureSize)
+
+        const luma = measureFrameLuma(ctx, captureSize)
+        if (i === 0 && luma < 18) {
+          throw new Error('Camera image is too dark or covered. Please face good lighting and try again.')
+        }
+
         frames.push(canvas.toDataURL('image/jpeg', 0.92))
+        setScanProgress(55 + (i + 1) * 10)
         if (i < 2) {
-          await wait(180, signal)
+          await wait(220, signal)
         }
       }
 
-      setFaceCopy('Verifying identity…')
+      setScanProgress(92)
+      setFaceCopy('Verifying 128-d biometric signature…')
 
       const cleanCode = (companyCode || localStorage.getItem('skillbridge_tenant') || 'default').trim().toLowerCase()
       const res = await api.studentFaceLogin(frames, cleanCode)
@@ -247,6 +304,7 @@ const Login = ({ onSuccess }) => {
       localStorage.setItem('skillbridge_tenant', effectiveTenant)
       restoreLanguageAfterLogin(res.user)
 
+      setScanProgress(100)
       setFaceState('success')
       setFaceCopy('Identity verified')
       stopCamera()
@@ -256,8 +314,11 @@ const Login = ({ onSuccess }) => {
     } catch (error) {
       stopCamera()
       if (error?.name === 'AbortError') return
+      const errMsg = error.message || 'Verification failed. Tap to try again.'
+      setScanProgress(0)
       setFaceState('error')
-      setFaceCopy(error.message || 'Verification failed. Tap to try again.')
+      setFaceCopy(errMsg)
+      setMessage({ type: 'error', text: errMsg })
     }
   }
 
@@ -387,42 +448,65 @@ const Login = ({ onSuccess }) => {
             >
               <div className="flex flex-col items-center pt-0.5">
                 {faceState === 'success' ? (
-                  <div className="flex h-[104px] w-[104px] items-center justify-center rounded-full border-[1.5px] border-emerald-500 bg-emerald-500/10 shadow-[0_8px_30px_rgba(16,185,129,0.06)] animate-bracket-breathe">
-                    <div className="grid h-11 w-11 place-items-center rounded-full border-[2.5px] border-emerald-500 text-emerald-500">
-                      <svg className="h-6 w-6 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                  <div className="flex h-[128px] w-[128px] items-center justify-center rounded-full border-2 border-emerald-500 bg-emerald-500/10 shadow-[0_8px_30px_rgba(16,185,129,0.12)] animate-bracket-breathe">
+                    <div className="grid h-14 w-14 place-items-center rounded-full border-[2.5px] border-emerald-500 text-emerald-500">
+                      <svg className="h-7 w-7 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="20 6 9 17 4 12" />
                       </svg>
+                    </div>
+                  </div>
+                ) : faceState === 'scanning' ? (
+                  <div className="relative flex h-[200px] w-[200px] items-center justify-center">
+                    {/* Circular SVG Progress Ring */}
+                    <svg className="pointer-events-none absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 200 200">
+                      <circle cx="100" cy="100" r="95" fill="none" stroke="#e2e8f0" strokeWidth="4" />
+                      <circle
+                        cx="100"
+                        cy="100"
+                        r="95"
+                        fill="none"
+                        stroke="#f97316"
+                        strokeWidth="4.5"
+                        strokeLinecap="round"
+                        strokeDasharray={2 * Math.PI * 95}
+                        strokeDashoffset={2 * Math.PI * 95 * (1 - scanProgress / 100)}
+                        className="transition-all duration-300 ease-out"
+                      />
+                    </svg>
+
+                    <div className="relative h-[182px] w-[182px] overflow-hidden rounded-full bg-slate-950 shadow-inner">
+                      <video
+                        ref={videoRef}
+                        playsInline
+                        muted
+                        className="h-full w-full object-cover scale-x-[-1]"
+                      />
+                      {/* Biometric Face Reticle & Laser Sweep Overlay */}
+                      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                        <div className="h-[118px] w-[96px] rounded-[48px] border-2 border-dashed border-orange-400/75 shadow-[0_0_20px_rgba(249,115,22,0.25)]" />
+                      </div>
+                      <div className="pointer-events-none absolute inset-x-4 top-1/2 h-[2px] -translate-y-1/2 bg-gradient-to-r from-transparent via-orange-400 to-transparent opacity-90 animate-pulse shadow-[0_0_12px_rgba(249,115,22,0.8)]" />
+                      <span className="pointer-events-none absolute bottom-2.5 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/80 px-2.5 py-0.5 font-mono text-[10px] font-bold text-orange-300 backdrop-blur-xs">
+                        {scanProgress}%
+                      </span>
                     </div>
                   </div>
                 ) : (
                   <button
                     type="button"
                     onClick={runFaceId}
-                    disabled={faceState === 'scanning'}
-                    className={`relative grid h-[108px] w-[108px] place-items-center rounded-full border-[1.5px] bg-white transition-all duration-200 overflow-hidden ${faceState === 'error'
-                      ? 'border-rose-400 ring-4 ring-rose-500/10'
-                      : faceState === 'scanning'
-                        ? 'border-[#0e2246] ring-4 ring-[#0e2246]/10 shadow-md'
-                        : 'border-[#556987] hover:border-slate-400 shadow-sm hover:scale-[1.01]'
-                      } ${faceState === 'idle' || faceState === 'error'
-                        ? 'cursor-pointer'
-                        : 'cursor-default'
+                    className={`relative grid h-[112px] w-[112px] place-items-center rounded-full border-[1.5px] bg-white transition-all duration-200 overflow-hidden cursor-pointer ${faceState === 'error'
+                      ? 'border-rose-400 ring-4 ring-rose-500/10 hover:scale-[1.02]'
+                      : 'border-[#556987] hover:border-[#0e2246] shadow-sm hover:scale-[1.02]'
                       }`}
                     aria-label="Authenticate with Face ID"
                   >
-                    {faceState === 'scanning' ? (
-                      <video
-                        ref={videoRef}
-                        playsInline
-                        muted
-                        className="h-full w-full rounded-full object-cover scale-x-[-1]"
-                      />
-                    ) : (
-                      // Face ID scan icon
-                      <svg className="h-7 w-7 text-[#0f213d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M5 8.5V7a2 2 0 0 1 2-2h1.5M15.5 5H17a2 2 0 0 1 2 2v1.5M5 15.5V17a2 2 0 0 0 2 2h1.5M19 15.5V17a2 2 0 0 1-2 2h-1.5" />
-                      </svg>
-                    )}
+                    <svg className="h-8 w-8 text-[#0f213d]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M5 8.5V7a2 2 0 0 1 2-2h1.5M15.5 5H17a2 2 0 0 1 2 2v1.5M5 15.5V17a2 2 0 0 0 2 2h1.5M19 15.5V17a2 2 0 0 1-2 2h-1.5" />
+                      <circle cx="9.5" cy="10.5" r="0.8" fill="currentColor" />
+                      <circle cx="14.5" cy="10.5" r="0.8" fill="currentColor" />
+                      <path d="M9.5 14.5c.8.8 1.6 1.1 2.5 1.1s1.7-.3 2.5-1.1" />
+                    </svg>
                   </button>
                 )}
 
@@ -430,18 +514,18 @@ const Login = ({ onSuccess }) => {
                   {faceState === 'success'
                     ? 'Identity Verified!'
                     : faceState === 'error'
-                      ? 'Authentication failed'
-                      : 'Tap to authenticate'}
+                      ? 'Tap to scan again'
+                      : faceState === 'scanning'
+                        ? 'Deep Face Scan Active'
+                        : 'Tap to authenticate'}
                 </p>
-                {faceState === 'scanning' && (
-                  <p className="mt-0.5 text-center text-xs text-slate-400">
-                    Analyzing face biometrics...
-                  </p>
-                )}
+                <p className={`mt-0.5 text-center text-xs ${faceState === 'error' ? 'text-rose-500 font-medium' : 'text-slate-500'}`}>
+                  {faceCopy}
+                </p>
 
                 <div className="mt-4 w-full rounded-[16px] border border-[#fde3c8] bg-[#fffaf5] px-4 py-3.5 text-center">
                   <p className="text-[12.5px] leading-relaxed text-slate-600">
-                    Use Face ID for quick, secure access. Your facial data is securely managed by your device and is never stored.
+                    Use Face ID for quick, secure access. Center your face in good lighting while the 3-frame biometric scan completes.
                   </p>
                 </div>
 
