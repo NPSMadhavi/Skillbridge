@@ -1289,6 +1289,8 @@ function formatCourseForCatalog(course) {
 
 // 2. Get published RAG courses (Admin gets all with counts; Students get ONLY assigned courses)
 router.get('/', authenticateToken, async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.setHeader('Vary', 'Authorization, x-tenant-id');
   try {
     const targetPrisma = req.prisma || prisma;
     const tenantKey = req.tenantCode || 'default';

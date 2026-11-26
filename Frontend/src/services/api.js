@@ -13,6 +13,40 @@ const getApiBaseUrl = () => {
 
 const API_BASE_URL = getApiBaseUrl();
 
+const clearCourseClientCache = () => {
+  try {
+    if (typeof window !== 'undefined') {
+      if (window.__courseCache instanceof Map) {
+        window.__courseCache.clear();
+      }
+      const keysToRemove = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        if (k && (k === 'skillbridge_cached_courses' || k.startsWith('skillbridge_cached_courses_') || k.startsWith('skillbridge_cached_course_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => sessionStorage.removeItem(k));
+    }
+  } catch (_) {}
+};
+
+const getCourseCacheScopeKey = (isAdmin) => {
+  try {
+    if (isAdmin) {
+      const admin = JSON.parse(sessionStorage.getItem('skillbridge_admin') || localStorage.getItem('skillbridge_admin') || 'null');
+      const tenant = admin?.tenant || admin?.slug || sessionStorage.getItem('skillbridge_tenant') || 'default';
+      return `skillbridge_cached_courses_admin_${tenant}_${admin?.id || 'anon'}`;
+    }
+    const userSession = JSON.parse(sessionStorage.getItem('skillbridge_user') || localStorage.getItem('skillbridge_user') || 'null');
+    const tenant = userSession?.tenant?.code || userSession?.user?.tenantCode || sessionStorage.getItem('skillbridge_tenant') || 'default';
+    const uid = userSession?.user?.id || userSession?.user?.email || 'anon';
+    return `skillbridge_cached_courses_student_${tenant}_${uid}`;
+  } catch (_) {
+    return 'skillbridge_cached_courses_anon';
+  }
+};
+
 const getHeaders = (role = false) => {
   const headers = {
     'Content-Type': 'application/json',
@@ -30,7 +64,7 @@ const getHeaders = (role = false) => {
     let token = null;
     let tenantId = 'default';
 
-    // Strict role segregation when explicitly on admin/super routes, with safe fallback for shared learner routes
+    // Strict role segregation: learner routes must NEVER fall back to admin/super-admin tokens
     if (role === 'super' || isSuperAdminPath) {
       token = superAdminSession?.token || null;
       tenantId = 'master';
@@ -38,8 +72,8 @@ const getHeaders = (role = false) => {
       token = adminSession?.token || superAdminSession?.token || null;
       tenantId = adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
     } else {
-      token = userSession?.token || adminSession?.token || superAdminSession?.token || null;
-      tenantId = userSession?.tenant?.code || userSession?.user?.tenantCode || adminSession?.tenant || adminSession?.slug || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
+      token = userSession?.token || null;
+      tenantId = userSession?.tenant?.code || userSession?.user?.tenantCode || sessionStorage.getItem('skillbridge_tenant') || localStorage.getItem('skillbridge_tenant') || 'default';
     }
 
     if (token) {
@@ -642,6 +676,7 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Invalid credentials.');
     }
+    clearCourseClientCache();
     return res.json();
   },
 
@@ -658,6 +693,7 @@ export const api = {
       const err = await res.json();
       throw new Error(err.error || 'Face verification failed.');
     }
+    clearCourseClientCache();
     return res.json();
   },
 
@@ -789,6 +825,7 @@ export const api = {
 
   getCourses: async (asAdmin) => {
     const isAdmin = asAdmin !== undefined ? asAdmin : (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin'));
+    const scopedCacheKey = getCourseCacheScopeKey(isAdmin);
     
     // Fast resilient fetch with 15s timeout
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -804,9 +841,9 @@ export const api = {
     } catch (netErr) {
       if (timeoutId) clearTimeout(timeoutId);
       console.warn('[API] getCourses network error or timeout:', netErr.message);
-      // Return cached courses if available
+      // Return scoped cached courses if available for this exact user/role
       try {
-        const cached = sessionStorage.getItem('skillbridge_cached_courses');
+        const cached = sessionStorage.getItem(scopedCacheKey);
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -829,9 +866,9 @@ export const api = {
         }
       } catch (_) { }
 
-      // Check sessionStorage cache fallback
+      // Check user-scoped sessionStorage cache fallback
       try {
-        const cached = sessionStorage.getItem('skillbridge_cached_courses');
+        const cached = sessionStorage.getItem(scopedCacheKey);
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -858,7 +895,7 @@ export const api = {
             try { sessionStorage.setItem(`skillbridge_cached_course_${c.id}`, JSON.stringify(c)); } catch (_) { }
           }
         });
-        sessionStorage.setItem('skillbridge_cached_courses', JSON.stringify(data));
+        sessionStorage.setItem(scopedCacheKey, JSON.stringify(data));
       }
     } catch (_) { }
     return data;
