@@ -22,7 +22,7 @@ export function isPlaceholderTitle(value) {
 export function isGarbageTitle(value) {
   let t = String(value || '').trim();
   if (!t) return true;
-  t = t.replace(/^#{1,6}\s+/, '').replace(/^[-*•➔▪▫►→\d\.\)]+\s*/, '').trim();
+  t = t.replace(/^#{1,6}\s+/, '').replace(/^(?:[-*•➔▪▫►→]+|\d+[.)\s-]+)\s*/, '').trim();
   if (!t || t.length < 3 || t.length > 90) return true;
   if (isPlaceholderTitle(t)) return true;
   if (PATH_NOISE_PATTERN.test(t)) return true;
@@ -117,8 +117,9 @@ export function isUsefulTeachingText(value) {
 export function firstUsefulTitleLine(text) {
   const lines = String(text || '').split(/\n+/);
   for (const raw of lines) {
-    const line = raw.replace(/^[#\-*•\d.)\s]+/, '').trim();
+    const line = raw.replace(/^(?:[#\-*•]+|\d+[.)\s-]+)\s*/, '').trim();
     if (line.length < 5 || line.length > 80) continue;
+    if ((line.match(/\|/g) || []).length >= 2) continue;
     if (isGarbageTitle(line) || isPlaceholderTitle(line) || isBinaryNoiseText(line)) continue;
     const words = line.split(/\s+/).filter(Boolean);
     if (words.length < 2) continue;
@@ -264,7 +265,7 @@ export function healBrokenBullets(text) {
   const isBulletLine = (line) => /^[-*•➔▪▫►→]\s+/.test(line);
 
   const cleanLineContent = (line) => {
-    return line.replace(/^[-*•➔▪▫►→\d\.\)]+\s*/, '').trim();
+    return line.replace(/^(?:[-*•➔▪▫►→]+|\d+[.)\s-]+)\s*/, '').trim();
   };
 
   const endsWithTerminalPunctuation = (str) => {
