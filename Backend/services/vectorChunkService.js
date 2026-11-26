@@ -10,11 +10,12 @@ import { isGarbageTitle, isPlaceholderTitle, stripSlidePlaceholders, cleanUnsupp
 export class VectorChunkService {
   constructor() {
     this._checkedClients = new WeakSet();
+    this._hasExtraColsMap = new WeakMap();
   }
 
   /**
-   * Ensures the PostgreSQL CourseChunk table contains all semantic metadata columns.
-   * Tracked per PrismaClient instance so multi-tenant DBs are each verified independently.
+   * Ensures the PostgreSQL CourseChunk table contains all semantic metadata columns
+   * and detects whether optional legacy columns ("content", "lessonId") exist.
    */
   async ensureColumnsExist(prisma) {
     if (!prisma || this._checkedClients.has(prisma)) return;
@@ -36,10 +37,25 @@ export class VectorChunkService {
           ADD COLUMN IF NOT EXISTS "metadata" JSONB,
           ADD COLUMN IF NOT EXISTS "semanticSummary" TEXT;
       `);
-      this._checkedClients.add(prisma);
     } catch (err) {
       console.warn('[VectorChunkService] Schema check notice (safe to ignore if table already up to date):', err.message);
     }
+
+    try {
+      const cols = await prisma.$queryRawUnsafe(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'CourseChunk'
+      `);
+      const colSet = new Set((cols || []).map(r => r.column_name));
+      this._hasExtraColsMap.set(prisma, {
+        hasContent: colSet.has('content'),
+        hasLessonId: colSet.has('lessonId'),
+      });
+    } catch (_) {
+      this._hasExtraColsMap.set(prisma, { hasContent: false, hasLessonId: false });
+    }
+    this._checkedClients.add(prisma);
   }
 
   /**
@@ -411,6 +427,8 @@ export class VectorChunkService {
       return [];
     }
 
+    const colFlags = this._hasExtraColsMap.get(prisma) || { hasContent: false, hasLessonId: false };
+
     const savedChunks = await prisma.$transaction(async (tx) => {
       // Atomically delete existing chunks for this course before inserting the new version
       await tx.$executeRawUnsafe(
@@ -432,42 +450,59 @@ export class VectorChunkService {
         const relatedConceptsJson = chunk.relatedConcepts ? JSON.stringify(chunk.relatedConcepts) : null;
         const metadataJson = chunk.metadata ? JSON.stringify(chunk.metadata) : null;
 
+        // Build column list dynamically based on actual table columns (handles DBs without "content"/"lessonId")
+        const baseCols = [
+          '"id"', '"courseId"', '"chunkIndex"', '"chunkText"',
+          '"topic"', '"subtopic"', '"concept"', '"chunkType"', '"sourcePage"',
+          '"sourceSlides"', '"sourceSection"', '"prerequisites"',
+          '"keyPoints"', '"relatedConcepts"', '"metadata"', '"semanticSummary"',
+        ];
+        const baseVals = [
+          'gen_random_uuid()::text', '$1', '$2', '$3',
+          '$4', '$5', '$6', '$7', '$8',
+          '$9::jsonb', '$10', '$11',
+          '$12::jsonb', '$13::jsonb', '$14::jsonb', '$15',
+        ];
+        const baseParams = [
+          courseId,
+          chunk.chunkIndex ?? i,
+          chunk.chunkText,
+          chunk.topic,
+          chunk.subtopic,
+          chunk.concept,
+          chunk.chunkType,
+          chunk.sourcePage,
+          sourceSlidesJson,
+          chunk.sourceSection,
+          chunk.prerequisites,
+          keyPointsJson,
+          relatedConceptsJson,
+          metadataJson,
+          chunk.semanticSummary,
+        ];
+        if (colFlags.hasContent) {
+          baseCols.push('"content"');
+          baseVals.push('$3');
+        }
+        if (colFlags.hasLessonId) {
+          baseParams.push(chunk.lessonId || null);
+          baseCols.push('"lessonId"');
+          baseVals.push(`$${baseParams.length}`);
+        }
+
         // 1. Primary: Insert with pgvector 768-dim embedding and full semantic metadata
         if (embeddingArr && embeddingArr.length === 768) {
           try {
             await tx.$executeRawUnsafe(`SAVEPOINT sp_chunk_vec`);
             const vectorStr = `[${embeddingArr.join(',')}]`;
+            const vecParams = [...baseParams, vectorStr];
+            const vecCols = [...baseCols, '"embedding"', '"createdAt"'];
+            const vecVals = [...baseVals, `$${vecParams.length}::vector`, 'NOW()'];
             const rows = await tx.$queryRawUnsafe(
-              `INSERT INTO "CourseChunk" (
-                 "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
-                 "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
-                 "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
-                 "embedding", "createdAt"
-               )
-               VALUES (
-                 gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
-                 $8, $9, $10::jsonb, $11, $12,
-                 $13::jsonb, $14::jsonb, $15::jsonb, $16,
-                 $17::vector, NOW()
-               )
+              `INSERT INTO "CourseChunk" (${vecCols.join(', ')})
+               VALUES (${vecVals.join(', ')})
                RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
-              courseId,
-              chunk.chunkIndex ?? i,
-              chunk.chunkText,
-              chunk.lessonId || null,
-              chunk.topic,
-              chunk.subtopic,
-              chunk.concept,
-              chunk.chunkType,
-              chunk.sourcePage,
-              sourceSlidesJson,
-              chunk.sourceSection,
-              chunk.prerequisites,
-              keyPointsJson,
-              relatedConceptsJson,
-              metadataJson,
-              chunk.semanticSummary,
-              vectorStr
+              ...vecParams
             );
             await tx.$executeRawUnsafe(`RELEASE SAVEPOINT sp_chunk_vec`);
             inserted = rows[0];
@@ -481,34 +516,13 @@ export class VectorChunkService {
         if (!inserted) {
           try {
             await tx.$executeRawUnsafe(`SAVEPOINT sp_chunk_raw`);
+            const rawCols = [...baseCols, '"createdAt"'];
+            const rawVals = [...baseVals, 'NOW()'];
             const rows = await tx.$queryRawUnsafe(
-              `INSERT INTO "CourseChunk" (
-                 "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
-                 "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
-                 "keyPoints", "relatedConcepts", "metadata", "semanticSummary", "createdAt"
-               )
-               VALUES (
-                 gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
-                 $8, $9, $10::jsonb, $11, $12,
-                 $13::jsonb, $14::jsonb, $15::jsonb, $16, NOW()
-               )
+              `INSERT INTO "CourseChunk" (${rawCols.join(', ')})
+               VALUES (${rawVals.join(', ')})
                RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
-              courseId,
-              chunk.chunkIndex ?? i,
-              chunk.chunkText,
-              chunk.lessonId || null,
-              chunk.topic,
-              chunk.subtopic,
-              chunk.concept,
-              chunk.chunkType,
-              chunk.sourcePage,
-              sourceSlidesJson,
-              chunk.sourceSection,
-              chunk.prerequisites,
-              keyPointsJson,
-              relatedConceptsJson,
-              metadataJson,
-              chunk.semanticSummary
+              ...baseParams
             );
             await tx.$executeRawUnsafe(`RELEASE SAVEPOINT sp_chunk_raw`);
             inserted = rows[0];
@@ -550,12 +564,15 @@ export class VectorChunkService {
    * Executes Cosine Distance vector similarity query using PostgreSQL pgvector.
    */
   async searchSimilarChunks(prisma, courseId, queryVector, topK = 5) {
+    await this.ensureColumnsExist(prisma);
+    const colFlags = this._hasExtraColsMap.get(prisma) || { hasLessonId: false };
+    const lessonColExpr = colFlags.hasLessonId ? '"lessonId"' : 'NULL::text AS "lessonId"';
     const vectorStr = `[${queryVector.join(',')}]`;
     const results = await prisma.$queryRawUnsafe(
       `SELECT "id", "chunkIndex" AS "chunk_index", "sourcePage" AS "page_number",
               "sourceSlides" AS "source_slides", "sourceSection" AS "source_section",
               "chunkText" AS "text", "chunkText" AS "content", "topic", "subtopic", "concept", "chunkType",
-              "lessonId", "prerequisites",
+              ${lessonColExpr}, "prerequisites",
               "keyPoints" AS "key_points", "relatedConcepts" AS "related_concepts",
               "metadata", "semanticSummary",
               1 - ("embedding" <=> $1::vector) AS "similarity"
@@ -652,11 +669,13 @@ export class VectorChunkService {
       const cleanKeyword = queryText.replace(/[^a-zA-Z0-9\s]/g, ' ').trim();
       const firstTerms = cleanKeyword.split(/\s+/).filter(t => t.length > 3).slice(0, 3);
       if (firstTerms.length > 0) {
+        const colFlags = this._hasExtraColsMap.get(prisma) || { hasLessonId: false };
+        const lessonColExpr = colFlags.hasLessonId ? '"lessonId"' : 'NULL::text AS "lessonId"';
         const textResults = await prisma.$queryRawUnsafe(
           `SELECT "id", "chunkIndex" AS "chunk_index", "sourcePage" AS "page_number",
                   "sourceSlides" AS "source_slides", "sourceSection" AS "source_section",
                   "chunkText" AS "text", "chunkText" AS "content", "topic", "subtopic", "concept", "chunkType",
-                  "lessonId", "prerequisites",
+                  ${lessonColExpr}, "prerequisites",
                   "keyPoints" AS "key_points", "relatedConcepts" AS "related_concepts",
                   "metadata", "semanticSummary",
                   0.70 AS "similarity"
