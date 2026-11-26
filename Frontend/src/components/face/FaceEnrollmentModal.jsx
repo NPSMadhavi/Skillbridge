@@ -136,6 +136,7 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
   const [isModelLoading, setIsModelLoading] = useState(true)
 
   const videoRef = useRef(null)
+  const overlayCanvasRef = useRef(null)
   const streamRef = useRef(null)
   const landmarkerRef = useRef(null)
   const animationFrameRef = useRef(null)
@@ -309,6 +310,35 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
     if (isVerifyingRef.current || performance.now() < stepTransitionUntilRef.current) return
     const currentStep = ENROLLMENT_STEPS[stepIndexRef.current]
     if (!currentStep) return
+
+    // Draw subtle deep-scan biometric landmark mesh onto mirrored overlay canvas
+    const overlay = overlayCanvasRef.current
+    const video = videoRef.current
+    if (overlay && video && video.videoWidth > 0) {
+      if (overlay.width !== video.videoWidth || overlay.height !== video.videoHeight) {
+        overlay.width = video.videoWidth
+        overlay.height = video.videoHeight
+      }
+      const oCtx = overlay.getContext('2d')
+      oCtx.clearRect(0, 0, overlay.width, overlay.height)
+      if (results?.faceLandmarks?.[0]) {
+        const pts = results.faceLandmarks[0]
+        // Key facial contour & feature landmark indices for clean biometric HUD
+        const keyIndices = [
+          10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152,
+          148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109,
+          33, 133, 159, 145, 362, 263, 386, 374, 1, 2, 98, 327, 61, 291, 13, 14
+        ]
+        oCtx.fillStyle = 'rgba(56, 189, 248, 0.78)'
+        for (const idx of keyIndices) {
+          const p = pts[idx]
+          if (!p) continue
+          oCtx.beginPath()
+          oCtx.arc(p.x * overlay.width, p.y * overlay.height, 2.2, 0, Math.PI * 2)
+          oCtx.fill()
+        }
+      }
+    }
 
     // 1. Face Count Check
     if (!results || !results.faceLandmarks || results.faceLandmarks.length === 0) {
@@ -518,15 +548,18 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
       aria-modal="true"
       aria-labelledby="face-enrollment-title"
     >
-      <div className="relative w-full max-w-[440px] rounded-2xl border border-line bg-panel p-4 sm:p-5 shadow-2xl animate-rise-in my-auto">
+      <div className="relative w-full max-w-[460px] rounded-3xl border border-line bg-panel p-5 sm:p-6 shadow-2xl animate-rise-in my-auto">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h2 id="face-enrollment-title" className="font-display text-base sm:text-lg font-bold text-fg">
-              Face Enrollment
-            </h2>
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-2 w-2 rounded-full bg-sky animate-pulse" />
+              <h2 id="face-enrollment-title" className="font-display text-base sm:text-lg font-bold text-fg">
+                Deep Face Biometric Enrollment
+              </h2>
+            </div>
             <p className="mt-0.5 text-[11px] text-muted">
-              Follow the 5 steps to complete enrollment
+              5-pose 478-landmark liveness scan • {Object.keys(completedSteps).length} of {ENROLLMENT_STEPS.length} complete
             </p>
           </div>
           <button
@@ -535,14 +568,14 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
               stopCamera()
               onClose()
             }}
-            className="grid h-7 w-7 place-items-center rounded-full text-muted hover:bg-ink hover:text-fg transition text-sm"
+            className="grid h-8 w-8 place-items-center rounded-full text-muted hover:bg-ink hover:text-fg transition text-sm cursor-pointer"
           >
             ✕
           </button>
         </div>
 
-        {/* Step Progress Bar - Neat Segmented Pill (No unwanted emoji icons) */}
-        <div className="mt-2.5 grid grid-cols-5 gap-1 rounded-xl bg-ink/60 p-1 border border-line/60">
+        {/* Step Progress Bar - Neat Segmented Pill */}
+        <div className="mt-3 grid grid-cols-5 gap-1 rounded-xl bg-ink/70 p-1 border border-line/60">
           {ENROLLMENT_STEPS.map((step, idx) => {
             const isDone = completedSteps[step.id]
             const isCurrent = idx === stepIndex
@@ -553,7 +586,7 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
                   isDone
                     ? 'bg-ok/15 text-ok font-semibold'
                     : isCurrent
-                    ? 'bg-sky/20 text-sky font-bold ring-1 ring-sky/30'
+                    ? 'bg-orange/15 text-orange font-bold ring-1 ring-orange/40'
                     : 'text-muted/60'
                 }`}
               >
@@ -565,27 +598,31 @@ const FaceEnrollmentModal = ({ isOpen, onClose, onEnrollmentComplete }) => {
           })}
         </div>
 
-        {/* Compact Camera Viewport with Face Guide Overlay */}
-        <div className="relative mt-3 overflow-hidden rounded-xl border border-line bg-black h-[210px] sm:h-[225px] flex items-center justify-center">
+        {/* Deep Biometric Camera Viewport with Landmark Mesh & Reticle */}
+        <div className="relative mt-3.5 overflow-hidden rounded-2xl border border-line bg-slate-950 h-[245px] sm:h-[265px] flex items-center justify-center shadow-inner">
           <video
             ref={videoRef}
             playsInline
             muted
             className="w-full h-full scale-x-[-1] object-cover"
           />
+          <canvas
+            ref={overlayCanvasRef}
+            className="pointer-events-none absolute inset-0 w-full h-full scale-x-[-1] object-cover"
+          />
 
-          {/* Alignment Oval Frame Guide */}
+          {/* Alignment Oval Frame Guide + Laser Sweep */}
           <div className="pointer-events-none absolute inset-0 grid place-items-center">
             <div
-              className={`relative h-[175px] w-[140px] rounded-[50%] border-2 sm:border-[2.5px] transition-colors duration-300 shadow-[0_0_15px_rgba(0,0,0,0.5)] ${
+              className={`relative h-[195px] w-[154px] rounded-[50%] border-2 sm:border-[2.5px] transition-colors duration-300 shadow-[0_0_24px_rgba(0,0,0,0.6)] ${
                 feedbackColor === 'emerald'
-                  ? 'border-emerald-400/90 shadow-[0_0_20px_rgba(52,211,153,0.35)]'
+                  ? 'border-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.45)]'
                   : feedbackColor === 'rose'
-                  ? 'border-rose-500/90 shadow-[0_0_20px_rgba(244,63,94,0.35)]'
-                  : 'border-amber-400/80 shadow-[0_0_20px_rgba(251,191,36,0.25)]'
+                  ? 'border-rose-500 shadow-[0_0_24px_rgba(244,63,94,0.45)]'
+                  : 'border-orange-400/90 shadow-[0_0_24px_rgba(249,115,22,0.3)]'
               }`}
             >
-              {/* Direction Indicator Visual Pills (Clean text badges, no tacky arrow icons) */}
+              <div className="absolute inset-x-3 top-1/2 h-[1.5px] -translate-y-1/2 bg-gradient-to-r from-transparent via-sky-400/80 to-transparent animate-pulse" />
               {currentStep.id === 'look_up' && (
                 <div className="absolute top-2 inset-x-0 flex justify-center animate-bounce">
                   <span className="rounded-full bg-sky/90 backdrop-blur-sm px-2.5 py-0.5 text-[11px] text-white font-semibold shadow">
