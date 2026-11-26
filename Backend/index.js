@@ -96,7 +96,10 @@ const candidateFrontendPaths = [
   path.join(process.cwd(), 'dist'),
   path.join(process.cwd(), 'public')
 ];
-const frontendPath = candidateFrontendPaths.find(p => fs.existsSync(path.join(p, 'index.html'))) || candidateFrontendPaths[0];
+const existingFrontendPaths = candidateFrontendPaths
+  .filter(p => fs.existsSync(path.join(p, 'index.html')))
+  .sort((a, b) => fs.statSync(path.join(b, 'index.html')).mtimeMs - fs.statSync(path.join(a, 'index.html')).mtimeMs);
+const frontendPath = existingFrontendPaths[0] || candidateFrontendPaths[0];
 
 // Serve compiled frontend static assets (JS chunks, CSS, icons, images)
 if (fs.existsSync(frontendPath)) {
