@@ -22,7 +22,7 @@ router.get('/voices', (req, res) => {
  */
 router.get('/synthesize', async (req, res) => {
   try {
-    const { text, voice, language, gender, rate, pitch } = req.query;
+    const { text, voice, language, gender, rate, pitch, sourceChunkId, version } = req.query;
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'Text query parameter is required.' });
@@ -33,13 +33,16 @@ router.get('/synthesize', async (req, res) => {
       gender,
       voice,
       rate,
-      pitch
+      pitch,
+      sourceChunkId: sourceChunkId || null,
+      version: Number(version) || 1
     });
 
     res.setHeader('Content-Type', result.contentType || 'audio/mpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('X-Voice-Used', result.voice);
     res.setHeader('X-Cache', result.fromCache ? 'HIT' : 'MISS');
+    if (result.cacheKey) res.setHeader('X-Audio-Key', result.cacheKey);
     return res.end(result.buffer);
   } catch (error) {
     console.warn('[TTS Endpoint:GET] Neural synthesis notice:', error.message);
@@ -56,7 +59,7 @@ router.get('/synthesize', async (req, res) => {
  */
 router.post('/synthesize', async (req, res) => {
   try {
-    const { text, voice, language, gender, rate, pitch } = req.body;
+    const { text, voice, language, gender, rate, pitch, sourceChunkId, version } = req.body;
 
     if (!text || !text.trim()) {
       return res.status(400).json({ error: 'Text body field is required.' });
@@ -67,13 +70,16 @@ router.post('/synthesize', async (req, res) => {
       gender,
       voice,
       rate,
-      pitch
+      pitch,
+      sourceChunkId: sourceChunkId || null,
+      version: Number(version) || 1
     });
 
     res.setHeader('Content-Type', result.contentType || 'audio/mpeg');
     res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('X-Voice-Used', result.voice);
     res.setHeader('X-Cache', result.fromCache ? 'HIT' : 'MISS');
+    if (result.cacheKey) res.setHeader('X-Audio-Key', result.cacheKey);
     return res.end(result.buffer);
   } catch (error) {
     console.warn('[TTS Endpoint:POST] Neural synthesis notice:', error.message);
@@ -81,6 +87,51 @@ router.post('/synthesize', async (req, res) => {
       error: 'Neural TTS service unavailable',
       details: error.message
     });
+  }
+});
+
+router.get('/audio', async (req, res) => {
+  try {
+    const { text, voice, language, gender, rate, pitch, sourceChunkId, version, generate } = req.query;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Text query parameter is required.' });
+    }
+    const status = microsoftNeuralTts.hasCachedAudio(text, {
+      language, gender, voice, rate, pitch, sourceChunkId: sourceChunkId || null, version: Number(version) || 1
+    });
+    if (!status.hit && generate !== 'true') {
+      return res.status(404).json({ cached: false, cacheKey: status.cacheKey, voice: status.voice });
+    }
+    const result = await microsoftNeuralTts.synthesizeAudio(text, {
+      language, gender, voice, rate, pitch, sourceChunkId: sourceChunkId || null, version: Number(version) || 1
+    });
+    res.setHeader('Content-Type', result.contentType || 'audio/mpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('X-Voice-Used', result.voice);
+    res.setHeader('X-Cache', result.fromCache ? 'HIT' : 'MISS');
+    return res.end(result.buffer);
+  } catch (error) {
+    res.status(502).json({ error: 'Neural TTS service unavailable', details: error.message });
+  }
+});
+
+router.post('/generate', async (req, res) => {
+  try {
+    const { text, voice, language, gender, rate, pitch, sourceChunkId, version } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: 'Text body field is required.' });
+    }
+    const result = await microsoftNeuralTts.synthesizeAudio(text, {
+      language, gender, voice, rate, pitch, sourceChunkId: sourceChunkId || null, version: Number(version) || 1
+    });
+    res.json({
+      cached: result.fromCache,
+      voice: result.voice,
+      cacheKey: result.cacheKey || null,
+      bytes: result.buffer.length,
+    });
+  } catch (error) {
+    res.status(502).json({ error: 'Neural TTS generation failed', details: error.message });
   }
 });
 

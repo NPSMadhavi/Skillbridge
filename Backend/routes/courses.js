@@ -8,6 +8,7 @@ import prisma, { defaultPrisma } from '../config/prisma.js';
 import masterPrisma from '../config/masterPrisma.js';
 import aiService from '../services/aiService.js';
 import vectorChunkService from '../services/vectorChunkService.js';
+import translationService from '../services/translationService.js';
 import interactiveCourseService from '../services/interactiveCourseService.js';
 import documentExtractor from '../services/documentExtractor.js';
 import { validateDocumentFile, submitDocumentJob, pollDocumentJobResult } from '../services/ubuntuDocumentClient.js';
@@ -1937,6 +1938,118 @@ function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', mat
   return sections.join('\n\n');
 }
 
+// Available languages and cached translation coverage for a course
+router.get('/:id/languages', optionalAuthenticateToken, async (req, res) => {
+  try {
+    const { course, targetPrisma } = await findCourseAcrossTenants(req.params.id, req.prisma || prisma, null);
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+    await vectorChunkService.ensureColumnsExist(targetPrisma);
+    const cachedCounts = await targetPrisma.$queryRawUnsafe(
+      `SELECT "targetLanguage", COUNT(*)::int AS count FROM "ChunkTranslation" WHERE "courseId" = $1 AND "translationStatus" = 'READY' GROUP BY "targetLanguage"`,
+      course.id
+    ).catch(() => []);
+    const supported = ['en', 'te', 'hi', 'ta', 'bn', 'zh', 'ms'].map(code => {
+      const info = resolveLanguageInfo(code);
+      const found = (cachedCounts || []).find(r => r.targetLanguage === code);
+      return { ...info, cachedChunks: found ? Number(found.count) : 0 };
+    });
+    res.json({ courseId: course.id, languages: supported });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch (or generate on demand) chunk-level translations for a single lesson
+router.get('/:id/lessons/:lessonId/translation', optionalAuthenticateToken, async (req, res) => {
+  try {
+    const { course, targetPrisma } = await findCourseAcrossTenants(req.params.id, req.prisma || prisma, null);
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+    const langInfo = resolveLanguageInfo(req.query.language || req.user?.preferredLanguage);
+    const version = Number(req.query.version) || 1;
+    const generate = req.query.generate === 'true';
+    const curr = typeof course.curriculum === 'string' ? JSON.parse(course.curriculum) : (course.curriculum || {});
+    const matchingLesson = (curr.lessons || []).find(l => String(l.id) === String(req.params.lessonId)) || null;
+    if (!generate && langInfo.code !== 'en') {
+      const chunks = await translationService.getLessonChunks(targetPrisma, course.id, matchingLesson, matchingLesson?.title || '');
+      const ids = chunks.map(c => c.id);
+      if (ids.length === 0) return res.json({ language: langInfo, chunks: [], cached: false });
+      const rows = await targetPrisma.$queryRawUnsafe(
+        `SELECT "sourceChunkId", "translatedText", "translationStatus", "translationVersion", "audioCacheKey", "audioUrl"
+         FROM "ChunkTranslation" WHERE "sourceChunkId" = ANY($1::text[]) AND "targetLanguage" = $2 AND "translationVersion" = $3`,
+        ids, langInfo.code, version
+      );
+      return res.json({
+        language: langInfo,
+        chunks: rows || [],
+        translatedText: (rows || []).map(r => r.translatedText).join('\n\n'),
+        cached: (rows || []).length === ids.length && ids.length > 0,
+      });
+    }
+    const result = await translationService.getOrTranslateLesson(targetPrisma, {
+      courseId: course.id,
+      matchingLesson,
+      lessonTitle: matchingLesson?.title || '',
+      targetLanguage: langInfo.code,
+      translationVersion: version,
+    });
+    res.json({
+      language: langInfo,
+      chunks: result?.chunks || [],
+      translatedText: result?.combinedText || '',
+      cached: Boolean(result?.cached),
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch or generate translation for a single source chunk
+router.get('/:id/chunks/:chunkId/translation', optionalAuthenticateToken, async (req, res) => {
+  try {
+    const { course, targetPrisma } = await findCourseAcrossTenants(req.params.id, req.prisma || prisma, null);
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+    const langInfo = resolveLanguageInfo(req.query.language || req.user?.preferredLanguage);
+    const version = Number(req.query.version) || 1;
+    const rows = await targetPrisma.$queryRawUnsafe(
+      `SELECT id, "courseId", "chunkIndex", "chunkText", "topic", "concept" FROM "CourseChunk" WHERE id = $1 AND "courseId" = $2 LIMIT 1`,
+      req.params.chunkId, course.id
+    );
+    if (!rows?.length) return res.status(404).json({ error: 'Chunk not found.' });
+    const tr = await translationService.getOrTranslateChunk(targetPrisma, rows[0], {
+      courseId: course.id,
+      targetLanguage: langInfo.code,
+      translationVersion: version,
+    });
+    res.json(tr);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:id/chunks/:chunkId/translate', optionalAuthenticateToken, async (req, res) => {
+  try {
+    const { course, targetPrisma } = await findCourseAcrossTenants(req.params.id, req.prisma || prisma, null);
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+    const langInfo = resolveLanguageInfo(req.body.language || req.user?.preferredLanguage);
+    const version = Number(req.body.version) || 1;
+    const rows = await targetPrisma.$queryRawUnsafe(
+      `SELECT id, "courseId", "chunkIndex", "chunkText", "topic", "concept" FROM "CourseChunk" WHERE id = $1 AND "courseId" = $2 LIMIT 1`,
+      req.params.chunkId, course.id
+    );
+    if (!rows?.length) return res.status(404).json({ error: 'Chunk not found.' });
+    const tr = await translationService.getOrTranslateChunk(targetPrisma, rows[0], {
+      courseId: course.id,
+      moduleId: req.body.moduleId || null,
+      lessonId: req.body.lessonId || null,
+      targetLanguage: langInfo.code,
+      translationVersion: version,
+    });
+    res.json(tr);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 4. Generate AI concept explanation for a specific lesson/chapter using RAG Vector DB with Database Persistence Cache
 router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (req, res) => {
   const fetchStartTime = Date.now();
@@ -2025,17 +2138,58 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
       }
     }
 
-    // 2. FAST PATH 2: Instant Database Retrieval from CourseChunk table
+    // 2. FAST PATH 2: Chunk-Level Translation & Instant Database Retrieval from CourseChunk / ChunkTranslation
     const ragStartTime = Date.now();
+
+    let translatedLesson = null;
+    if (targetLangInfo.code !== 'en') {
+      try {
+        translatedLesson = await translationService.getOrTranslateLesson(targetPrisma, {
+          courseId: course.id,
+          matchingLesson,
+          lessonTitle: effectiveLessonTitle,
+          targetLanguage: targetLangInfo.code,
+          translationVersion: 1,
+        });
+      } catch (trErr) {
+        console.warn(`[ChunkTranslation] Fallback notice for ${targetLanguage}:`, trErr.message);
+      }
+    }
+
+    if (translatedLesson && translatedLesson.combinedText && textMatchesLanguage(translatedLesson.combinedText, targetLangInfo.code)) {
+      const cleanTranslated = cleanUnsupportedWords(stripSlidePlaceholders(translatedLesson.combinedText));
+      const totalDuration = Date.now() - fetchStartTime;
+      return res.json({
+        explanation: cleanTranslated,
+        spoken_explanation: cleanTranslated,
+        title: stripSlidePlaceholders(effectiveLessonTitle) || effectiveLessonTitle,
+        page_or_slide_number: matchingLesson?.sourceSlides?.[0] || 1,
+        key_points: (matchingLesson?.key_points || []).map(stripSlidePlaceholders),
+        safety_warnings: (matchingLesson?.safety_warnings || []).map(stripSlidePlaceholders),
+        suggested_next_transition: 'Proceed to the next section when ready.',
+        visuals: matchingLesson?.visuals || [],
+        sourceSlides: matchingLesson?.sourceSlides || [],
+        chunks: translatedLesson.chunks.map(c => ({
+          sourceChunkId: c.sourceChunkId,
+          translatedText: c.translatedText,
+          translationStatus: c.translationStatus,
+          translationVersion: c.translationVersion,
+          cached: c.cached,
+        })),
+        language: targetLangInfo,
+        cached: translatedLesson.cached,
+        fetchDurationMs: totalDuration,
+      });
+    }
 
     const storedScript = matchingLesson?.explanation || matchingLesson?.explanations?.en;
     const hasCleanStored = typeof storedScript === 'string' && storedScript.trim().length > 50 && !isRawSlideBulletNoise(storedScript);
     let chunks = [];
     try {
-      chunks = await vectorChunkService.querySimilarChunks(targetPrisma, course.id, lessonTitle, 6, {
+      chunks = await vectorChunkService.querySimilarChunks(targetPrisma, course.id, effectiveLessonTitle, 6, {
         includeNeighbors: true,
-        lessonTitle,
-        topicFilter: lessonTitle
+        lessonTitle: effectiveLessonTitle,
+        topicFilter: effectiveLessonTitle
       });
     } catch (e) {
       const ragDuration = Date.now() - ragStartTime;
@@ -2053,7 +2207,8 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
 
     // Synthesize structured blackboard lesson notes using the AI Teacher Engine
     let explanation;
-    const sourceScript = hasCleanStored ? storedScript : synthesizeLessonFromDbChunks(lessonTitle, chunks, course.title, matchingLesson);
+    let usedMockFallback = false;
+    const sourceScript = hasCleanStored ? storedScript : synthesizeLessonFromDbChunks(effectiveLessonTitle, chunks, course.title, matchingLesson);
 
     let lectureTimer;
     try {
@@ -2071,6 +2226,7 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
       ]);
     } catch (lectureErr) {
       console.warn(`[PERF:LLM_END] AI teacher engine fallback triggered for ${targetLanguage}:`, lectureErr.message);
+      usedMockFallback = targetLangInfo.code !== 'en' || sourceScript.length <= 50;
       explanation = targetLangInfo.code === 'en' && sourceScript.length > 50
         ? sourceScript
         : aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
@@ -2080,37 +2236,41 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
 
     if (explanation && !textMatchesLanguage(explanation, targetLangInfo.code)) {
       console.warn(`[Language Lock] Output was not in ${targetLanguage} (${targetLangInfo.code}). Using native verified translation.`);
-      explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
+      usedMockFallback = true;
+      explanation = aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
     }
 
     if (!explanation || explanation.length < 50) {
-      explanation = aiService._getMockExplanation(lessonTitle, targetLanguage);
+      usedMockFallback = true;
+      explanation = aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
     }
 
     explanation = cleanUnsupportedWords(stripSlidePlaceholders(explanation));
 
-    // 3. PERSISTENCE: Save synthesized explanation into PostgreSQL Course.curriculum for instant future opens
-    try {
-      if (Array.isArray(curriculum.lessons)) {
-        const targetLesson = curriculum.lessons.find(
-          l => String(l.id) === lessonIdStr || l.title === lessonTitle
-        );
-        if (targetLesson) {
-          if (!targetLesson.explanations) targetLesson.explanations = {};
-          if (textMatchesLanguage(explanation, targetLangInfo.code) || targetLangInfo.code === 'en') {
-            targetLesson.explanations[targetLangInfo.code] = explanation;
-            if (targetLangInfo.code === 'en') {
-              targetLesson.explanation = explanation;
+    // 3. PERSISTENCE: Only persist genuine source-grounded explanations (never persist generic mock templates!)
+    if (!usedMockFallback) {
+      try {
+        if (Array.isArray(curriculum.lessons)) {
+          const targetLesson = curriculum.lessons.find(
+            l => String(l.id) === lessonIdStr || l.title === effectiveLessonTitle
+          );
+          if (targetLesson) {
+            if (!targetLesson.explanations) targetLesson.explanations = {};
+            if (textMatchesLanguage(explanation, targetLangInfo.code) || targetLangInfo.code === 'en') {
+              targetLesson.explanations[targetLangInfo.code] = explanation;
+              if (targetLangInfo.code === 'en') {
+                targetLesson.explanation = explanation;
+              }
             }
+            await targetPrisma.course.update({
+              where: { id: course.id },
+              data: { curriculum: curriculum }
+            });
           }
-          await targetPrisma.course.update({
-            where: { id: course.id },
-            data: { curriculum: curriculum }
-          });
         }
+      } catch (persistErr) {
+        console.warn(`[Persisted Cache] Notice on persisting lesson explanation:`, persistErr.message);
       }
-    } catch (persistErr) {
-      console.warn(`[Persisted Cache] Notice on persisting lesson explanation:`, persistErr.message);
     }
 
     const totalDuration = Date.now() - fetchStartTime;

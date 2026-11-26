@@ -37,6 +37,34 @@ export class VectorChunkService {
           ADD COLUMN IF NOT EXISTS "metadata" JSONB,
           ADD COLUMN IF NOT EXISTS "semanticSummary" TEXT;
       `);
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS "ChunkTranslation" (
+          "id" TEXT PRIMARY KEY,
+          "sourceChunkId" TEXT NOT NULL REFERENCES "CourseChunk"("id") ON DELETE CASCADE,
+          "courseId" TEXT NOT NULL REFERENCES "Course"("id") ON DELETE CASCADE,
+          "moduleId" TEXT,
+          "lessonId" TEXT,
+          "sourceLanguage" TEXT NOT NULL DEFAULT 'en',
+          "targetLanguage" TEXT NOT NULL,
+          "translatedText" TEXT NOT NULL,
+          "translationStatus" TEXT NOT NULL DEFAULT 'READY',
+          "translationVersion" INTEGER NOT NULL DEFAULT 1,
+          "audioCacheKey" TEXT,
+          "audioUrl" TEXT,
+          "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT "ChunkTranslation_sourceChunkId_targetLanguage_translationVersion_key"
+            UNIQUE ("sourceChunkId", "targetLanguage", "translationVersion")
+        );
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "ChunkTranslation_course_lesson_lang_idx"
+        ON "ChunkTranslation"("courseId", "lessonId", "targetLanguage");
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "ChunkTranslation_chunk_lang_idx"
+        ON "ChunkTranslation"("sourceChunkId", "targetLanguage");
+      `);
     } catch (err) {
       console.warn('[VectorChunkService] Schema check notice (safe to ignore if table already up to date):', err.message);
     }

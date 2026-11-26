@@ -505,8 +505,18 @@ ${ssmlBody}    </prosody>
   /**
    * Generate cache key
    */
-  _getCacheKey(voice, text, rate, pitch) {
-    return crypto.createHash('sha256').update(`${voice}|${text.trim()}|${rate}|${pitch}`).digest('hex');
+  _getCacheKey(voice, text, rate, pitch, sourceChunkId = null, version = 1) {
+    const prefix = sourceChunkId ? `chunk:${sourceChunkId}:v${version}|` : '';
+    return crypto.createHash('sha256').update(`${prefix}${voice}|${text.trim()}|${rate}|${pitch}`).digest('hex');
+  }
+
+  hasCachedAudio(text, options = {}) {
+    const { language = 'en', gender = 'FEMALE', voice = null, rate = null, pitch = null, sourceChunkId = null, version = 1 } = options;
+    const cleanSpoken = this.prepareTeacherNarration(text, language);
+    const targetVoice = this.resolveVoice(voice, language, gender, cleanSpoken);
+    const prosody = this.calculateProsody({ language, gender, rate, pitch });
+    const cacheKey = this._getCacheKey(targetVoice, cleanSpoken, prosody.rate, prosody.pitch, sourceChunkId, version);
+    return { hit: audioCache.has(cacheKey), cacheKey, voice: targetVoice };
   }
 
   /**
@@ -518,7 +528,9 @@ ${ssmlBody}    </prosody>
       gender = 'FEMALE',
       voice = null,
       rate = null,
-      pitch = null
+      pitch = null,
+      sourceChunkId = null,
+      version = 1
     } = options;
 
     if (!text || !text.trim()) {
@@ -536,7 +548,7 @@ ${ssmlBody}    </prosody>
     console.log(`[TTS Synthesis] Cleaned Narration Preview: "${cleanSpoken.slice(0, 100).replace(/\s+/g, ' ')}${cleanSpoken.length > 100 ? '...' : ''}"`);
 
     // 2. Check LRU memory cache
-    const cacheKey = this._getCacheKey(targetVoice, cleanSpoken, prosody.rate, prosody.pitch);
+    const cacheKey = this._getCacheKey(targetVoice, cleanSpoken, prosody.rate, prosody.pitch, sourceChunkId, version);
     if (audioCache.has(cacheKey)) {
       const cached = audioCache.get(cacheKey);
       console.log(`[TTS Synthesis Cache HIT] Voice: ${targetVoice} | Buffer: ${cached.buffer.length} bytes`);
@@ -544,6 +556,7 @@ ${ssmlBody}    </prosody>
         buffer: cached.buffer,
         contentType: cached.contentType,
         voice: targetVoice,
+        cacheKey,
         fromCache: true
       };
     }

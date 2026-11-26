@@ -260,6 +260,7 @@ const CoursePlayer = ({
   const speechRecognitionLang = SPEECH_LANGUAGES[selectedLanguageCode] || 'en-US'
 
   const explanationRequest = useRef(0)
+  const pendingLangRatioRef = useRef(null)
   const [retryCount, setRetryCount] = useState(0)
   const [explanationError, setExplanationError] = useState(false)
 
@@ -267,12 +268,20 @@ const CoursePlayer = ({
     const langObj = LANGUAGES.find(l => l.value === newLangCode) || LANGUAGES[0]
     if (langObj.value === selectedLanguageCode) return
     explanationRequest.current++
+
+    // Preserve logical playback position across language switches
+    const totalPrev = Array.isArray(sentences) && sentences.length > 0 ? sentences.length : 1
+    pendingLangRatioRef.current = {
+      lessonId: activeLessonId,
+      ratio: Math.min(1, Math.max(0, (currentSentenceIdxRef.current || 0) / totalPrev)),
+      elapsed: elapsedSecondsRef.current || 0,
+    }
+
     setSelectedLanguageCode(langObj.value)
     ttsUtterancePool.clear()
-    lessonExplanationClientCache.clear()
     persistLanguageSelection(langObj.value)
 
-    // Halt playback and remain cleanly paused on language switch
+    // Halt stale audio playback immediately without clearing the visible lesson or resetting position
     playingRef.current = false;
     setPlaying(false);
     setIsAriaSpeaking(false);
@@ -302,13 +311,7 @@ const CoursePlayer = ({
       window.speechSynthesis.cancel();
       preloadedAudioMap.current.clear();
     } catch (e) { }
-    setCurrentSentenceIdx(0)
-    currentSentenceIdxRef.current = 0
-    setElapsedSeconds(0)
-    elapsedSecondsRef.current = 0
-    setExplanation('')
     setExplanationError(false)
-    setPipelineState('PREPARING')
 
     setChatMessages((prev) => {
       if (prev.length <= 1) {
@@ -2022,18 +2025,35 @@ const CoursePlayer = ({
         lessonExplanationClientCache.delete(cacheKey);
       }
 
+      const applyLogicalPosition = (scriptText) => {
+        const pending = pendingLangRatioRef.current;
+        if (pending && String(pending.lessonId) === String(activeLesson.id)) {
+          const newSents = String(scriptText || '').split(/[\r\n]+|(?<=[.!?।。！？])\s+/).filter(s => s.trim().length > 2);
+          const mappedIdx = newSents.length > 0 ? Math.min(newSents.length - 1, Math.round(pending.ratio * newSents.length)) : 0;
+          setCurrentSentenceIdx(mappedIdx);
+          currentSentenceIdxRef.current = mappedIdx;
+          setElapsedSeconds(pending.elapsed || 0);
+          elapsedSecondsRef.current = pending.elapsed || 0;
+          pendingLangRatioRef.current = null;
+        }
+      };
+
       if (immediateScript) {
         setExplanation(immediateScript);
+        applyLogicalPosition(immediateScript);
         setLessonVisuals(activeLesson.visuals || []);
         setLoadingExplanation(false);
         setPipelineState('READY');
         return;
       }
 
-      // 3. Fallback: Fetch from backend (which checks PostgreSQL Course.curriculum cache before RAG)
-      setLoadingExplanation(true);
-      setPipelineState('PREPARING');
-      setExplanation('');
+      // 3. Fallback: Fetch from backend (ChunkTranslation cache before on-demand chunk translation)
+      const isLangSwitch = Boolean(pendingLangRatioRef.current && String(pendingLangRatioRef.current.lessonId) === String(activeLesson.id));
+      setLoadingExplanation(!isLangSwitch);
+      if (!isLangSwitch) {
+        setPipelineState('PREPARING');
+        setExplanation('');
+      }
       setLessonVisuals(activeLesson.visuals || []);
 
       const controller = new AbortController();
@@ -2049,6 +2069,7 @@ const CoursePlayer = ({
           if (script) {
             lessonExplanationClientCache.set(cacheKey, script);
             setExplanation(script);
+            applyLogicalPosition(script);
           }
           if (res.page_or_slide_number && res.page_or_slide_number !== currentPageNum) {
             setCurrentPageNum(res.page_or_slide_number);
@@ -3594,10 +3615,10 @@ const CoursePlayer = ({
                         </button>
                       </div>
                     )}
-                    {loadingExplanation && (
+                    {loadingExplanation && !explanation && (
                       <div className="absolute top-2 left-2 right-2 z-30 bg-slate-900/90 border border-[#ff8c21]/40 backdrop-blur-md rounded-xl px-3 py-1.5 flex items-center gap-2 text-xs text-[#ff8c21] shadow-lg animate-fadeIn">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-[#ff8c21]/20 border-t-[#ff8c21]" />
-                        <span className="font-semibold text-[11px]">Preparing this lesson in {currentLangObj.native}...</span>
+                        <span className="font-semibold text-[11px]">Loading lesson content...</span>
                       </div>
                     )}
 

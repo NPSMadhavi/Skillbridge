@@ -86,6 +86,31 @@ CREATE INDEX IF NOT EXISTS "CourseChunk_courseId_idx" ON "CourseChunk"("courseId
 CREATE INDEX IF NOT EXISTS "CourseChunk_topic_idx" ON "CourseChunk"("topic");
 CREATE INDEX IF NOT EXISTS "CourseChunk_concept_idx" ON "CourseChunk"("concept");
 
+-- ChunkTranslation Table (Chunk-Level Multilingual Cache)
+CREATE TABLE IF NOT EXISTS "ChunkTranslation" (
+    "id" TEXT PRIMARY KEY,
+    "sourceChunkId" TEXT NOT NULL REFERENCES "CourseChunk"("id") ON DELETE CASCADE,
+    "courseId" TEXT NOT NULL REFERENCES "Course"("id") ON DELETE CASCADE,
+    "moduleId" TEXT,
+    "lessonId" TEXT,
+    "sourceLanguage" TEXT NOT NULL DEFAULT 'en',
+    "targetLanguage" TEXT NOT NULL,
+    "translatedText" TEXT NOT NULL,
+    "translationStatus" TEXT NOT NULL DEFAULT 'READY',
+    "translationVersion" INTEGER NOT NULL DEFAULT 1,
+    "audioCacheKey" TEXT,
+    "audioUrl" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "ChunkTranslation_sourceChunkId_targetLanguage_translationVersion_key"
+      UNIQUE ("sourceChunkId", "targetLanguage", "translationVersion")
+);
+
+CREATE INDEX IF NOT EXISTS "ChunkTranslation_course_lesson_lang_idx"
+  ON "ChunkTranslation"("courseId", "lessonId", "targetLanguage");
+CREATE INDEX IF NOT EXISTS "ChunkTranslation_chunk_lang_idx"
+  ON "ChunkTranslation"("sourceChunkId", "targetLanguage");
+
 -- HNSW Vector Index for Cosine Similarity Search
 CREATE INDEX IF NOT EXISTS "CourseChunk_embedding_hnsw_idx" 
 ON "CourseChunk" USING hnsw ("embedding" vector_cosine_ops);

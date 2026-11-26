@@ -62,6 +62,7 @@ model Course {
   createdAt    DateTime               @default(now())
   updatedAt    DateTime               @updatedAt
   chunks       CourseChunk[]
+  translations ChunkTranslation[]
   assignments  UserCourseAssignment[]
 }
 
@@ -85,9 +86,34 @@ model CourseChunk {
   embedding       Unsupported("vector(768)")?
   createdAt       DateTime @default(now())
 
-  course          Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  course          Course             @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  translations    ChunkTranslation[]
 
   @@index([courseId])
+}
+
+model ChunkTranslation {
+  id                 String   @id @default(uuid())
+  sourceChunkId      String
+  courseId           String
+  moduleId           String?
+  lessonId           String?
+  sourceLanguage     String   @default("en")
+  targetLanguage     String
+  translatedText     String   @db.Text
+  translationStatus  String   @default("READY")
+  translationVersion Int      @default(1)
+  audioCacheKey      String?
+  audioUrl           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  sourceChunk        CourseChunk @relation(fields: [sourceChunkId], references: [id], onDelete: Cascade)
+  course             Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceChunkId, targetLanguage, translationVersion])
+  @@index([courseId, lessonId, targetLanguage])
+  @@index([sourceChunkId, targetLanguage])
 }
 
 model UserCourseAssignment {
