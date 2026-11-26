@@ -11,7 +11,7 @@
 
 import { stripSlidePlaceholders, cleanUnsupportedWords, healBrokenBullets, validateCleanedContent } from '../utils/contentQuality.js';
 import aiService from './aiService.js';
-import { detectDominantScript } from '../utils/language.js';
+import { detectDominantScript, resolveLanguageInfo } from '../utils/language.js';
 import microsoftNeuralTts, { VOICE_CONFIG, PRONUNCIATION_DICTIONARY } from './microsoftNeuralTtsService.js';
 
 export class InteractiveCourseService {
@@ -98,42 +98,28 @@ export class InteractiveCourseService {
       targetWpm = 135
     } = options;
 
+    const langInfo = resolveLanguageInfo(language);
     const { cleanedText } = this.cleanAndHealContent(sourceContent);
-    const effectiveSource = cleanedText || stripSlidePlaceholders(sourceContent);
+    const effectiveSource = (cleanedText || stripSlidePlaceholders(sourceContent)).slice(0, 2500);
 
-    const langInstruction = language && language !== 'en'
-      ? `\nIMPORTANT: Deliver your entire teaching lecture fluently in the requested language (code: "${language}"). Use natural native phrasing, not literal machine translation.`
+    const langInstruction = langInfo.code !== 'en'
+      ? `\nCRITICAL LANGUAGE REQUIREMENT: Deliver your entire teaching lecture fluently in ${langInfo.name}. Write all explanations, headings, and takeaways in ${langInfo.name} (preserving only standard acronyms like PPE or 5S where appropriate).`
       : '';
 
     const systemPrompt = `/no_think
-You are ${aiTutorName}, a passionate, highly experienced master teacher delivering an interactive classroom lesson.
+You are ${aiTutorName}, an experienced workplace safety and operations instructor delivering an interactive classroom lesson.
 The course is: "${courseTitle}".
 The current lesson is: "${lessonTitle}".
 ${previousConcept ? `Previous lesson concept: "${previousConcept}".` : ''}${langInstruction}
 
-TEACHING PHILOSOPHY & OBJECTIVES:
-1. DO NOT simply read the text or slide bullets word-for-word.
-2. Teach like an expert human instructor explaining ideas patiently to students in a real classroom.
-3. STRUCTURE YOUR LESSON:
-   - Warm Introduction: Hook the student's interest and explain why this topic matters in the real world.
-   - Core Meaning: What the concept actually means in simple, intuitive terms.
-   - Why It Matters: Real-world consequences, safety risks, and operational value.
-   - How It Works & Step-by-Step Procedure: Actionable, sequential walkthrough.
-   - Practical Workplace Scenario: A concrete example or case study showing it in practice.
-   - Common Pitfalls & Mistakes: What inexperienced personnel often get wrong and how to avoid it.
-   - Connection: How this connects with previous or upcoming lessons.
-   - Key Takeaways: 2-3 concise summary rules to remember.
-   - Understanding Check: 1 thought-provoking check question for the learner.
-4. SPEAKING STYLE:
-   - Natural conversational transitions (e.g. "Now, you might wonder...", "Notice how...", "A critical rule to always keep in mind is...").
-   - Clear, measured pacing (~${targetWpm} words per minute).
-   - Warm, confident, encouraging, and articulate.
-   - Never sound robotic, monotonic, or like an audio-book reader.
-   - Never output OCR tags, slide headers/footers, or visual descriptions.
+TEACHING GUIDELINES:
+1. Teach strictly from the provided source material for "${lessonTitle}" — do NOT invent unrelated topics.
+2. Keep the lecture concise: 3 to 4 clear, natural sentences (~70–110 words total) covering the core rule, workplace reason, and key safety/operational takeaway from the source material.
+3. Warm, encouraging, conversational tone (~${targetWpm} WPM). Never output OCR tags or slide headers.
 
-Return your response in clean Markdown.`;
+Return clean Markdown.`;
 
-    const userPrompt = `Source material for lesson "${lessonTitle}":\n\n${effectiveSource}\n\nPlease deliver the complete classroom lecture for this lesson now.`;
+    const userPrompt = `Source material for lesson "${lessonTitle}":\n\n${effectiveSource}\n\nDeliver the concise classroom lecture in ${langInfo.name} now:`;
 
     const lectureStart = Date.now();
     let lecture = await aiService._callLLM(systemPrompt, userPrompt, false, [], options);

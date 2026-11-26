@@ -55,13 +55,15 @@ export function detectDominantScript(text) {
 
 export function textMatchesLanguage(text, languageCode) {
   if (!text || String(text).trim().length < 20) return false;
+  const sample = String(text);
   const requested = resolveLanguageInfo(languageCode).code;
-  const detected = detectDominantScript(text);
+  const detected = detectDominantScript(sample);
 
-  if (requested === 'bn') return detected === 'bn';
-  if (requested === 'ta') return detected === 'ta';
-  if (requested === 'te') return detected === 'te';
-  if (requested === 'zh') return detected === 'zh';
+  // For non-Latin scripts, accept if >= 20 target-script characters are present even if English technical acronyms (e.g. PPE, 5S) appear
+  if (requested === 'bn') return detected === 'bn' || (sample.match(/[\u0980-\u09FF]/g) || []).length >= 20;
+  if (requested === 'ta') return detected === 'ta' || (sample.match(/[\u0B80-\u0BFF]/g) || []).length >= 20;
+  if (requested === 'te') return detected === 'te' || (sample.match(/[\u0C00-\u0C7F]/g) || []).length >= 20;
+  if (requested === 'zh') return detected === 'zh' || (sample.match(/[\u4E00-\u9FFF]/g) || []).length >= 20;
   // English / Malay are Latin; reject if Bangla, Tamil, Telugu, or Chinese dominate the script
   return detected === 'en' || detected === 'ms';
 }

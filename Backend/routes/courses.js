@@ -1951,20 +1951,22 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     let lectureTimer;
     try {
       const timeoutPromise = new Promise((_, reject) => {
-        lectureTimer = setTimeout(() => reject(new Error('Teacher lecture generation timeout (25s)')), 25000);
+        lectureTimer = setTimeout(() => reject(new Error('Teacher lecture generation timeout (50s)')), 50000);
       });
       explanation = await Promise.race([
         interactiveCourseService.generateTeacherLecture(effectiveLessonTitle, course.title, sourceScript, {
           language: targetLangInfo.code,
           targetWpm: 130,
           signal: req.abortController?.signal,
-          timeoutMs: 25000
+          timeoutMs: 50000
         }),
         timeoutPromise
       ]);
     } catch (lectureErr) {
       console.warn(`[PERF:LLM_END] AI teacher engine fallback triggered for ${targetLanguage}:`, lectureErr.message);
-      explanation = aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
+      explanation = targetLangInfo.code === 'en' && sourceScript.length > 50
+        ? sourceScript
+        : aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
     } finally {
       if (lectureTimer) clearTimeout(lectureTimer);
     }
@@ -2146,7 +2148,7 @@ router.post('/:id/page/:pageNum/explain', optionalAuthenticateToken, async (req,
     let pageTimer;
     try {
       const timeoutPromise = new Promise((_, reject) => {
-        pageTimer = setTimeout(() => reject(new Error('LLM slide explanation timeout (15s)')), 15000);
+        pageTimer = setTimeout(() => reject(new Error('LLM slide explanation timeout (45s)')), 45000);
       });
       structured = await Promise.race([
         aiService.explainVisibleContent({
@@ -2157,14 +2159,15 @@ router.post('/:id/page/:pageNum/explain', optionalAuthenticateToken, async (req,
           visuals
         }, course.title, targetLangInfo.name, {
           signal: req.abortController?.signal,
-          timeoutMs: 15000
+          timeoutMs: 45000
         }),
         timeoutPromise
       ]);
     } catch (llmErr) {
       console.warn(`[ExplainPage] LLM notice for slide ${pageNum} (${targetLangInfo.name}):`, llmErr.message);
-      // Fallback to structured teaching text
-      const fallbackText = aiService._getMockExplanation(title, targetLangInfo.name);
+      const fallbackText = targetLangInfo.code === 'en' && cleanFullContent.length > 30
+        ? cleanFullContent
+        : aiService._getMockExplanation(title, targetLangInfo.name);
       structured = {
         page_or_slide_number: pageNum,
         title: stripSlidePlaceholders(title) || `Slide ${pageNum}`,

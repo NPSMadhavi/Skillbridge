@@ -221,8 +221,8 @@ class PythonService {
    * @returns {Promise<{matched: boolean, user_id: string|null, id: string|null, confidence: number, serviceUnavailable?: boolean}>}
    */
   async verifyFace(queryImage, candidates) {
-    const singleImage = Array.isArray(queryImage) ? queryImage[0] : (queryImage || '');
-    if (!singleImage) {
+    const frames = Array.isArray(queryImage) ? queryImage.filter(Boolean) : (queryImage ? [queryImage] : []);
+    if (frames.length === 0) {
       return {
         matched: false,
         id: null,
@@ -247,11 +247,21 @@ class PythonService {
       };
     }
 
-    // 1. Extract live query embedding from camera capture via Central AI Gateway
-    let queryEmbedding;
-    try {
-      queryEmbedding = await extractFaceEmbedding(singleImage);
-    } catch (error) {
+    // 1. Extract live query embedding from camera burst via Central AI Gateway (try each frame if one is blurry)
+    let queryEmbedding = null;
+    let lastExtractError = null;
+    for (const frame of frames) {
+      try {
+        queryEmbedding = await extractFaceEmbedding(frame);
+        if (Array.isArray(queryEmbedding) && queryEmbedding.length > 0) break;
+      } catch (error) {
+        lastExtractError = error;
+        if (error.isAuthError || error.status === 401) break;
+      }
+    }
+
+    if (!queryEmbedding) {
+      const error = lastExtractError || new Error('No face detected in camera capture.');
       console.warn('[FaceID] Query embedding extraction error:', error.message);
       if (error.isAuthError || error.status === 401) {
         return {
