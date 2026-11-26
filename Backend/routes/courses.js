@@ -208,10 +208,14 @@ async function processCourseDocumentInBackground({
       }
     }
 
+    const fileStem = fileObj.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().toLowerCase();
+    const isGenericUserDesc = !description || description.trim().length < 40 || description.trim().toLowerCase() === fileStem;
+    const resolvedDescription = (isGenericUserDesc && baseCurriculum.description) ? baseCurriculum.description : description;
+
     const finalCurriculum = {
       ...baseCurriculum,
       title,
-      description,
+      description: resolvedDescription,
       fileType: doc.fileType || fileType,
       fileName: fileObj.originalname,
       ubuntuJobId: ubuntuJob?.job_id || null,
@@ -225,6 +229,7 @@ async function processCourseDocumentInBackground({
     await targetPrisma.course.update({
       where: { id: courseId },
       data: {
+        description: resolvedDescription,
         fileText: doc.text || '',
         curriculum: finalCurriculum,
       },
@@ -304,8 +309,12 @@ async function processCourseDocumentInBackground({
         fallbackCurriculum = aiService._getMockCourse(fileObj.originalname, textContent, docResult);
       }
 
+      const fileStemFb = fileObj.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().toLowerCase();
+      const isGenericFbDesc = !description || description.trim().length < 40 || description.trim().toLowerCase() === fileStemFb;
+      const resolvedFbDescription = (isGenericFbDesc && fallbackCurriculum.description) ? fallbackCurriculum.description : description;
+
       fallbackCurriculum.title = title;
-      fallbackCurriculum.description = description;
+      fallbackCurriculum.description = resolvedFbDescription;
       fallbackCurriculum.fileType = docFileType || fileType;
       fallbackCurriculum.fileName = fileObj.originalname;
       fallbackCurriculum.ubuntuJobId = null;
@@ -320,6 +329,7 @@ async function processCourseDocumentInBackground({
       await targetPrisma.course.update({
         where: { id: courseId },
         data: {
+          description: resolvedFbDescription,
           fileText: textContent || '',
           curriculum: fallbackCurriculum,
         },
@@ -1019,6 +1029,31 @@ export function synchronizeCurriculumStructure(curriculum, courseTitle = 'Course
       });
     });
     rawModules = Array.from(moduleMap.values());
+    curriculum.curriculum = rawModules;
+  }
+  // 1b. If modules exist but any module has a non-array or empty lessons field, populate from rawLessons and drop empty orphans
+  else if (rawModules.length > 0 && rawLessons.length > 0) {
+    rawModules = rawModules
+      .map((m, mIdx) => {
+        if (Array.isArray(m.lessons) && m.lessons.length > 0) return m;
+        const mId = m.id || `mod_${mIdx + 1}`;
+        const mTitle = String(m.title || '').trim().toLowerCase();
+        const matched = rawLessons.filter(l => {
+          const lModId = l.moduleId ? String(l.moduleId) : '';
+          const lModTitle = String(l.moduleTitle || l.chapterTitle || '').trim().toLowerCase();
+          return (lModId && (lModId === String(mId) || lModId === String(mIdx + 1))) || (mTitle && lModTitle === mTitle);
+        });
+        return {
+          ...m,
+          id: mId,
+          lessons: matched.map((l, idx) => ({
+            id: l.id || idx + 1,
+            title: cleanUnsupportedWords(l.title, `Lesson ${idx + 1}`),
+            duration: l.duration || '02:30'
+          }))
+        };
+      })
+      .filter(m => Array.isArray(m.lessons) && m.lessons.length > 0);
     curriculum.curriculum = rawModules;
   }
   // 2. If modules exist but lessons are empty, extract lessons from modules

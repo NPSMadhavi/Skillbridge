@@ -118,11 +118,12 @@ export function firstUsefulTitleLine(text) {
   const lines = String(text || '').split(/\n+/);
   for (const raw of lines) {
     const line = raw.replace(/^(?:[#\-*•]+|\d+[.)\s-]+)\s*/, '').trim();
-    if (line.length < 5 || line.length > 80) continue;
+    const isShortAcronym = /^[A-Z]{2,6}(?:\s*[:\-]\s*.*)?$/.test(line);
+    if (!isShortAcronym && (line.length < 5 || line.length > 85)) continue;
     if ((line.match(/\|/g) || []).length >= 2) continue;
-    if (isGarbageTitle(line) || isPlaceholderTitle(line) || isBinaryNoiseText(line)) continue;
+    if (isGarbageTitle(line) || isPlaceholderTitle(line) || (!isShortAcronym && isBinaryNoiseText(line))) continue;
     const words = line.split(/\s+/).filter(Boolean);
-    if (words.length < 2) continue;
+    if (!isShortAcronym && words.length < 2) continue;
     return line;
   }
   return '';

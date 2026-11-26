@@ -729,15 +729,16 @@ Deliver your instructional lecture for this slide.`;
       if (!moduleKey.has(moduleTitle)) {
         moduleKey.set(moduleTitle, modulesMap.length + 1);
         modulesMap.push({
+          id: `mod_${modulesMap.length + 1}`,
           title: moduleTitle,
-          lessons: 0,
+          description: '',
+          lessons: [],
           duration: '0m',
           totalSecs: 0,
           locked: modulesMap.length > 0
         });
       }
       const modId = moduleKey.get(moduleTitle);
-      modulesMap[modId - 1].lessons += 1;
 
       const sourceSlides = Array.isArray(l.sourceSlides)
         ? l.sourceSlides.map(n => Number(n)).filter(n => Number.isFinite(n) && n > 0)
@@ -753,6 +754,11 @@ Deliver your instructional lecture for this slide.`;
       const lessonSecs = parts.length === 2 ? parts[0] * 60 + parts[1] : (parseInt(duration, 10) || 120);
       modulesMap[modId - 1].totalSecs += lessonSecs;
       modulesMap[modId - 1].duration = `${Math.max(1, Math.round(modulesMap[modId - 1].totalSecs / 60))}m`;
+      modulesMap[modId - 1].lessons.push({
+        id: idx + 1,
+        title: l.title,
+        duration
+      });
 
       return {
         ...l,
@@ -783,13 +789,24 @@ Deliver your instructional lecture for this slide.`;
         duration: '02:30',
         status: 'active'
       });
-      modulesMap.push({ title: formattedTitle, lessons: 1, duration: '3m', locked: false });
+      modulesMap.push({
+        id: 'mod_1',
+        title: formattedTitle,
+        lessons: [{ id: 1, title: `${formattedTitle} Core Training`, duration: '02:30' }],
+        duration: '3m',
+        locked: false
+      });
     }
 
+    const modTitles = modulesMap.map(m => m.title).filter(Boolean);
+    const contentDesc = modTitles.length > 0
+      ? `Covers ${modulesMap.length} modules and ${normalized.length} lessons including ${modTitles.slice(0, 4).join(', ')}${modTitles.length > 4 ? ', and more' : ''}.`
+      : `Structured course covering ${formattedTitle}.`;
+
     return {
-      title: `${formattedTitle} Training Program`,
-      description: `Training program covering the actual topics in ${formattedTitle}.`,
-      learning: normalized.slice(0, 4).map(l => `Understand and apply: ${l.title}`),
+      title: modTitles[0] && modTitles[0].length >= 8 ? modTitles[0] : `${formattedTitle} Training Program`,
+      description: contentDesc,
+      learning: modulesMap.slice(0, 8).map(m => `Understand and apply: ${m.title}`),
       includes: [
         'Interactive ARIA AI Avatar Tutoring',
         `${normalized.length} training lessons`,
@@ -1929,7 +1946,9 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
     const standaloneSubheadingRe = /^(?:definition|definitions|advantage|advantages|disadvantage|disadvantages|benefit|benefits|limitation|limitations|drawback|drawbacks|example|examples|syntax|properties|characteristics|features|applications|summary|conclusion|note|notes|output|input|algorithm|pseudocode|working|architecture|components|types)[:\s]*$/i;
     const danglingEndRe = /(?:,|\b(?:for|and|or|of|to|in|on|with|from|by|as|the|a|an|that|which|is|are|was|were|into|using))$/i;
     const isValidLessonHeading = (cand) => {
-      if (!cand || cand.length < 4 || cand.length > 85) return false;
+      if (!cand) return false;
+      const isShortAcronym = /^[A-Z]{2,6}(?:\s*[:\-]\s*.*)?$/.test(cand);
+      if (!isShortAcronym && (cand.length < 4 || cand.length > 85)) return false;
       if (/^[a-z]/.test(cand)) return false;
       if (standaloneSubheadingRe.test(cand) || danglingEndRe.test(cand)) return false;
       if (isGarbageTitle(cand)) return false;
@@ -2038,8 +2057,10 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
           return acc + (parts.length === 2 ? parts[0] * 60 + parts[1] : 120);
         }, 0);
         modules.push({
+          id: `mod_${modId}`,
           title: modTitle,
-          lessons: modLessons.length,
+          description: `Covers ${modLessons.map(l => l.title).slice(0, 3).join(', ')}`,
+          lessons: modLessons.map(l => ({ id: l.id, title: l.title, duration: l.duration })),
           duration: `${Math.max(1, Math.round(modSecs / 60))}m`,
           locked: modId > 1
         });
@@ -2074,17 +2095,23 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
         status: 'active'
       });
       modules.push({
+        id: 'mod_1',
         title: formattedTitle,
-        lessons: 1,
+        lessons: [{ id: 1, title: `${formattedTitle} Core Training`, duration: '02:30' }],
         duration: '3m',
         locked: false
       });
     }
 
+    const modTitles = modules.map(m => m.title).filter(Boolean);
+    const contentDesc = modTitles.length > 0
+      ? `Covers ${modules.length} modules and ${flatLessons.length} lessons including ${modTitles.slice(0, 4).join(', ')}${modTitles.length > 4 ? ', and more' : ''}.`
+      : `Structured course covering ${formattedTitle}.`;
+
     return {
-      title: `${formattedTitle} Training Program`,
-      description: `Comprehensive training program covering all operational requirements and safety procedures for ${formattedTitle}.`,
-      learning: flatLessons.slice(0, 4).map(l => `Master key protocols for ${l.title}`),
+      title: modTitles[0] && modTitles[0].length >= 8 ? modTitles[0] : `${formattedTitle} Training Program`,
+      description: contentDesc,
+      learning: modules.slice(0, 8).map(m => `Understand and apply: ${m.title}`),
       includes: [
         'Interactive ARIA AI Avatar Tutoring',
         `${flatLessons.length} in-depth training lessons`,
