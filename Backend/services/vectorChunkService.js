@@ -300,20 +300,21 @@ export class VectorChunkService {
             }
 
             const concept = targetChunk.concept || lesson.title;
-            const topic = targetChunk.topic || lesson.chapterTitle || courseRecord.title;
             const slides = targetChunk.sourceSlides || lesson.sourceSlides;
 
-            let cleanText = stripSlidePlaceholders(targetChunk.chunkText || '')
+            let cleanText = String(targetChunk.chunkText || '')
+              .replace(/^###\s*📌?\s*Concept:[^\n]*\n?/gim, '')
+              .replace(/^\*\*Topic:\*\*[^\n]*\n?/gim, '')
+              .replace(/^Topic:[^\n]*\n?/gim, '')
+              .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
+              .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '');
+            cleanText = stripSlidePlaceholders(cleanText)
               .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
               .replace(/Slide\s*\d+:?\s*---*/gi, '')
               .replace(/Slide\s*\d+:\s*/gi, '')
-              .replace(/^###[^\n]+\n/g, '')
-              .replace(/^\*\*Topic:[^\n]+\n/g, '')
-              .replace(/\*?\(Source:[^\)]*\)\*?/gi, '')
-              .replace(/\*?\(Reference:[^\)]*\)\*?/gi, '')
               .trim();
 
-            // Rejoin fragmented lines into complete sentences
+            // Rejoin fragmented lines into complete sentences and deduplicate consecutive/repeated blocks
             const rawLines = cleanText.split('\n')
               .map(l => stripSlidePlaceholders(l.trim()))
               .filter(l => l && !isBinaryNoiseText(l));
@@ -334,7 +335,15 @@ export class VectorChunkService {
               }
             }
             if (buffer && !isBinaryNoiseText(buffer)) cleanBlocks.push(buffer);
-            const cleanContentText = cleanUnsupportedWords(cleanBlocks.join('\n\n'));
+
+            const seenBlocks = new Set();
+            const uniqueBlocks = cleanBlocks.filter(b => {
+              const key = b.toLowerCase().replace(/\s+/g, ' ').trim();
+              if (!key || seenBlocks.has(key)) return false;
+              seenBlocks.add(key);
+              return true;
+            });
+            const cleanContentText = cleanUnsupportedWords(uniqueBlocks.join('\n\n'));
 
             let keyPoints = targetChunk.keyPoints || [];
             if (typeof keyPoints === 'string') {
@@ -344,28 +353,29 @@ export class VectorChunkService {
               .map(kp => cleanUnsupportedWords(stripSlidePlaceholders(String(kp).replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '').replace(/Slide\s*\d+:\s*/gi, '').trim())))
               .filter(kp => kp.length > 5 && !isBinaryNoiseText(kp));
 
-            const sections = [];
+            if (keyPoints.length === 0 && uniqueBlocks.length > 0) {
+              keyPoints = uniqueBlocks.slice(0, 6);
+            }
+
+            const safetyRegex = /\b(do not|don't|warning|caution|hazard|danger|prohibited|beware|blind spot|choke|lock|off engine|exclusion|damaged|limit|horn|safety|ppe|helmet|vest|emergency|report)\b/i;
+            const safetyWarnings = [...new Set(
+              [...keyPoints, ...uniqueBlocks].filter(item => safetyRegex.test(item))
+            )].slice(0, 5);
+
             let summary = cleanUnsupportedWords(stripSlidePlaceholders(targetChunk.semanticSummary || `In this module, we focus on the core principles, operational requirements, and safety protocols for ${concept}.`))
               .replace(/---+\s*Slide\s*\d+[^-\n]*---*/gi, '')
               .replace(/Slide\s*\d+:\s*/gi, '')
               .replace(/\s+/g, ' ')
               .trim();
-
-            sections.push(`### 💡 ${concept}\n${summary}`);
-
-            if (cleanContentText && cleanContentText.length > 15) {
-              sections.push(`#### 🎯 Operational Standards & Instructions\n${cleanContentText}`);
+            if (summary.length > 220) {
+              const sliced = summary.slice(0, 220);
+              const lastSpace = sliced.lastIndexOf(' ');
+              summary = (lastSpace > 110 ? sliced.slice(0, lastSpace) : sliced).trim() + '...';
             }
 
-            if (Array.isArray(keyPoints) && keyPoints.length > 0) {
-              sections.push(`#### 📋 Key Action Items & Protocols\n${keyPoints.map(kp => `- ${kp}`).join('\n')}`);
-            }
-
-            sections.push(`#### ⚠️ Practical Compliance & Warnings\n- Implement ${concept} procedures strictly as outlined in the operational manual.\n- Verify workplace condition and inspect relevant equipment before commencing tasks.\n- Immediately report any hazards, deviations, or damaged equipment.`);
-
-            sections.push(`#### 📌 Key Takeaways\n- **Discipline & Safety:** Consistent execution of ${concept} prevents incidents and maintains high operational standards.\n- **Quality & Habit:** Master this standard to build safe, repeatable daily practices.`);
-
-            const expText = sections.join('\n\n');
+            const expText = (cleanContentText && cleanContentText.length > 15)
+              ? `### ${concept}\n${cleanContentText}`
+              : `### ${concept}\n${summary}`;
             const sourceLang = detectDominantScript(expText);
             const explanations = { ...(lesson.explanations || {}) };
             explanations[sourceLang] = expText;
@@ -382,6 +392,8 @@ export class VectorChunkService {
               title: lesson.title === 'undefined' ? concept : lesson.title,
               sourceSlides: Array.isArray(slides) && slides.length > 0 ? slides : lesson.sourceSlides,
               duration: dynamicDuration,
+              key_points: keyPoints,
+              safety_warnings: safetyWarnings,
               explanation: sourceLang === 'en' ? expText : lesson.explanation,
               explanations
             };

@@ -1407,6 +1407,14 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
     const isPpt = fileType === 'pptx' || fileType === 'ppt' || slides.length > 0;
     const generatedChunks = [];
 
+    const cleanSummary = (text, maxLen = 220) => {
+      const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+      if (normalized.length <= maxLen) return normalized;
+      const sliced = normalized.slice(0, maxLen);
+      const lastSpace = sliced.lastIndexOf(' ');
+      return (lastSpace > maxLen * 0.5 ? sliced.slice(0, lastSpace) : sliced).trim() + '...';
+    };
+
     // 1. PPT/PPTX Structural Chunking — cluster related slides granularly (1-2 slides per chunk)
     if (isPpt && slides.length > 0) {
       // If curriculum with lessons is available, align chunks 1:1 with lessons so every lesson has its exact matching chunk
@@ -1439,7 +1447,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
             keyPoints,
             relatedConcepts: [],
             visuals,
-            semanticSummary: body.slice(0, 220).replace(/\n/g, ' '),
+            semanticSummary: cleanSummary(body, 220),
             chunkText: `### 📌 Concept: ${concept}\n**Topic:** ${topic}\n\n${body}\n\n*(Source: Slides ${sns.join(', ')})*`
           });
         }
@@ -1472,7 +1480,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
           keyPoints: group.flatMap(s => s.bulletPoints || []).slice(0, 5).map(b => String(b).replace(/^[\s\-\*]+/, '')),
           relatedConcepts: [],
           visuals: group.flatMap(s => s.images || []),
-          semanticSummary: body.slice(0, 220).replace(/\n/g, ' '),
+          semanticSummary: cleanSummary(body, 220),
           chunkText: `### 📌 Concept: ${concept}\n**Topic:** ${cleanFileName}\n\n${body}\n\n*(Source: Slides ${slideNums.join(', ')})*`
         });
       }
@@ -1505,7 +1513,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
           prerequisites: null,
           keyPoints: [],
           relatedConcepts: [],
-          semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+          semanticSummary: cleanSummary(chunkContent, 200),
           chunkText: `### 📌 Concept: ${concept}\n**Topic:** ${cleanFileName}\n\n${chunkContent}\n\n*(Source: Page ${sourcePage}${clusterPages.length > 1 ? `-${clusterPages[clusterPages.length - 1]}` : ''} - ${concept})*`
         });
         cluster = [];
@@ -1572,7 +1580,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
             prerequisites: null,
             keyPoints: [],
             relatedConcepts: [],
-            semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+            semanticSummary: cleanSummary(chunkContent, 200),
             chunkText: `### 📌 Concept: ${currentConcept}\n**Topic:** ${currentTopic}\n\n${chunkContent}\n\n*(Source: Page ${currentSourcePage} - ${currentConcept})*`
           });
           accumulatedParas = [];
@@ -1601,7 +1609,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
           prerequisites: null,
           keyPoints: [],
           relatedConcepts: [],
-          semanticSummary: chunkContent.slice(0, 200).replace(/\n/g, ' '),
+          semanticSummary: cleanSummary(chunkContent, 200),
           chunkText: `### 📌 Concept: ${currentConcept}\n**Topic:** ${currentTopic}\n\n${chunkContent}\n\n*(Source: Page ${currentSourcePage} - ${currentConcept})*`
         });
         accumulatedParas = [];
