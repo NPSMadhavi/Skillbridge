@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS "CourseChunk" (
     "courseId" TEXT NOT NULL REFERENCES "Course"("id") ON DELETE CASCADE,
     "chunkIndex" INTEGER NOT NULL,
     "chunkText" TEXT NOT NULL,
+    "content" TEXT,
+    "lessonId" TEXT,
     "topic" TEXT,
     "subtopic" TEXT,
     "concept" TEXT,
@@ -108,6 +110,8 @@ ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "phone" TEXT;
 ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "department" TEXT;
 ALTER TABLE "Admin" ADD COLUMN IF NOT EXISTS "mustChangePassword" BOOLEAN NOT NULL DEFAULT false;
 
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "lessonId" TEXT;
+ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "content" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "topic" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "subtopic" TEXT;
 ALTER TABLE "CourseChunk" ADD COLUMN IF NOT EXISTS "concept" TEXT;

@@ -9,15 +9,15 @@ import { isGarbageTitle, isPlaceholderTitle, stripSlidePlaceholders, cleanUnsupp
 
 export class VectorChunkService {
   constructor() {
-    this._columnsChecked = false;
+    this._checkedClients = new WeakSet();
   }
 
   /**
    * Ensures the PostgreSQL CourseChunk table contains all semantic metadata columns.
-   * Runs non-destructively using IF NOT EXISTS.
+   * Tracked per PrismaClient instance so multi-tenant DBs are each verified independently.
    */
   async ensureColumnsExist(prisma) {
-    if (this._columnsChecked) return;
+    if (!prisma || this._checkedClients.has(prisma)) return;
     try {
       await prisma.$executeRawUnsafe(`
         ALTER TABLE "CourseChunk" 
@@ -36,7 +36,7 @@ export class VectorChunkService {
           ADD COLUMN IF NOT EXISTS "metadata" JSONB,
           ADD COLUMN IF NOT EXISTS "semanticSummary" TEXT;
       `);
-      this._columnsChecked = true;
+      this._checkedClients.add(prisma);
     } catch (err) {
       console.warn('[VectorChunkService] Schema check notice (safe to ignore if table already up to date):', err.message);
     }
@@ -435,6 +435,7 @@ export class VectorChunkService {
         // 1. Primary: Insert with pgvector 768-dim embedding and full semantic metadata
         if (embeddingArr && embeddingArr.length === 768) {
           try {
+            await tx.$executeRawUnsafe(`SAVEPOINT sp_chunk_vec`);
             const vectorStr = `[${embeddingArr.join(',')}]`;
             const rows = await tx.$queryRawUnsafe(
               `INSERT INTO "CourseChunk" (
@@ -468,8 +469,10 @@ export class VectorChunkService {
               chunk.semanticSummary,
               vectorStr
             );
+            await tx.$executeRawUnsafe(`RELEASE SAVEPOINT sp_chunk_vec`);
             inserted = rows[0];
           } catch (vecErr) {
+            await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT sp_chunk_vec`).catch(() => {});
             console.warn(`[pgvector] Vector column insert notice for chunk ${chunk.chunkIndex ?? i}:`, vecErr.message);
           }
         }
@@ -477,6 +480,7 @@ export class VectorChunkService {
         // 2. Fallback: Insert without vector column but with full metadata
         if (!inserted) {
           try {
+            await tx.$executeRawUnsafe(`SAVEPOINT sp_chunk_raw`);
             const rows = await tx.$queryRawUnsafe(
               `INSERT INTO "CourseChunk" (
                  "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
@@ -506,10 +510,13 @@ export class VectorChunkService {
               metadataJson,
               chunk.semanticSummary
             );
+            await tx.$executeRawUnsafe(`RELEASE SAVEPOINT sp_chunk_raw`);
             inserted = rows[0];
           } catch (rawErr) {
+            await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT sp_chunk_raw`).catch(() => {});
             // 3. Final ORM fallback
             try {
+              await tx.$executeRawUnsafe(`SAVEPOINT sp_chunk_orm`);
               inserted = await tx.courseChunk.create({
                 data: {
                   courseId,
@@ -519,7 +526,9 @@ export class VectorChunkService {
                   concept: chunk.concept
                 }
               });
+              await tx.$executeRawUnsafe(`RELEASE SAVEPOINT sp_chunk_orm`);
             } catch (prismaErr) {
+              await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT sp_chunk_orm`).catch(() => {});
               console.warn(`[pgvector] Failed to save chunk ${chunk.chunkIndex ?? i}:`, prismaErr.message);
             }
           }
