@@ -22,7 +22,28 @@ const router = express.Router();
 const upload = multer({
   storage: multer.memoryStorage(),
 });
+const courseTempDir = path.join(
+  process.cwd(),
+  'uploads',
+  'tmp-course-uploads'
+);
 
+fs.mkdirSync(courseTempDir, { recursive: true });
+
+const courseUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      cb(null, courseTempDir);
+    },
+    filename: (_req, file, cb) => {
+      const extension = path.extname(file.originalname);
+      const uniqueName =
+        `${Date.now()}-${Math.random().toString(36).slice(2)}${extension}`;
+
+      cb(null, uniqueName);
+    },
+  }),
+});
 /**
  * Extracts text and segmented pages/slides from any supported document format.
  * Supported: PPTX, PPT, PDF, DOCX, DOC, TXT, MD, CSV, JSON, RTF, HTML, etc.
@@ -101,10 +122,262 @@ function generateSlideSvg({ slideNumber, totalSlides = 1, title = '', headings =
   </svg>`;
 }
 
+function normalizeUbuntuSlides(rawSlides = []) {
+  if (!Array.isArray(rawSlides)) return [];
+  return rawSlides.map((s, idx) => {
+    const slideNumber = s.slideNumber || s.page || s.page_number || (idx + 1);
+    const rawText = String(s.fullText || s.text || s.content || '').trim();
+    const lines = rawText.split('\n').map(l => l.trim()).filter(l => l && !/^\d+$/.test(l));
+    const firstLine = lines.find(l => l.length > 2 && !isPlaceholderTitle(l)) || '';
+    const title = (s.title && !isPlaceholderTitle(s.title)) ? s.title : (firstLine || `Slide ${slideNumber}`);
+    const paragraphs = Array.isArray(s.paragraphs) && s.paragraphs.length > 0
+      ? s.paragraphs
+      : lines.filter(l => l !== firstLine);
+    return {
+      ...s,
+      slideNumber,
+      title,
+      headings: Array.isArray(s.headings) && s.headings.length > 0 ? s.headings : (firstLine ? [firstLine] : []),
+      bulletPoints: Array.isArray(s.bulletPoints) ? s.bulletPoints : [],
+      paragraphs,
+      fullText: rawText,
+    };
+  });
+}
+
+/**
+ * Shared background document processing pipeline for both Create (POST /upload)
+ * and Update (PUT /:id) course workflows.
+ * Uses Ubuntu Document Engine as primary, generates/stores 768-d pgvector embeddings,
+ * falls back explicitly only on failure, and always cleans up the temporary upload file.
+ */
+async function processCourseDocumentInBackground({
+  targetPrisma,
+  courseId,
+  fileObj,
+  fileType,
+  title,
+  description,
+  initialCurriculum,
+  tenantCode,
+}) {
+  try {
+    console.log(`[Ubuntu Doc Pipeline] Submitting "${fileObj.originalname}" (${fileType.toUpperCase()}) for course ${courseId}...`);
+    let ubuntuJob;
+    try {
+      ubuntuJob = await submitDocumentJob(fileObj, {
+        title,
+        description,
+        generateCurriculum: true,
+      });
+    } catch (gwErr) {
+      console.warn(`[Ubuntu Doc Pipeline] Centralized submission notice for course ${courseId}:`, formatGatewayError(gwErr));
+      throw gwErr;
+    }
+
+    let result;
+    if (ubuntuJob._isLegacy) {
+      console.log(`[Ubuntu Doc Pipeline] Legacy extract result for course ${courseId} (new service not yet deployed).`);
+      result = ubuntuJob._legacyResult;
+    } else {
+      console.log(`[Ubuntu Doc Pipeline] Polling job ${ubuntuJob.job_id} for course ${courseId}...`);
+      result = await pollDocumentJobResult(ubuntuJob.job_id, { timeoutMs: 240000, pollIntervalMs: 2000 });
+    }
+
+    const doc = result.document || {};
+    const normalizedSlides = normalizeUbuntuSlides(doc.slides || result.curriculum?.slides || []);
+    const normalizedPages = Array.isArray(doc.pages || result.curriculum?.pages)
+      ? (doc.pages || result.curriculum?.pages).map((p, idx) => ({
+          ...p,
+          pageNumber: p.pageNumber || p.page_number || p.page || (idx + 1),
+          page_number: p.page_number || p.pageNumber || p.page || (idx + 1),
+          text: p.text || p.content || '',
+        }))
+      : [];
+
+    let baseCurriculum = result.curriculum && typeof result.curriculum === 'object' ? { ...result.curriculum } : {};
+    if (!Array.isArray(baseCurriculum.lessons) || baseCurriculum.lessons.length === 0) {
+      if (normalizedSlides.length > 0) {
+        baseCurriculum = aiService._groupSlidesIntoLessons(normalizedSlides, fileObj.originalname);
+      } else if (doc.text && doc.text.trim().length > 0) {
+        baseCurriculum = aiService._getMockCourse(fileObj.originalname, doc.text, {
+          fileType: doc.fileType || fileType,
+          slides: normalizedSlides,
+          pages: normalizedPages,
+        });
+      }
+    }
+
+    const finalCurriculum = {
+      ...baseCurriculum,
+      title,
+      description,
+      fileType: doc.fileType || fileType,
+      fileName: fileObj.originalname,
+      ubuntuJobId: ubuntuJob?.job_id || null,
+      processingStatus: 'COMPLETED',
+      isAiGenerating: false,
+      slides: normalizedSlides,
+      pages: normalizedPages,
+    };
+    synchronizeCurriculumStructure(finalCurriculum, title);
+
+    await targetPrisma.course.update({
+      where: { id: courseId },
+      data: {
+        fileText: doc.text || '',
+        curriculum: finalCurriculum,
+      },
+    });
+
+    if (Array.isArray(result.chunks) && result.chunks.length > 0) {
+      let embeddings = Array.isArray(result.embeddings) && result.embeddings.length === result.chunks.length
+        ? result.embeddings
+        : null;
+
+      if (!embeddings || embeddings.some(v => !Array.isArray(v) || v.length === 0)) {
+        const textsToEmbed = result.chunks.map(c => {
+          const topicPrefix = c.topic ? `[Topic: ${c.topic}] ` : '';
+          const conceptPrefix = c.concept ? `[Concept: ${c.concept}] ` : '';
+          return `${topicPrefix}${conceptPrefix}${c.chunkText || c.text || ''}`;
+        });
+        embeddings = await aiService.getEmbeddings(textsToEmbed, 768);
+        if (!Array.isArray(embeddings) || embeddings.length !== result.chunks.length) {
+          throw new Error(`Embedding generation returned ${embeddings?.length || 0} vectors for ${result.chunks.length} Ubuntu chunks.`);
+        }
+      }
+
+      await vectorChunkService.storeChunks(targetPrisma, courseId, result.chunks, embeddings);
+      console.log(`[pgvector] Stored ${result.chunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${courseId}.`);
+    } else if (doc.text && doc.text.trim().length > 40) {
+      console.log(`[Ubuntu Doc Pipeline] Indexing extracted text (${doc.text.length} chars) with semantic chunking & 768-d embeddings for course ${courseId}...`);
+      const storedChunks = await vectorChunkService.indexCourse(
+        targetPrisma,
+        courseId,
+        {
+          text: doc.text,
+          fileName: fileObj.originalname,
+          fileType: doc.fileType || fileType,
+          slides: normalizedSlides,
+          pages: normalizedPages,
+        },
+        finalCurriculum
+      );
+      if (!storedChunks || storedChunks.length === 0) {
+        throw new Error('Semantic chunking produced 0 chunks from extracted document text.');
+      }
+      console.log(`[pgvector] Stored ${storedChunks.length} semantic chunks with 768-d embeddings for course ${courseId}.`);
+    } else {
+      throw new Error('Ubuntu document engine returned no readable text or semantic chunks.');
+    }
+
+    try {
+      const updatedRecord = await targetPrisma.course.findUnique({
+        where: { id: courseId },
+        select: { curriculum: true },
+      });
+      const summary = generateModulesSummary(updatedRecord?.curriculum || finalCurriculum);
+      await targetPrisma.$executeRaw`
+        UPDATE "Course"
+        SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+        WHERE id = ${courseId};
+      `;
+    } catch (_) { }
+
+    invalidateCoursesCatalogCache(tenantCode);
+    console.log(`[Ubuntu Doc Pipeline] Course ${courseId} processing completed successfully via Ubuntu AI server.`);
+  } catch (ubuntuErr) {
+    console.warn(`[Doc Pipeline Fallback] Ubuntu processing failed (${ubuntuErr.message}). Activating local document extraction and semantic chunking for course ${courseId}...`);
+    try {
+      const fallbackFileObj = {
+        ...fileObj,
+        buffer: await fs.promises.readFile(fileObj.path),
+      };
+
+      const docResult = await extractDocumentContent(fallbackFileObj);
+      const { text: textContent, pages = [], slides = [], fileType: docFileType } = docResult;
+
+      let fallbackCurriculum;
+      if (slides.length > 0) {
+        fallbackCurriculum = aiService._groupSlidesIntoLessons(slides, fileObj.originalname);
+      } else {
+        fallbackCurriculum = aiService._getMockCourse(fileObj.originalname, textContent, docResult);
+      }
+
+      fallbackCurriculum.title = title;
+      fallbackCurriculum.description = description;
+      fallbackCurriculum.fileType = docFileType || fileType;
+      fallbackCurriculum.fileName = fileObj.originalname;
+      fallbackCurriculum.ubuntuJobId = null;
+      fallbackCurriculum.processingStatus = 'COMPLETED';
+      fallbackCurriculum.processingSource = 'local_fallback';
+      fallbackCurriculum.ubuntuError = ubuntuErr.message;
+      fallbackCurriculum.isAiGenerating = false;
+      fallbackCurriculum.slides = slides.map(s => ({ ...s, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
+      fallbackCurriculum.pages = pages.map(p => ({ ...p, images: (p.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
+      synchronizeCurriculumStructure(fallbackCurriculum, title);
+
+      await targetPrisma.course.update({
+        where: { id: courseId },
+        data: {
+          fileText: textContent || '',
+          curriculum: fallbackCurriculum,
+        },
+      });
+
+      const storedChunks = await vectorChunkService.indexCourse(targetPrisma, courseId, docResult, fallbackCurriculum);
+      console.log(`[pgvector] Stored ${storedChunks?.length || 0} locally-indexed semantic chunks for course ${courseId}.`);
+
+      try {
+        const updatedRecord = await targetPrisma.course.findUnique({
+          where: { id: courseId },
+          select: { curriculum: true },
+        });
+        const summary = generateModulesSummary(updatedRecord?.curriculum || fallbackCurriculum);
+        await targetPrisma.$executeRaw`
+          UPDATE "Course"
+          SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+          WHERE id = ${courseId};
+        `;
+      } catch (_) { }
+
+      invalidateCoursesCatalogCache(tenantCode);
+      console.log(`[Doc Pipeline Fallback] Course ${courseId} successfully processed and chunked via local engine!`);
+    } catch (localErr) {
+      console.error(`[Doc Pipeline Fallback] Both Ubuntu and local extraction failed for course ${courseId}:`, localErr.message);
+      try {
+        await targetPrisma.course.update({
+          where: { id: courseId },
+          data: {
+            curriculum: {
+              ...initialCurriculum,
+              processingStatus: 'FAILED',
+              processingError: localErr.message,
+              ubuntuError: ubuntuErr.message,
+              isAiGenerating: false,
+            },
+          },
+        });
+        invalidateCoursesCatalogCache(tenantCode);
+      } catch (_) { }
+    }
+  } finally {
+    try {
+      if (fileObj?.path && fs.existsSync(fileObj.path)) {
+        await fs.promises.unlink(fileObj.path);
+        console.log(`[File Cleanup] Temporary upload removed for course ${courseId}.`);
+      }
+    } catch (cleanupErr) {
+      console.warn(`[File Cleanup] Could not remove temporary upload for course ${courseId}:`, cleanupErr.message);
+    }
+  }
+}
+
 // 1. Admin: Create course module by uploading a document (delegates all AI/OCR/chunking/embeddings to Ubuntu AI server)
-router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
+router.post('/upload', authenticateToken, requireRole(['ADMIN']), courseUpload.single('file'), async (req, res) => {
   req.setTimeout(300000);
   res.setTimeout(300000);
+  let backgroundProcessingStarted = false;
   try {
     const { title, description } = req.body;
 
@@ -124,14 +397,18 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     }
 
     const fileObj = {
-      buffer: Buffer.from(req.file.buffer),
+      path: req.file.path,
+      size: req.file.size,
       originalname: req.file.originalname,
       mimetype: req.file.mimetype,
     };
 
+    const trimmedTitle = title.trim();
+    const trimmedDescription = description.trim();
+
     const initialCurriculum = {
-      title: title.trim(),
-      description: description.trim(),
+      title: trimmedTitle,
+      description: trimmedDescription,
       fileType,
       fileName: req.file.originalname,
       ubuntuJobId: null,
@@ -146,8 +423,8 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     const targetPrisma = req.prisma || prisma;
     const newCourse = await targetPrisma.course.create({
       data: {
-        title: title.trim(),
-        description: description.trim(),
+        title: trimmedTitle,
+        description: trimmedDescription,
         fileName: req.file.originalname,
         fileText: '',
         curriculum: initialCurriculum,
@@ -157,7 +434,10 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
     try {
       const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(newCourse.id));
       fs.mkdirSync(courseUploadDir, { recursive: true });
-      fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), fileObj.buffer);
+      fs.copyFileSync(
+        req.file.path,
+        path.join(courseUploadDir, path.basename(req.file.originalname))
+      );
     } catch (saveErr) {
       console.warn('[File Storage] Notice saving original file:', saveErr.message);
     }
@@ -176,158 +456,40 @@ router.post('/upload', authenticateToken, requireRole(['ADMIN']), upload.single(
         createdAt: newCourse.createdAt,
       },
     });
+    backgroundProcessingStarted = true;
 
     // Run entire centralized Ubuntu AI submission, extraction, chunking & 768-d vectors in background
-    setImmediate(async () => {
-      let processedSuccessfully = false;
-      try {
-        console.log(`[Ubuntu Doc Pipeline] Submitting "${fileObj.originalname}" (${fileType.toUpperCase()}) for course ${newCourse.id}...`);
-        let ubuntuJob;
-        try {
-          ubuntuJob = await submitDocumentJob(fileObj, {
-            title: title.trim(),
-            description: description.trim(),
-            generateCurriculum: true,
-          });
-        } catch (gwErr) {
-          console.warn(`[Ubuntu Doc Pipeline] Centralized submission notice for course ${newCourse.id}:`, formatGatewayError(gwErr));
-          throw gwErr;
-        }
-
-        let result;
-        if (ubuntuJob._isLegacy) {
-          // Legacy fallback: result was computed synchronously during submitDocumentJob
-          console.log(`[Ubuntu Doc Pipeline] Legacy extract result for course ${newCourse.id} (new service not yet deployed).`);
-          result = ubuntuJob._legacyResult;
-        } else {
-          console.log(`[Ubuntu Doc Pipeline] Polling job ${ubuntuJob.job_id} for course ${newCourse.id}...`);
-          result = await pollDocumentJobResult(ubuntuJob.job_id, { timeoutMs: 240000, pollIntervalMs: 2000 });
-        }
-        const doc = result.document || {};
-        const finalCurriculum = {
-          ...(result.curriculum || {}),
-          title: title.trim(),
-          description: description.trim(),
-          fileType: doc.fileType || fileType,
-          fileName: fileObj.originalname,
-          ubuntuJobId: ubuntuJob?.job_id || null,
-          processingStatus: 'COMPLETED',
-          isAiGenerating: false,
-          slides: doc.slides || result.curriculum?.slides || [],
-          pages: doc.pages || result.curriculum?.pages || [],
-        };
-        synchronizeCurriculumStructure(finalCurriculum, title.trim());
-
-        await targetPrisma.course.update({
-          where: { id: newCourse.id },
-          data: {
-            fileText: doc.text || '',
-            curriculum: finalCurriculum,
-          },
-        });
-
-        if (Array.isArray(result.chunks) && result.chunks.length > 0) {
-          await vectorChunkService.storeChunks(targetPrisma, newCourse.id, result.chunks, result.embeddings || null);
-          console.log(`[pgvector] Stored ${result.chunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${newCourse.id}.`);
-        } else if (doc.text && doc.text.trim().length > 40) {
-          // Legacy fallback: new service did not return pre-chunked data.
-          // Generate semantic chunks locally using vectorChunkService, then store with embeddings.
-          console.log(`[Ubuntu Doc Pipeline] No chunks from Ubuntu — generating semantic chunks from extracted text (${doc.text.length} chars) for course ${newCourse.id}...`);
-          try {
-            const generatedChunks = await vectorChunkService.createSemanticChunks(
-              doc.text,
-              { fileName: fileObj.originalname, fileType: doc.fileType || fileType, slides: doc.slides || [], pages: doc.pages || [], curriculum: finalCurriculum }
-            );
-            if (generatedChunks && generatedChunks.length > 0) {
-              await vectorChunkService.storeChunks(targetPrisma, newCourse.id, generatedChunks, null);
-              console.log(`[pgvector] Stored ${generatedChunks.length} locally-generated semantic chunks for course ${newCourse.id}.`);
-            }
-          } catch (chunkErr) {
-            console.warn(`[Ubuntu Doc Pipeline] Semantic chunking error for course ${newCourse.id}:`, chunkErr.message);
-          }
-        }
-
-        try {
-          const summary = generateModulesSummary(finalCurriculum);
-          await targetPrisma.$executeRaw`
-            UPDATE "Course"
-            SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
-            WHERE id = ${newCourse.id};
-          `;
-        } catch (_) {}
-
-        processedSuccessfully = true;
-        invalidateCoursesCatalogCache(req.tenantCode);
-        console.log(`[Ubuntu Doc Pipeline] Course ${newCourse.id} processing completed successfully via Ubuntu AI server.`);
-      } catch (ubuntuErr) {
-        console.warn(`[Doc Pipeline Fallback] Ubuntu extraction failed (${ubuntuErr.message}). Activating high-speed local document extraction and semantic chunking for course ${newCourse.id}...`);
-        try {
-          const docResult = await extractDocumentContent(fileObj);
-          const { text: textContent, pages = [], slides = [], fileType: docFileType } = docResult;
-
-          let fallbackCurriculum;
-          if (slides.length > 0) {
-            fallbackCurriculum = aiService._groupSlidesIntoLessons(slides, fileObj.originalname);
-          } else {
-            fallbackCurriculum = aiService._getMockCourse(fileObj.originalname, textContent, docResult);
-          }
-
-          fallbackCurriculum.title = title.trim();
-          fallbackCurriculum.description = description.trim();
-          fallbackCurriculum.fileType = docFileType || fileType;
-          fallbackCurriculum.fileName = fileObj.originalname;
-          fallbackCurriculum.ubuntuJobId = null;
-          fallbackCurriculum.processingStatus = 'COMPLETED';
-          fallbackCurriculum.isAiGenerating = false;
-          fallbackCurriculum.slides = slides.map(s => ({ ...s, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
-          fallbackCurriculum.pages = pages.map(p => ({ ...p, images: (p.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
-          synchronizeCurriculumStructure(fallbackCurriculum, title.trim());
-
-          await targetPrisma.course.update({
-            where: { id: newCourse.id },
-            data: {
-              fileText: textContent || '',
-              curriculum: fallbackCurriculum,
-            },
-          });
-
-          const storedChunks = await vectorChunkService.indexCourse(targetPrisma, newCourse.id, docResult, fallbackCurriculum);
-          console.log(`[pgvector] Stored ${storedChunks?.length || 0} locally-indexed semantic chunks for course ${newCourse.id}.`);
-
-          try {
-            const summary = generateModulesSummary(fallbackCurriculum);
-            await targetPrisma.$executeRaw`
-              UPDATE "Course"
-              SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
-              WHERE id = ${newCourse.id};
-            `;
-          } catch (_) {}
-
-          processedSuccessfully = true;
-          invalidateCoursesCatalogCache(req.tenantCode);
-          console.log(`[Doc Pipeline Fallback] Course ${newCourse.id} successfully processed and chunked via local engine!`);
-        } catch (localErr) {
-          console.error(`[Doc Pipeline Fallback] Both Ubuntu and local extraction failed for course ${newCourse.id}:`, localErr.message);
-          try {
-            await targetPrisma.course.update({
-              where: { id: newCourse.id },
-              data: {
-                curriculum: {
-                  ...initialCurriculum,
-                  processingStatus: 'FAILED',
-                  processingError: localErr.message,
-                  isAiGenerating: false,
-                },
-              },
-            });
-            invalidateCoursesCatalogCache(req.tenantCode);
-          } catch (_) {}
-        }
-      }
+    setImmediate(() => {
+      processCourseDocumentInBackground({
+        targetPrisma,
+        courseId: newCourse.id,
+        fileObj,
+        fileType,
+        title: trimmedTitle,
+        description: trimmedDescription,
+        initialCurriculum,
+        tenantCode: req.tenantCode,
+      });
     });
   } catch (error) {
     console.error('[Ubuntu Doc Pipeline] Failed to publish course:', error);
-    res.status(500).json({ error: error.message || 'Failed to submit document for centralized processing.' });
+
+    if (!backgroundProcessingStarted && req.file?.path) {
+      try {
+        if (fs.existsSync(req.file.path)) {
+          await fs.promises.unlink(req.file.path);
+          console.log('[File Cleanup] Temporary upload removed after route error.');
+        }
+      } catch (cleanupErr) {
+        console.warn('[File Cleanup] Could not remove temporary upload:', cleanupErr.message);
+      }
+    }
+
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: error.message || 'Failed to submit document for centralized processing.',
+      });
+    }
   }
 });
 
@@ -492,7 +654,7 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
 
     try {
       fs.writeFileSync(slideSvgFile, svgOutput, 'utf-8');
-    } catch (_) {}
+    } catch (_) { }
 
     res.setHeader('Content-Type', 'image/svg+xml');
     res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -596,7 +758,7 @@ router.get('/:id/pages/:pageNum/image', async (req, res) => {
 
     try {
       fs.writeFileSync(pageSvgFile, svgOutput, 'utf-8');
-    } catch (_) {}
+    } catch (_) { }
 
     res.setHeader('Content-Type', 'image/svg+xml');
     res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -745,7 +907,7 @@ export async function findCourseAcrossTenants(courseId, initialPrisma, includeOp
         });
         if (course) return { course, targetPrisma: client };
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // 1. Check specified / active tenant database
@@ -1186,14 +1348,14 @@ router.get('/', authenticateToken, async (req, res) => {
       for (const c of courses) {
         let cur = c.curriculum;
         if (typeof cur === 'string') {
-          try { cur = JSON.parse(cur); } catch(_) { cur = null; }
+          try { cur = JSON.parse(cur); } catch (_) { cur = null; }
         }
         if (cur && (!Array.isArray(cur.curriculum) || cur.curriculum.length === 0) && Array.isArray(cur.lessons) && cur.lessons.length > 0) {
           synchronizeCurriculumStructure(cur, c.title);
           targetPrisma.course.update({
             where: { id: c.id },
             data: { curriculum: cur }
-          }).catch(() => {});
+          }).catch(() => { });
         }
       }
 
@@ -1714,11 +1876,11 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
       if (!text || typeof text !== 'string') return true;
       const lower = text.toLowerCase();
       return lower.includes('[visual content') ||
-             lower.includes('full slide presentation') ||
-             lower.includes('natsteel natsteel') ||
-             lower.includes('--- slide') ||
-             lower.includes('[speaker notes') ||
-             /[=]\s*n\s*@\s*\\\s*qi/i.test(text);
+        lower.includes('full slide presentation') ||
+        lower.includes('natsteel natsteel') ||
+        lower.includes('--- slide') ||
+        lower.includes('[speaker notes') ||
+        /[=]\s*n\s*@\s*\\\s*qi/i.test(text);
     };
 
     const lessons = Array.isArray(curriculum.lessons) ? curriculum.lessons : [];
@@ -2290,10 +2452,26 @@ router.post('/:id/chat', optionalAuthenticateToken, async (req, res) => {
       } catch (_) { }
     }
 
-    const { message, lessonTitle, currentConcept, language, conversationHistory } = req.body;
+    const { message, lessonId, lessonTitle, currentConcept, language, conversationHistory, conversationId } = req.body;
     if (!message) {
       return res.status(400).json({ error: 'Message is required.' });
     }
+    const requestId = `chat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const activeConvId = conversationId || `conv_${course.id}`;
+
+    // Resolve active lesson metadata (sourceSlides + lessonTitle) so RAG prioritizes the current lesson
+    let parsedCurr = course.curriculum;
+    if (typeof parsedCurr === 'string') {
+      try { parsedCurr = JSON.parse(parsedCurr); } catch (_) { parsedCurr = {}; }
+    }
+    const currLessons = Array.isArray(parsedCurr?.lessons) ? parsedCurr.lessons : [];
+    const activeLessonObj = currLessons.find(l =>
+      (lessonId !== undefined && lessonId !== null && String(l.id) === String(lessonId)) ||
+      (lessonTitle && String(l.title || '').toLowerCase() === String(lessonTitle).toLowerCase())
+    ) || null;
+    const effectiveLessonId = lessonId ?? activeLessonObj?.id ?? null;
+    const effectiveLessonTitle = lessonTitle || activeLessonObj?.title || null;
+    const activeLessonSlides = Array.isArray(activeLessonObj?.sourceSlides) ? activeLessonObj.sourceSlides : [];
 
     // Resolve dynamic assistant name for the current tenant or request
     let aiTutorName = (req.body.aiName || req.body.assistantName || '').trim();
@@ -2352,23 +2530,33 @@ router.post('/:id/chat', optionalAuthenticateToken, async (req, res) => {
       }
     }
 
-    // Retrieve semantic context matching student query from PostgreSQL pgvector
+    // Retrieve semantic context matching student query from PostgreSQL pgvector (scoped strictly to course.id & active lesson)
     const ragChatStartTime = Date.now();
     const asksAboutCurrentConcept = currentConcept?.trim() &&
       /^(?:please\s+)?(?:explain (?:this|that)(?: slide| concept| point)?|what does (?:this|that) mean)[?.!\s]*$/i.test(message);
+    const ragQuery = asksAboutCurrentConcept
+      ? `${effectiveLessonTitle || ''} ${currentConcept}`.trim()
+      : message;
     let chunks = [];
     try {
-      if (!asksAboutCurrentConcept) chunks = await vectorChunkService.querySimilarChunks(targetPrisma, course.id, message, 3, {
-        lessonTitle,
-        topicFilter: lessonTitle
+      chunks = await vectorChunkService.querySimilarChunks(targetPrisma, course.id, ragQuery, 3, {
+        lessonTitle: effectiveLessonTitle,
+        topicFilter: effectiveLessonTitle,
+        sourceSlides: activeLessonSlides
       });
     } catch (e) {
       const ragChatDuration = Date.now() - ragChatStartTime;
       console.warn(`[PERF:RAG_END] pgvector RAG query notice (${ragChatDuration}ms):`, e.message);
     }
 
-    const ragContext = interactiveCourseService.buildTeachingRAGContext(course, lessonTitle, message, chunks);
-    const compactGroundedContext = (ragContext.groundedContext || 'General course principles apply.').slice(0, 1500);
+    const ragContext = interactiveCourseService.buildTeachingRAGContext(course, effectiveLessonTitle, message, chunks);
+    const hasCourseMaterial = Boolean((chunks && chunks.length > 0) || (course?.fileText && course.fileText.trim().length > 20));
+    const lessonSpecificContext = activeLessonObj?.explanation
+      ? `[ACTIVE LESSON CONTEXT: "${effectiveLessonTitle}"]\n${String(activeLessonObj.explanation).slice(0, 600)}\n\n`
+      : '';
+    const compactGroundedContext = hasCourseMaterial
+      ? `${lessonSpecificContext}${ragContext.groundedContext || ''}`.slice(0, 1800)
+      : 'NO_COURSE_MATERIAL_AVAILABLE: The uploaded course does not contain verified content for this query.';
 
     const systemPrompt = `/no_think
 You are ${aiTutorName}, an expert, supportive classroom teacher delivering instruction for the course "${course.title}".
@@ -2381,7 +2569,7 @@ PROFESSIONAL TEACHING GUIDELINES:
    - Follow with a concise, practical workplace reason or safety precaution.
 3. Keep your spoken explanation between 2 to 3 natural, conversational sentences. Avoid lengthy essays or multi-paragraph lists.
 4. DO NOT recite raw slide bullet points, placeholder tags, or OCR garbage.
-5. STRICT KNOWLEDGE GROUNDING: Rely on the verified course training context below. If the student asks something completely outside this course, politely inform them that it is outside this module's scope.
+5. STRICT KNOWLEDGE GROUNDING: Rely ONLY on the verified course training context below. Prioritize the active lesson context. If the student asks something not covered by the retrieved course content (or if context says NO_COURSE_MATERIAL_AVAILABLE), clearly state that the uploaded course does not contain that information rather than inventing facts.
 6. Deliver your explanation directly in natural, articulate ${targetLanguage}.`;
 
     const cleanConceptTopic = (currentConcept || '')
@@ -2401,24 +2589,49 @@ Student Question: "${message}"
 Deliver your expert teacher explanation in ${targetLanguage} (2 to 3 spoken sentences):`;
 
     const llmChatStartTime = Date.now();
+    let cancellationReason = null;
+    const modelName = process.env.SKILLBRIDGE_MODEL || 'qwen3.5:9b';
 
     let reply;
     let tutorTimer;
     try {
-      // 25-second timeout to safely stay well within Nginx 60s proxy timeout
+      // 45-second timeout to accommodate Qwen inference while staying safely within 60s Nginx/frontend timeouts
       const llmPromise = aiService._callLLM(systemPrompt, userPrompt, false, conversationHistory || [], {
         signal: req.abortController?.signal,
-        timeoutMs: 25000
+        timeoutMs: 45000
       });
       const timeoutPromise = new Promise((_, reject) => {
-        tutorTimer = setTimeout(() => reject(new Error('Tutor voice latency threshold reached (25s).')), 25000);
+        tutorTimer = setTimeout(() => reject(new Error('Tutor voice latency threshold reached (45s).')), 45000);
       });
       reply = await Promise.race([llmPromise, timeoutPromise]);
       const llmChatDuration = Date.now() - llmChatStartTime;
-      console.log(`[PERF:LLM_END] Generated tutor answer via central AI gateway in ${llmChatDuration}ms.`);
+      console.log(JSON.stringify({
+        tag: 'TUTOR_CHAT',
+        requestId,
+        courseId: course.id,
+        lessonId: effectiveLessonId,
+        conversationId: activeConvId,
+        retrievedChunkIds: (chunks || []).map(c => c.id),
+        retrievalScores: (chunks || []).map(c => Number((c.finalScore ?? c.similarity ?? 0).toFixed(4))),
+        model: modelName,
+        durationMs: llmChatDuration,
+        cancellationReason: null
+      }));
     } catch (e) {
       const llmChatDuration = Date.now() - llmChatStartTime;
-      console.warn(`[PERF:LLM_END] Tutor fallback triggered (${llmChatDuration}ms): ${e.message}`);
+      cancellationReason = e.message || 'unknown_error';
+      console.warn(JSON.stringify({
+        tag: 'TUTOR_CHAT_FALLBACK',
+        requestId,
+        courseId: course.id,
+        lessonId: effectiveLessonId,
+        conversationId: activeConvId,
+        retrievedChunkIds: (chunks || []).map(c => c.id),
+        retrievalScores: (chunks || []).map(c => Number((c.finalScore ?? c.similarity ?? 0).toFixed(4))),
+        model: modelName,
+        durationMs: llmChatDuration,
+        cancellationReason
+      }));
 
       // High-quality conversational fallbacks per language — NEVER raw slide OCR or PPT dumps
       const FALLBACK_TUTOR_REPLIES = {
@@ -2446,11 +2659,14 @@ Deliver your expert teacher explanation in ${targetLanguage} (2 to 3 spoken sent
 });
 
 // 6. Admin: Update a course module details (and optionally replace document)
-router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('file'), async (req, res) => {
+router.put('/:id', authenticateToken, requireRole(['ADMIN']), courseUpload.single('file'), async (req, res) => {
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  let backgroundProcessingStarted = false;
   try {
     const courseId = req.params.id;
     const { title, description, curriculum } = req.body;
-    let { course: existingCourse, targetPrisma } = await findCourseAcrossTenants(courseId, req.prisma || prisma, null);
+    const { course: existingCourse, targetPrisma } = await findCourseAcrossTenants(courseId, req.prisma || prisma, null);
 
     if (!existingCourse) {
       return res.status(404).json({ error: 'Course not found.' });
@@ -2471,122 +2687,98 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
     updateData.description = finalDescription;
 
     if (req.file) {
-      console.log(`[Document Extraction] Admin updating course "${finalTitle}" with new file: ${req.file.originalname}...`);
-      const docResult = await extractDocumentContent(req.file);
-      const { text: textContent, pages, slides, fileType } = docResult;
-
-      const imageCount = (slides || []).reduce((n, s) => n + ((s.images || []).length), 0) + ((docResult.images || []).length);
-      if (!textContent || textContent.length < 30) {
-        return res.status(400).json({
-          error: imageCount > 0
-            ? 'The PowerPoint is image-based, but no readable training text could be found in the slide pictures. Try a PPTX with clearer photos, or add slide titles/notes.'
-            : 'Failed to extract text from new document. File may be empty or unreadable.'
-        });
+      let fileType;
+      try {
+        fileType = validateDocumentFile(req.file);
+      } catch (valErr) {
+        return res.status(valErr.status || 415).json({ error: valErr.message });
       }
 
-      const segmentsCount = slides.length > 0 ? `${slides.length} slide(s)` : `${pages.length} section(s)/page(s)`;
-      console.log(`[Document Extraction] Extracted ${textContent.length} characters across ${segmentsCount} (${fileType.toUpperCase()}). Structuring updated curriculum...`);
+      const fileObj = {
+        path: req.file.path,
+        size: req.file.size,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+      };
 
-      let initialCurriculum;
-      if (slides.length > 0) {
-        initialCurriculum = aiService._groupSlidesIntoLessons(slides, req.file.originalname);
-      } else {
-        initialCurriculum = aiService._getMockCourse(req.file.originalname, textContent, docResult);
-      }
-
-      initialCurriculum.title = finalTitle;
-      initialCurriculum.description = finalDescription;
-      initialCurriculum.fileType = fileType || docResult.fileType;
-      initialCurriculum.fileName = req.file.originalname;
-      initialCurriculum.isAiGenerating = true;
-
-      if (Array.isArray(docResult.slides) && docResult.slides.length > 0) {
-        initialCurriculum.slides = docResult.slides.map(s => ({
-          ...s,
-          images: (s.images || []).map(im => ({ ...im, dataUrl: undefined }))
-        }));
-      }
-      if (Array.isArray(docResult.pages) && docResult.pages.length > 0) {
-        initialCurriculum.pages = docResult.pages.map(p => ({
-          ...p,
-          images: (p.images || []).map(im => ({ ...im, dataUrl: undefined }))
-        }));
-      }
-      if (Array.isArray(docResult.images) && docResult.images.length > 0) {
-        initialCurriculum.visuals = docResult.images.map(im => ({ ...im, dataUrl: undefined }));
-      }
+      const initialCurriculum = {
+        title: finalTitle,
+        description: finalDescription,
+        fileType,
+        fileName: req.file.originalname,
+        ubuntuJobId: null,
+        processingStatus: 'PROCESSING',
+        isAiGenerating: true,
+        slides: [],
+        pages: [],
+        curriculum: [],
+        lessons: [],
+      };
 
       updateData.fileName = req.file.originalname;
-      updateData.fileText = textContent;
+      updateData.fileText = '';
       updateData.curriculum = initialCurriculum;
 
-      // Save updated original file buffer to disk
+      // Save updated original file to permanent course directory (replacing previous files/cached renders)
       try {
         const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
+        if (fs.existsSync(courseUploadDir)) {
+          fs.rmSync(courseUploadDir, { recursive: true, force: true });
+        }
         fs.mkdirSync(courseUploadDir, { recursive: true });
-        fs.writeFileSync(path.join(courseUploadDir, req.file.originalname), req.file.buffer);
+        fs.copyFileSync(
+          req.file.path,
+          path.join(courseUploadDir, path.basename(req.file.originalname))
+        );
       } catch (fErr) {
         console.warn(`[File Storage] Notice updating course file on disk:`, fErr.message);
       }
 
-      // Run deep AI refinement and vector indexing asynchronously
-      setImmediate(async () => {
-        let finalCurriculum = initialCurriculum;
-        try {
-          console.log(`[Curriculum Design] Running background AI curriculum update for course ${courseId}...`);
-          const generatedCourse = await aiService.generateCourse(req.file.originalname, textContent, docResult);
-          generatedCourse.title = finalTitle;
-          generatedCourse.description = finalDescription;
-          generatedCourse.fileType = fileType || docResult.fileType;
-          generatedCourse.fileName = req.file.originalname;
-          generatedCourse.slides = initialCurriculum.slides || generatedCourse.slides;
-          generatedCourse.pages = initialCurriculum.pages || generatedCourse.pages;
-          generatedCourse.visuals = initialCurriculum.visuals || generatedCourse.visuals;
-          generatedCourse.isAiGenerating = false;
-
-          const lightweightCurriculum = JSON.parse(JSON.stringify(generatedCourse, (key, value) => {
-            if (key === 'dataUrl') return undefined;
-            return value;
-          }));
-
-          await targetPrisma.course.update({
-            where: { id: courseId },
-            data: { curriculum: lightweightCurriculum }
-          });
-          finalCurriculum = lightweightCurriculum;
-          console.log(`[Curriculum Design] Background AI curriculum update completed for course ${courseId}.`);
-        } catch (aiErr) {
-          console.warn(`[Curriculum Design] Notice updating AI curriculum for course ${courseId}:`, aiErr.message);
-        }
-
-        try {
-          console.log(`[pgvector] Re-indexing course ${courseId} with semantic comprehension in background...`);
-          await vectorChunkService.indexCourse(targetPrisma, courseId, docResult, finalCurriculum);
-          console.log(`[pgvector] Vector embeddings updated successfully for course ${courseId}.`);
-        } catch (vectorErr) {
-          console.warn(`[pgvector] Re-indexing warning for course ${courseId}:`, vectorErr.message);
-        }
-
-        try {
-          const summary = generateModulesSummary(finalCurriculum);
-          await targetPrisma.$executeRaw`
-            UPDATE "Course"
-            SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
-            WHERE id = ${courseId};
-          `;
-        } catch (_) { }
-        invalidateCoursesCatalogCache(req.tenantCode);
+      const updatedCourse = await targetPrisma.course.update({
+        where: { id: courseId },
+        data: updateData,
       });
-    } else {
-      let curriculumObj = curriculum !== undefined ? curriculum : existingCourse.curriculum;
-      if (typeof curriculumObj === 'string') {
-        try { curriculumObj = JSON.parse(curriculumObj); } catch (e) { }
-      }
-      if (curriculumObj && typeof curriculumObj === 'object') {
-        curriculumObj.title = finalTitle;
-        curriculumObj.description = finalDescription;
-        updateData.curriculum = curriculumObj;
-      }
+
+      try {
+        const summary = generateModulesSummary(initialCurriculum);
+        await targetPrisma.$executeRaw`
+          UPDATE "Course"
+          SET "modulesSummary" = ${JSON.stringify(summary)}::jsonb
+          WHERE id = ${courseId};
+        `;
+      } catch (_) { }
+
+      invalidateCoursesCatalogCache(req.tenantCode);
+
+      res.json({
+        message: 'Course updated and queued for centralized Ubuntu AI processing.',
+        course: updatedCourse,
+      });
+      backgroundProcessingStarted = true;
+
+      setImmediate(() => {
+        processCourseDocumentInBackground({
+          targetPrisma,
+          courseId,
+          fileObj,
+          fileType,
+          title: finalTitle,
+          description: finalDescription,
+          initialCurriculum,
+          tenantCode: req.tenantCode,
+        });
+      });
+      return;
+    }
+
+    let curriculumObj = curriculum !== undefined ? curriculum : existingCourse.curriculum;
+    if (typeof curriculumObj === 'string') {
+      try { curriculumObj = JSON.parse(curriculumObj); } catch (e) { }
+    }
+    if (curriculumObj && typeof curriculumObj === 'object') {
+      curriculumObj.title = finalTitle;
+      curriculumObj.description = finalDescription;
+      updateData.curriculum = curriculumObj;
     }
 
     const updatedCourse = await targetPrisma.course.update({
@@ -2610,7 +2802,21 @@ router.put('/:id', authenticateToken, requireRole(['ADMIN']), upload.single('fil
     });
   } catch (error) {
     console.error('Failed to update course:', error);
-    res.status(500).json({ error: error.message || 'Failed to update course module.' });
+
+    if (!backgroundProcessingStarted && req.file?.path) {
+      try {
+        if (fs.existsSync(req.file.path)) {
+          await fs.promises.unlink(req.file.path);
+          console.log('[File Cleanup] Temporary upload removed after update route error.');
+        }
+      } catch (cleanupErr) {
+        console.warn('[File Cleanup] Could not remove temporary upload:', cleanupErr.message);
+      }
+    }
+
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message || 'Failed to update course module.' });
+    }
   }
 });
 
@@ -2721,18 +2927,29 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
       const transcribeEndpoint = `${gatewayUrl}/api/v1/stt/transcribe`;
       const pyResponse = await axios.post(transcribeEndpoint, form, {
         headers,
-        timeout: 3000
+        timeout: 15000
       }).catch(async (err) => {
         if (err.response?.status === 404) {
-          return await axios.post(`${gatewayUrl}/api/v1/transcribe`, form, { headers, timeout: 3000 });
+          return await axios.post(`${gatewayUrl}/api/v1/transcribe`, form, { headers, timeout: 15000 });
         }
         throw err;
       });
 
       if (pyResponse.data && typeof pyResponse.data.text === 'string') {
-        const text = pyResponse.data.text.trim();
+        let text = pyResponse.data.text.trim();
         const detectedLanguage = pyResponse.data.detected_language || targetLangCode || 'en';
-        console.log(`[Whisper Flow Python AI Service Result]: "${text}" (detected: ${detectedLanguage})`);
+        const normStt = text.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+        const whisperHallucinations = new Set([
+          'thank you', 'thanks', 'thank you for watching', 'thanks for watching',
+          'take a minute', 'wait a minute', 'just a minute', 'one minute', 'one moment',
+          'blank audio', 'silence', 'you', 'bye', 'subtitles by'
+        ]);
+        if (whisperHallucinations.has(normStt)) {
+          console.log(`[Whisper Flow] Filtered silence hallucination: "${text}"`);
+          text = '';
+        } else {
+          console.log(`[Whisper Flow Python AI Service Result]: "${text}" (detected: ${detectedLanguage})`);
+        }
         return res.json({ text, detectedLanguage });
       }
     } catch (pyErr) {

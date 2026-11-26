@@ -634,11 +634,18 @@ Deliver your instructional lecture for this slide.`;
       .map(t => cleanUnsupportedWords(stripSlidePlaceholders(String(t))))
       .filter(t => t && !isBinaryNoiseText(t))
       .join('\n');
+    const rawFallbackLines = (!slide.headings?.length && !slide.bulletPoints?.length && !slide.paragraphs?.length)
+      ? String(slide.fullText || slide.text || slide.content || '')
+          .split('\n')
+          .map(l => l.trim())
+          .filter(l => l && !/^\d+$/.test(l))
+      : [];
     const parts = [
       visual,
       ...(slide.headings || []),
       ...(slide.bulletPoints || []),
       ...(slide.paragraphs || []),
+      ...rawFallbackLines,
       slide.speakerNotes || ''
     ]
       .map(p => cleanUnsupportedWords(stripSlidePlaceholders(String(p || '').trim())))
@@ -1450,16 +1457,17 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
         let concept = firstUsefulTitleLine(teaching);
         if (!concept && group[0] && !isGarbageTitle(group[0].title)) concept = group[0].title;
         if (!concept) concept = `${cleanFileName} — Part ${generatedChunks.length + 1}`;
-        const slideNums = group.map(s => s.slideNumber);
+        const slideNums = group.map(s => s.slideNumber || s.page || s.page_number).filter(Boolean);
+        const pageNum = slideNums[0] || (generatedChunks.length + 1);
         generatedChunks.push({
           chunkIndex: generatedChunks.length,
           concept,
           topic: cleanFileName,
           subtopic: null,
           chunkType: 'concept',
-          sourcePage: slideNums[0],
+          sourcePage: pageNum,
           sourceSlides: slideNums,
-          sourceSection: `Slides ${slideNums.join(', ')}`,
+          sourceSection: slideNums.length > 0 ? `Slides ${slideNums.join(', ')}` : `Section ${generatedChunks.length + 1}`,
           prerequisites: null,
           keyPoints: group.flatMap(s => s.bulletPoints || []).slice(0, 5).map(b => String(b).replace(/^[\s\-\*]+/, '')),
           relatedConcepts: [],

@@ -674,9 +674,11 @@ export const api = {
         body: JSON.stringify({
           message: chatData.message || chatData.text,
           courseTitle: chatData.courseTitle,
+          lessonId: chatData.lessonId,
           lessonTitle: chatData.lessonTitle,
           currentConcept: chatData.currentConcept,
           language: chatData.language,
+          conversationId: chatData.conversationId,
           conversationHistory: chatData.conversationHistory || [],
           aiName: chatData.aiName || chatData.assistantName,
         }),
@@ -1011,8 +1013,8 @@ export const api = {
       headers: getHeaders(true),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to delete course module.');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to delete course module (HTTP ${res.status}).`);
     }
     try { sessionStorage.removeItem('skillbridge_cached_courses'); } catch (_) {}
     return res.json();

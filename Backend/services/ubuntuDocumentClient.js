@@ -1,6 +1,7 @@
 import axios from 'axios';
 import FormData from 'form-data';
 import path from 'path';
+import fs from 'fs';
 import { getPythonServiceUrl, getGatewayApiKey } from '../config/gateway.js';
 import { formatGatewayError } from '../utils/gatewayError.js';
 
@@ -14,7 +15,7 @@ export const SUPPORTED_DOCUMENT_EXTENSIONS = new Set([
   'html', 'htm', 'png', 'jpg', 'jpeg',
 ]);
 
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
 
 function getAuthHeaders(extra = {}) {
   const headers = { ...extra };
@@ -28,28 +29,57 @@ function getAuthHeaders(extra = {}) {
 /**
  * Validates file extension, presence, and size before sending to Ubuntu AI Server.
  */
-export function validateDocumentFile(file) {
-  if (!file || !file.buffer || !Buffer.isBuffer(file.buffer) || file.buffer.length === 0) {
-    const err = new Error('Uploaded file is empty or missing.');
-    err.status = 400;
-    throw err;
+function getDocumentFileSize(file) {
+  if (Buffer.isBuffer(file?.buffer)) {
+    return file.buffer.length;
   }
-  if (file.buffer.length > MAX_UPLOAD_BYTES) {
-    const err = new Error('Uploaded file exceeds maximum 100 MB limit.');
-    err.status = 413;
-    throw err;
+
+  if (file?.path && fs.existsSync(file.path)) {
+    return fs.statSync(file.path).size;
   }
-  const ext = path.extname(file.originalname || '').replace('.', '').toLowerCase();
-  if (!SUPPORTED_DOCUMENT_EXTENSIONS.has(ext)) {
-    const err = new Error(
-      `Unsupported file format ".${ext || 'unknown'}". Supported formats: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, TXT, CSV, RTF, HTML, PNG, JPG, JPEG.`
-    );
-    err.status = 415;
-    throw err;
-  }
-  return ext;
+
+  return 0;
 }
 
+export function validateDocumentFile(file) {
+  const fileSize = getDocumentFileSize(file);
+
+  if (!file || fileSize <= 0) {
+    throw Object.assign(
+      new Error('Uploaded file is empty or missing.'),
+      { status: 400 }
+    );
+  }
+
+  const ext = path.extname(file.originalname || '')
+    .replace('.', '')
+    .toLowerCase();
+
+  if (!SUPPORTED_DOCUMENT_EXTENSIONS.has(ext)) {
+    throw Object.assign(
+      new Error(`Unsupported file type: .${ext}`),
+      { status: 415 }
+    );
+  }
+
+  return ext;
+}
+function appendDocumentFile(form, file) {
+  const options = {
+    filename: file.originalname || 'document',
+    contentType: file.mimetype || 'application/octet-stream',
+  };
+
+  if (file.path) {
+    form.append('file', fs.createReadStream(file.path), {
+      ...options,
+      knownLength: getDocumentFileSize(file),
+    });
+    return;
+  }
+
+  form.append('file', file.buffer, options);
+}
 /**
  * Submits a document to the Ubuntu AI Server async processing pipeline.
  * Falls back to the legacy /api/v1/documents/extract endpoint if the new
@@ -61,10 +91,7 @@ export async function submitDocumentJob(file, { title = '', description = '', ge
   validateDocumentFile(file);
   const serviceUrl = getPythonServiceUrl();
   const form = new FormData();
-  form.append('file', file.buffer, {
-    filename: file.originalname || 'document',
-    contentType: file.mimetype || 'application/octet-stream',
-  });
+  appendDocumentFile(form, file);
   form.append('title', String(title || ''));
   form.append('description', String(description || ''));
   form.append('generate_curriculum', String(Boolean(generateCurriculum)));
@@ -72,7 +99,7 @@ export async function submitDocumentJob(file, { title = '', description = '', ge
   try {
     const res = await axios.post(`${serviceUrl}/api/v1/documents/process`, form, {
       headers: { ...form.getHeaders(), ...getAuthHeaders() },
-      timeout: 60000,
+      timeout: 180000,
       maxBodyLength: Infinity,
       maxContentLength: Infinity,
     });
@@ -113,10 +140,7 @@ async function _submitViaLegacyExtract(file, { title = '', description = '' } = 
   }
 
   const form = new FormData();
-  form.append('file', file.buffer, {
-    filename: file.originalname || 'document',
-    contentType: file.mimetype || 'application/octet-stream',
-  });
+  appendDocumentFile(form, file);
 
   // The legacy extract endpoint is synchronous — call it and wait for the result.
   const extractRes = await axios.post(`${serviceUrl}/api/v1/documents/extract`, form, {

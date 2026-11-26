@@ -237,18 +237,16 @@ export class VectorChunkService {
     console.log(`[pgvector] Generated ${semanticChunks.length} semantic chunks for course ${courseId}. Generating vector embeddings...`);
 
     // 2. Generate embeddings from the FINAL rich semantic chunks
-    let embeddings = [];
-    try {
-      const textsToEmbed = semanticChunks.map(c => {
-        const topicPrefix = c.topic ? `[Topic: ${c.topic}] ` : '';
-        const conceptPrefix = c.concept ? `[Concept: ${c.concept}] ` : '';
-        return `${topicPrefix}${conceptPrefix}${c.chunkText}`;
-      });
-      embeddings = await aiService.getEmbeddings(textsToEmbed, 768);
-      console.log(`[pgvector] Successfully computed ${embeddings.length} vector embeddings (dim=${embeddings[0]?.length || 0}).`);
-    } catch (e) {
-      console.warn(`[pgvector] Failed to compute embeddings:`, e.message);
+    const textsToEmbed = semanticChunks.map(c => {
+      const topicPrefix = c.topic ? `[Topic: ${c.topic}] ` : '';
+      const conceptPrefix = c.concept ? `[Concept: ${c.concept}] ` : '';
+      return `${topicPrefix}${conceptPrefix}${c.chunkText}`;
+    });
+    const embeddings = await aiService.getEmbeddings(textsToEmbed, 768);
+    if (!Array.isArray(embeddings) || embeddings.length !== semanticChunks.length) {
+      throw new Error(`Embedding generation returned ${embeddings?.length || 0} vectors for ${semanticChunks.length} chunks.`);
     }
+    console.log(`[pgvector] Successfully computed ${embeddings.length} vector embeddings (dim=${embeddings[0]?.length || 0}).`);
 
     // 3. Store into PostgreSQL pgvector CourseChunk table
     const stored = await this.storeChunks(prisma, courseId, semanticChunks, embeddings);
@@ -409,128 +407,131 @@ export class VectorChunkService {
    */
   async storeChunks(prisma, courseId, chunks, embeddings = null) {
     await this.ensureColumnsExist(prisma);
+    if (!Array.isArray(chunks) || chunks.length === 0) {
+      return [];
+    }
 
-    // Delete existing chunks for this course
-    try {
-      await prisma.$executeRawUnsafe(
+    const savedChunks = await prisma.$transaction(async (tx) => {
+      // Atomically delete existing chunks for this course before inserting the new version
+      await tx.$executeRawUnsafe(
         `DELETE FROM "CourseChunk" WHERE "courseId" = $1`,
         courseId
       );
-    } catch (delErr) {
-      console.warn(`[pgvector] Notice on deleting old course chunks:`, delErr.message);
-    }
 
-    const savedChunks = [];
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const rawEmbeddingArr = embeddings && embeddings[i] ? embeddings[i] : null;
-      const embeddingArr = Array.isArray(rawEmbeddingArr) && rawEmbeddingArr.length > 0
-        ? aiService._alignEmbeddingDimension(rawEmbeddingArr, 768)
-        : null;
+      const insertedList = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        const rawEmbeddingArr = embeddings && embeddings[i] ? embeddings[i] : null;
+        const embeddingArr = Array.isArray(rawEmbeddingArr) && rawEmbeddingArr.length > 0
+          ? aiService._alignEmbeddingDimension(rawEmbeddingArr, 768)
+          : null;
 
-      let inserted = null;
-      const sourceSlidesJson = chunk.sourceSlides ? JSON.stringify(chunk.sourceSlides) : null;
-      const keyPointsJson = chunk.keyPoints ? JSON.stringify(chunk.keyPoints) : null;
-      const relatedConceptsJson = chunk.relatedConcepts ? JSON.stringify(chunk.relatedConcepts) : null;
-      const metadataJson = chunk.metadata ? JSON.stringify(chunk.metadata) : null;
+        let inserted = null;
+        const sourceSlidesJson = chunk.sourceSlides ? JSON.stringify(chunk.sourceSlides) : null;
+        const keyPointsJson = chunk.keyPoints ? JSON.stringify(chunk.keyPoints) : null;
+        const relatedConceptsJson = chunk.relatedConcepts ? JSON.stringify(chunk.relatedConcepts) : null;
+        const metadataJson = chunk.metadata ? JSON.stringify(chunk.metadata) : null;
 
-      // 1. Primary: Insert with pgvector 768-dim embedding and full semantic metadata
-      if (embeddingArr && embeddingArr.length === 768) {
-        try {
-          const vectorStr = `[${embeddingArr.join(',')}]`;
-          const rows = await prisma.$queryRawUnsafe(
-            `INSERT INTO "CourseChunk" (
-               "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
-               "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
-               "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
-               "embedding", "createdAt"
-             )
-             VALUES (
-               gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
-               $8, $9, $10::jsonb, $11, $12,
-               $13::jsonb, $14::jsonb, $15::jsonb, $16,
-               $17::vector, NOW()
-             )
-             RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
-            courseId,
-            chunk.chunkIndex,
-            chunk.chunkText,
-            chunk.lessonId || null,
-            chunk.topic,
-            chunk.subtopic,
-            chunk.concept,
-            chunk.chunkType,
-            chunk.sourcePage,
-            sourceSlidesJson,
-            chunk.sourceSection,
-            chunk.prerequisites,
-            keyPointsJson,
-            relatedConceptsJson,
-            metadataJson,
-            chunk.semanticSummary,
-            vectorStr
-          );
-          inserted = rows[0];
-        } catch (vecErr) {
-          console.warn(`[pgvector] Vector column insert notice for chunk ${chunk.chunkIndex}:`, vecErr.message);
-        }
-      }
-
-      // 2. Fallback: Insert without vector column but with full metadata
-      if (!inserted) {
-        try {
-          const rows = await prisma.$queryRawUnsafe(
-            `INSERT INTO "CourseChunk" (
-               "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
-               "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
-               "keyPoints", "relatedConcepts", "metadata", "semanticSummary", "createdAt"
-             )
-             VALUES (
-               gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
-               $8, $9, $10::jsonb, $11, $12,
-               $13::jsonb, $14::jsonb, $15::jsonb, $16, NOW()
-             )
-             RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
-            courseId,
-            chunk.chunkIndex,
-            chunk.chunkText,
-            chunk.lessonId || null,
-            chunk.topic,
-            chunk.subtopic,
-            chunk.concept,
-            chunk.chunkType,
-            chunk.sourcePage,
-            sourceSlidesJson,
-            chunk.sourceSection,
-            chunk.prerequisites,
-            keyPointsJson,
-            relatedConceptsJson,
-            metadataJson,
-            chunk.semanticSummary
-          );
-          inserted = rows[0];
-        } catch (rawErr) {
-          // 3. Final ORM fallback
+        // 1. Primary: Insert with pgvector 768-dim embedding and full semantic metadata
+        if (embeddingArr && embeddingArr.length === 768) {
           try {
-            inserted = await prisma.courseChunk.create({
-              data: {
-                courseId,
-                chunkIndex: chunk.chunkIndex,
-                chunkText: chunk.chunkText,
-                topic: chunk.topic,
-                concept: chunk.concept
-              }
-            });
-          } catch (prismaErr) {
-            console.warn(`[pgvector] Failed to save chunk ${chunk.chunkIndex}:`, prismaErr.message);
+            const vectorStr = `[${embeddingArr.join(',')}]`;
+            const rows = await tx.$queryRawUnsafe(
+              `INSERT INTO "CourseChunk" (
+                 "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
+                 "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+                 "keyPoints", "relatedConcepts", "metadata", "semanticSummary",
+                 "embedding", "createdAt"
+               )
+               VALUES (
+                 gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
+                 $8, $9, $10::jsonb, $11, $12,
+                 $13::jsonb, $14::jsonb, $15::jsonb, $16,
+                 $17::vector, NOW()
+               )
+               RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
+              courseId,
+              chunk.chunkIndex ?? i,
+              chunk.chunkText,
+              chunk.lessonId || null,
+              chunk.topic,
+              chunk.subtopic,
+              chunk.concept,
+              chunk.chunkType,
+              chunk.sourcePage,
+              sourceSlidesJson,
+              chunk.sourceSection,
+              chunk.prerequisites,
+              keyPointsJson,
+              relatedConceptsJson,
+              metadataJson,
+              chunk.semanticSummary,
+              vectorStr
+            );
+            inserted = rows[0];
+          } catch (vecErr) {
+            console.warn(`[pgvector] Vector column insert notice for chunk ${chunk.chunkIndex ?? i}:`, vecErr.message);
           }
         }
+
+        // 2. Fallback: Insert without vector column but with full metadata
+        if (!inserted) {
+          try {
+            const rows = await tx.$queryRawUnsafe(
+              `INSERT INTO "CourseChunk" (
+                 "id", "courseId", "chunkIndex", "chunkText", "content", "lessonId", "topic", "subtopic", "concept",
+                 "chunkType", "sourcePage", "sourceSlides", "sourceSection", "prerequisites",
+                 "keyPoints", "relatedConcepts", "metadata", "semanticSummary", "createdAt"
+               )
+               VALUES (
+                 gen_random_uuid()::text, $1, $2, $3, $3, $4, $5, $6, $7,
+                 $8, $9, $10::jsonb, $11, $12,
+                 $13::jsonb, $14::jsonb, $15::jsonb, $16, NOW()
+               )
+               RETURNING "id", "courseId", "chunkIndex", "chunkText", "topic", "concept"`,
+              courseId,
+              chunk.chunkIndex ?? i,
+              chunk.chunkText,
+              chunk.lessonId || null,
+              chunk.topic,
+              chunk.subtopic,
+              chunk.concept,
+              chunk.chunkType,
+              chunk.sourcePage,
+              sourceSlidesJson,
+              chunk.sourceSection,
+              chunk.prerequisites,
+              keyPointsJson,
+              relatedConceptsJson,
+              metadataJson,
+              chunk.semanticSummary
+            );
+            inserted = rows[0];
+          } catch (rawErr) {
+            // 3. Final ORM fallback
+            try {
+              inserted = await tx.courseChunk.create({
+                data: {
+                  courseId,
+                  chunkIndex: chunk.chunkIndex ?? i,
+                  chunkText: chunk.chunkText,
+                  topic: chunk.topic,
+                  concept: chunk.concept
+                }
+              });
+            } catch (prismaErr) {
+              console.warn(`[pgvector] Failed to save chunk ${chunk.chunkIndex ?? i}:`, prismaErr.message);
+            }
+          }
+        }
+
+        if (inserted) {
+          insertedList.push(inserted);
+        }
       }
 
-      if (inserted) {
-        savedChunks.push(inserted);
-      }
-    }
+      return insertedList;
+    }, { timeout: 60000 });
 
     console.log(`[pgvector] Stored ${savedChunks.length} semantic chunks in PostgreSQL CourseChunk table.`);
     return savedChunks;
@@ -667,16 +668,24 @@ export class VectorChunkService {
       }
     } catch (_) { }
 
-    // If vector search returned results, apply concept/topic relevance weighting
+    // If vector search returned results, apply concept/topic/lesson-slide relevance weighting
     if (vectorResults && vectorResults.length > 0) {
       const topicKeyword = (options.topicFilter || options.lessonTitle || '').toLowerCase().trim();
       const conceptKeyword = (options.conceptFilter || '').toLowerCase().trim();
+      const activeSlides = Array.isArray(options.sourceSlides) ? options.sourceSlides.map(Number).filter(n => !isNaN(n)) : [];
 
       const ranked = vectorResults.map(item => {
         let boost = 0;
         const itemText = (item.text || '').toLowerCase();
         const itemTopic = (item.topic || '').toLowerCase();
         const itemConcept = (item.concept || '').toLowerCase();
+        const itemSlides = Array.isArray(item.source_slides || item.sourceSlides)
+          ? (item.source_slides || item.sourceSlides).map(Number)
+          : [];
+
+        if (activeSlides.length > 0 && itemSlides.some(s => activeSlides.includes(s))) {
+          boost += 0.35;
+        }
 
         if (conceptKeyword) {
           if (itemConcept.includes(conceptKeyword)) boost += 0.35;

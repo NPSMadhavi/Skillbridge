@@ -530,6 +530,7 @@ export const isNoiseOrHallucination = (text) => {
     'blank audio', 'blank_audio', 'silence', 'music', 'applause',
     'thank you', 'thank you for watching', 'thanks for watching', 'thanks',
     'thank you very much', 'you are very welcome', 'youre very welcome',
+    'take a minute', 'wait a minute', 'just a minute', 'one minute', 'one moment', 'please wait',
     'see you in the next video', 'see you in the next one', 'see you next time', 'see you later',
     'i will see you', 'i will see you in the next', 'subtitles by', 'subscribe to',
     'subscribe', 'like and subscribe', 'translated by',
@@ -1649,6 +1650,7 @@ export class VoiceTutorManager {
 
       rec.onresult =
         (event) => {
+          this.consecutiveRecognitionErrors = 0;
 
           if (
             !this.isMounted
@@ -1745,19 +1747,17 @@ export class VoiceTutorManager {
             this.isMounted &&
             !this.isTutorSpeaking
           ) {
-
             if (
-              event.error ===
-              'network' ||
-
-              event.error ===
-              'service-not-allowed' ||
-
-              event.error ===
-              'audio-capture'
+              event.error === 'network' ||
+              event.error === 'service-not-allowed' ||
+              event.error === 'audio-capture'
             ) {
-
-              this.scheduleRestart();
+              this.consecutiveRecognitionErrors = (this.consecutiveRecognitionErrors || 0) + 1;
+              const backoffMs = Math.min(15000, 1000 * Math.pow(2, this.consecutiveRecognitionErrors - 1));
+              if (event.error === 'network' && this.consecutiveRecognitionErrors >= 3) {
+                this.onStatusChange?.('Speech recognition network unavailable — use text chat or retry voice.');
+              }
+              this.scheduleRestart(backoffMs);
             }
           }
         };

@@ -1414,11 +1414,11 @@ const CoursePlayer = ({
       setVoiceStatusText(`👂 Listening for your question…`);
     };
 
-    // 2.2s Watchdog guarantees onAckEnd ALWAYS fires even if audio glitches or onended drops
+    // 5.5s Safety Watchdog guarantees onAckEnd ALWAYS fires if audio stalls or fails to start
     ackWatchdog = setTimeout(() => {
       console.warn('[VOICE] Wake acknowledgment audio watchdog fired; auto-transitioning to ACTIVE_LISTENING');
       onAckEnd();
-    }, 2200);
+    }, 5500);
 
     // Fast-path: If pre-buffered audio is ready, play instantly (< 50ms latency)
     if (wakeAckAudioRef.current?.readyState >= 3) {
@@ -1430,12 +1430,14 @@ const CoursePlayer = ({
         voiceManagerRef.current?.setTutorSpeaking(true, ack);
         audio.onended = onAckEnd;
         audio.onerror = () => {
+          if (ackWatchdog) { clearTimeout(ackWatchdog); ackWatchdog = null; }
           speakAriaAnswer(ack, onAckEnd);
         };
         const playPromise = audio.play();
         if (playPromise !== undefined) {
           playPromise.catch((err) => {
             console.warn('[VOICE] Fast-path audio play notice:', err);
+            if (ackWatchdog) { clearTimeout(ackWatchdog); ackWatchdog = null; }
             speakAriaAnswer(ack, onAckEnd);
           });
         }
@@ -1445,7 +1447,11 @@ const CoursePlayer = ({
       }
     }
 
-    // Always speak greeting audibly so ARIA responds immediately with full avatar voice
+    // speakAriaAnswer manages its own load/playback watchdogs and invokes onAckEnd on completion
+    if (ackWatchdog) {
+      clearTimeout(ackWatchdog);
+      ackWatchdog = null;
+    }
     speakAriaAnswer(ack, onAckEnd);
   };
 
@@ -1657,17 +1663,17 @@ const CoursePlayer = ({
     isAnsweringRef.current = true
     voiceManagerRef.current?.setState(TutorState.PROCESSING)
 
-    // 40s Safety Watchdog prevents permanent locking if network or LLM times out
+    // 65s Safety Watchdog (aligned with 60s chatWithTutor abort timeout) prevents permanent locking
     const answeringWatchdog = setTimeout(() => {
       if (isAnsweringRef.current) {
-        console.warn('[VOICE] Question answering watchdog timed out (40s); recovering state.');
+        console.warn('[VOICE] Question answering watchdog timed out (65s); recovering state.');
         isAnsweringRef.current = false;
         setChatLoading(false);
         if (voiceManagerRef.current?.state === TutorState.PROCESSING || voiceManagerRef.current?.state === TutorState.ARIA_SPEAKING) {
           voiceManagerRef.current?.returnToSleep();
         }
       }
-    }, 40000);
+    }, 65000);
 
     // Get current concept being explained on chalkboard
     const currentConceptText = (sentencesRef.current && sentencesRef.current[savedLecturePositionRef.current]) ||
@@ -1684,9 +1690,11 @@ const CoursePlayer = ({
       const chatRes = await api.chatWithTutor(courseIdToUse, {
         message: cleanQuestion,
         courseTitle: course?.title || 'Safety & Operations Course',
+        lessonId: activeLessonRef.current?.id,
         lessonTitle: activeLessonRef.current?.title,
         currentConcept: currentConceptText,
         language: selectedLanguageCode,
+        conversationId: `conv_${courseIdToUse}`,
         conversationHistory: historyToSend,
         aiName: aiTutorName
       })
@@ -2823,14 +2831,26 @@ const CoursePlayer = ({
               setPipelineState('PLAYING');
 
               // Safety playback watchdog: if onended never fires or sub-frame stall occurs, auto-advance
-              const rawDuration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : Math.max(3, spokenText.length / 8);
-              const watchdogDurationMs = Math.ceil(rawDuration * 1000) + 2500;
-              playbackWatchdog = setTimeout(() => {
-                if (!hasAdvanced && playingRef.current && isMountedRef.current) {
-                  console.warn(`[VOICE] Playback watchdog reached for sentence ${idx}. Advancing cleanly...`);
-                  triggerAdvance();
+              const schedulePlaybackWatchdog = (durSeconds) => {
+                if (playbackWatchdog) clearTimeout(playbackWatchdog);
+                const watchdogDurationMs = Math.ceil(durSeconds * 1000) + 3500;
+                playbackWatchdog = setTimeout(() => {
+                  if (!hasAdvanced && playingRef.current && isMountedRef.current) {
+                    console.warn(`[VOICE] Playback watchdog reached for sentence ${idx}. Advancing cleanly...`);
+                    triggerAdvance();
+                  }
+                }, watchdogDurationMs);
+              };
+              const rateFactor = Math.max(0.5, Number(playbackRate) || 1);
+              const rawDuration = Number.isFinite(audio.duration) && audio.duration > 0
+                ? audio.duration
+                : Math.max(4, spokenText.length / (7 * rateFactor));
+              schedulePlaybackWatchdog(rawDuration);
+              audio.ondurationchange = () => {
+                if (hasStarted && !hasAdvanced && Number.isFinite(audio.duration) && audio.duration > 0) {
+                  schedulePlaybackWatchdog(audio.duration);
                 }
-              }, watchdogDurationMs);
+              };
             };
 
             audio.onplay = onAudioStart;
@@ -3156,9 +3176,11 @@ const CoursePlayer = ({
     api.chatWithTutor(courseIdToUse, {
       message: userMsg,
       courseTitle: course?.title || 'Safety & Operations Course',
+      lessonId: activeLessonRef.current?.id,
       lessonTitle: activeLessonRef.current?.title,
       currentConcept: currentConceptText,
       language: selectedLanguageCode,
+      conversationId: `conv_${courseIdToUse}`,
       conversationHistory: (chatMessagesRef.current || []).slice(-8),
       aiName: aiTutorName
     })

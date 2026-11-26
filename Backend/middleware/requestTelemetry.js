@@ -12,9 +12,10 @@ export function requestTelemetryMiddleware(req, res, next) {
   const abortController = new AbortController();
   req.abortController = abortController;
 
-  // If client or reverse proxy disconnects before response finishes, abort active background operations
-  req.on('close', () => {
-    if (!res.writableEnded) {
+  // If client or reverse proxy disconnects before response finishes, abort active background operations.
+  // Must listen on res.on('close') + !res.writableFinished (NOT req.on('close'), which fires as soon as req body is read).
+  res.on('close', () => {
+    if (!res.writableFinished) {
       abortController.abort(new Error('Client or proxy closed connection before response completed.'));
     }
   });
