@@ -209,7 +209,16 @@ async function processCourseDocumentInBackground({
     }
 
     const fileStem = fileObj.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().toLowerCase();
-    const isGenericUserDesc = !description || description.trim().length < 40 || description.trim().toLowerCase() === fileStem;
+    const userDescLower = String(description || '').trim().toLowerCase();
+    const docTopicTokens = new Set(
+      [baseCurriculum.title, ...(baseCurriculum.lessons || []).map(l => l.title)]
+        .join(' ')
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(w => w.length >= 4 && w !== 'unit' && w !== 'module' && w !== 'lesson' && w !== 'using')
+    );
+    const hasTopicOverlap = docTopicTokens.size === 0 || Array.from(docTopicTokens).some(tok => userDescLower.includes(tok));
+    const isGenericUserDesc = !description || description.trim().length < 40 || userDescLower === fileStem || !hasTopicOverlap;
     const resolvedDescription = (isGenericUserDesc && baseCurriculum.description) ? baseCurriculum.description : description;
 
     const finalCurriculum = {
@@ -310,7 +319,16 @@ async function processCourseDocumentInBackground({
       }
 
       const fileStemFb = fileObj.originalname.replace(/\.[^/.]+$/, '').replace(/[-_]+/g, ' ').trim().toLowerCase();
-      const isGenericFbDesc = !description || description.trim().length < 40 || description.trim().toLowerCase() === fileStemFb;
+      const userDescFbLower = String(description || '').trim().toLowerCase();
+      const fbTopicTokens = new Set(
+        [fallbackCurriculum.title, ...(fallbackCurriculum.lessons || []).map(l => l.title)]
+          .join(' ')
+          .toLowerCase()
+          .split(/[^a-z0-9]+/)
+          .filter(w => w.length >= 4 && w !== 'unit' && w !== 'module' && w !== 'lesson' && w !== 'using')
+      );
+      const hasFbOverlap = fbTopicTokens.size === 0 || Array.from(fbTopicTokens).some(tok => userDescFbLower.includes(tok));
+      const isGenericFbDesc = !description || description.trim().length < 40 || userDescFbLower === fileStemFb || !hasFbOverlap;
       const resolvedFbDescription = (isGenericFbDesc && fallbackCurriculum.description) ? fallbackCurriculum.description : description;
 
       fallbackCurriculum.title = title;

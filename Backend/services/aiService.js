@@ -5,6 +5,7 @@ import {
   isGarbageTitle,
   isPlaceholderTitle,
   isBinaryNoiseText,
+  extractTopicHeading,
   firstUsefulTitleLine,
   cleanFileStem,
   stripSlidePlaceholders,
@@ -1506,8 +1507,63 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
       }
     }
 
-    // 2. PDF/DOCX page-aware structural chunking
+    // 2. PDF/DOCX topic-aware structural chunking (preserves exact document order and parent headings)
     if (Array.isArray(pages) && pages.length > 0) {
+      const orderedSections = this._extractOrderedTopicSections(pages, fullText, fileName);
+      if (orderedSections.length > 0) {
+        let cluster = [];
+        let clusterPages = new Set();
+        let clusterLen = 0;
+        let clusterConcept = orderedSections[0].title;
+        let clusterTopic = orderedSections[0].moduleTitle || orderedSections[0].title;
+
+        const flushTopicCluster = () => {
+          if (cluster.length === 0) return;
+          const chunkContent = cluster.join('\n\n');
+          const pageArr = Array.from(clusterPages).sort((a, b) => a - b);
+          const sourcePage = pageArr[0] || 1;
+          generatedChunks.push({
+            chunkIndex: generatedChunks.length,
+            concept: clusterConcept,
+            topic: clusterTopic,
+            subtopic: null,
+            chunkType: /define|definition|refers to/i.test(chunkContent) ? 'definition' : 'concept',
+            sourcePage,
+            sourceSlides: pageArr.length > 0 ? pageArr : [sourcePage],
+            sourceSection: `Pages ${pageArr.join(', ')}`,
+            prerequisites: null,
+            keyPoints: [],
+            relatedConcepts: [],
+            semanticSummary: cleanSummary(chunkContent, 200),
+            chunkText: `### 📌 Concept: ${clusterConcept}\n**Topic:** ${clusterTopic}\n\n${chunkContent}\n\n*(Source: Page ${sourcePage}${pageArr.length > 1 ? `-${pageArr[pageArr.length - 1]}` : ''} - ${clusterConcept})*`
+          });
+          cluster = [];
+          clusterPages = new Set();
+          clusterLen = 0;
+        };
+
+        for (const sec of orderedSections) {
+          const secText = sec.text.trim();
+          if (!secText) continue;
+          if (cluster.length > 0 && (clusterLen + secText.length > 1800 || clusterLen >= 900)) {
+            flushTopicCluster();
+            clusterConcept = sec.title;
+            clusterTopic = sec.moduleTitle || sec.title;
+          }
+          if (cluster.length === 0) {
+            clusterConcept = sec.title;
+            clusterTopic = sec.moduleTitle || sec.title;
+          }
+          cluster.push(secText);
+          for (const pNum of sec.pages) clusterPages.add(pNum);
+          clusterLen += secText.length;
+        }
+        flushTopicCluster();
+        if (generatedChunks.length > 0) {
+          return generatedChunks;
+        }
+      }
+
       let cluster = [];
       let clusterPages = [];
       let clusterLen = 0;
@@ -1935,6 +1991,84 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
    * Fallback: Generates a structured dynamic course mockup using actual extracted topics from the document/presentation
    * NEVER uses hardcoded default generic topics or forced 5 modules.
    */
+  _extractOrderedTopicSections(pages = [], text = '', fileName = 'Course') {
+    const cleanName = cleanFileStem(fileName);
+    const sourcePages = Array.isArray(pages) && pages.length > 0
+      ? pages
+      : [{ page_number: 1, text: String(text || '') }];
+
+    const sections = [];
+    let currentModuleTitle = '';
+    let current = { title: '', moduleTitle: '', pages: [], lines: [] };
+
+    const flushCurrent = () => {
+      const body = current.lines.join('\n').trim();
+      if (!current.title || body.length < 30) return;
+      sections.push({
+        title: current.title,
+        moduleTitle: current.moduleTitle || current.title,
+        pages: [...new Set(current.pages)],
+        text: body,
+      });
+    };
+
+    for (const p of sourcePages) {
+      const pNum = p.page_number || p.pageNumber || 1;
+      const lines = String(p.text || '').split('\n');
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line) continue;
+        const heading = extractTopicHeading(line);
+        if (heading) {
+          const isUnit = /^(?:unit|chapter|module|section)\s+\d+/i.test(heading);
+          const isNumberedGroup = /^\d+\.\s+/.test(heading);
+          const isMajorPlatformGroup = /^(?:Types of Online AI Platforms|Online Platform|Google AutoML|H2O\.ai|Teachable Machine|Orange Data Mining|KNIME|Weka|RapidMiner|Edge AI)$/i.test(heading);
+          if (isUnit) {
+            currentModuleTitle = heading;
+          } else if (isNumberedGroup) {
+            currentModuleTitle = heading.replace(/^\d+\.\s+/, '').trim();
+          } else if (isMajorPlatformGroup) {
+            currentModuleTitle = heading.replace(/’s$/i, 's');
+          }
+
+          const currentBodyLen = current.lines.join(' ').length;
+          // If the previous heading was just an intro/unit header with no body yet, keep it as moduleTitle and advance to the actual topic
+          if (!current.title || currentBodyLen < 45) {
+            if (!current.moduleTitle && current.title) current.moduleTitle = current.title;
+            current.title = heading;
+            if (!current.moduleTitle) current.moduleTitle = currentModuleTitle || heading;
+            if (!current.pages.includes(pNum)) current.pages.push(pNum);
+            current.lines.push(line);
+            continue;
+          }
+
+          // Deduplicate consecutive identical headings
+          if (heading.toLowerCase() === current.title.toLowerCase()) {
+            if (!current.pages.includes(pNum)) current.pages.push(pNum);
+            continue;
+          }
+
+          flushCurrent();
+          current = {
+            title: heading,
+            moduleTitle: currentModuleTitle || heading,
+            pages: [pNum],
+            lines: [line],
+          };
+        } else {
+          if (!current.title) {
+            current.title = cleanName;
+            current.moduleTitle = currentModuleTitle || cleanName;
+          }
+          if (!current.pages.includes(pNum)) current.pages.push(pNum);
+          current.lines.push(line);
+        }
+      }
+    }
+    flushCurrent();
+    return sections;
+  }
+
   _getMockCourse(fileName, text, docMetadata = {}) {
     const { slides = [], pages = [] } = docMetadata;
     if (slides && slides.length > 0) {
@@ -1943,43 +2077,23 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
     const cleanName = fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
     const formattedTitle = cleanName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
-    const standaloneSubheadingRe = /^(?:definition|definitions|advantage|advantages|disadvantage|disadvantages|benefit|benefits|limitation|limitations|drawback|drawbacks|example|examples|syntax|properties|characteristics|features|applications|summary|conclusion|note|notes|output|input|algorithm|pseudocode|working|architecture|components|types)[:\s]*$/i;
-    const danglingEndRe = /(?:,|\b(?:for|and|or|of|to|in|on|with|from|by|as|the|a|an|that|which|is|are|was|were|into|using))$/i;
-    const isValidLessonHeading = (cand) => {
-      if (!cand) return false;
-      const isShortAcronym = /^[A-Z]{2,6}(?:\s*[:\-]\s*.*)?$/.test(cand);
-      if (!isShortAcronym && (cand.length < 4 || cand.length > 85)) return false;
-      if (/^[a-z]/.test(cand)) return false;
-      if (standaloneSubheadingRe.test(cand) || danglingEndRe.test(cand)) return false;
-      if (isGarbageTitle(cand)) return false;
-      const lower = cand.toLowerCase();
-      if (lower.includes('table of contents') || lower.includes('agenda') || lower.includes('overview')) return false;
-      return true;
-    };
-
+    const orderedSections = this._extractOrderedTopicSections(pages, text, fileName);
+    const seenTopicKeys = new Set();
     const rawTopics = [];
-    if (Array.isArray(pages) && pages.length > 0) {
-      for (const p of pages) {
-        const cand = (p.headings?.[0] || p.title || firstUsefulTitleLine(p.text || '') || '')
-          .replace(/^[\d\.\-\s#\*]+/g, '').trim();
-        if (isValidLessonHeading(cand) && !rawTopics.includes(cand)) {
-          rawTopics.push(cand);
-        }
-      }
+    for (const sec of orderedSections) {
+      const key = sec.title.toLowerCase();
+      if (seenTopicKeys.has(key)) continue;
+      seenTopicKeys.add(key);
+      rawTopics.push({ title: sec.title, pages: sec.pages, moduleTitle: sec.moduleTitle });
     }
 
     if (rawTopics.length === 0 && text) {
-      const paras = text.split(/\n+/);
-      for (let p of paras) {
-        p = p.trim();
-        if (!p || p.length < 4 || p.length > 85) continue;
-        if (p.endsWith('.') || p.endsWith(',') || p.endsWith('?') || p.endsWith(';')) continue;
-        const clean = p.replace(/^[\d\.\-\s#\*]+/g, '').trim();
-        if (!isValidLessonHeading(clean)) continue;
-        if (!/^[A-Z0-9]/.test(clean)) continue;
-        if (rawTopics.length >= 24) break;
-        if (!rawTopics.includes(clean)) {
-          rawTopics.push(clean);
+      for (const p of text.split(/\n+/)) {
+        const heading = extractTopicHeading(p);
+        if (heading && !seenTopicKeys.has(heading.toLowerCase())) {
+          seenTopicKeys.add(heading.toLowerCase());
+          rawTopics.push({ title: heading, pages: [1], moduleTitle: heading });
+          if (rawTopics.length >= 24) break;
         }
       }
     }
@@ -1991,21 +2105,31 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
     let currentClusterTitle = '';
 
     for (let i = 0; i < rawTopics.length; i++) {
-      const t = rawTopics[i];
+      const topicItem = rawTopics[i];
+      const t = typeof topicItem === 'string' ? topicItem : topicItem.title;
+      const itemModule = (typeof topicItem === 'object' && topicItem.moduleTitle) ? topicItem.moduleTitle : t;
       if (currentCluster.length === 0) {
-        currentClusterTitle = t;
+        currentClusterTitle = itemModule;
       }
-      currentCluster.push(t);
+      currentCluster.push(topicItem);
 
-      // Start new module every 2-3 lessons or at the end
-      if (currentCluster.length >= 3 || i === rawTopics.length - 1) {
+      const nextItem = rawTopics[i + 1];
+      const nextModule = nextItem ? ((typeof nextItem === 'object' && nextItem.moduleTitle) ? nextItem.moduleTitle : (typeof nextItem === 'string' ? nextItem : nextItem.title)) : '';
+      const moduleChanged = nextItem && nextModule.toLowerCase() !== currentClusterTitle.toLowerCase() && currentCluster.length >= 2;
+
+      // Start new module when parent module changes (with >= 2 lessons), at 4 lessons, or at the end
+      if (moduleChanged || currentCluster.length >= 4 || i === rawTopics.length - 1) {
         const modId = modules.length + 1;
         const modTitle = currentClusterTitle || `Module ${modId}: Training Unit`;
         const modLessons = [];
 
-        for (const lessonTitle of currentCluster) {
+        for (const item of currentCluster) {
+          const lessonTitle = typeof item === 'string' ? item : item.title;
+          const itemPages = (typeof item === 'object' && Array.isArray(item.pages) && item.pages.length > 0)
+            ? item.pages
+            : [Math.min(slides.length || 1, flatLessons.length + 1)];
           const lessonIdx = flatLessons.length;
-          const slideNum = Math.min(slides.length || 1, lessonIdx + 1);
+          const slideNum = itemPages[0];
           const slideObj = slides.find(s => s.slideNumber === slideNum || s.title === lessonTitle);
           const slideVisuals = (slideObj?.images || []).map(img => ({
             id: img.id,
@@ -2035,6 +2159,8 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
             images: slideVisuals
           } : null;
 
+          const mins = 7 + (flatLessons.length % 5);
+          const secs = (flatLessons.length * 15) % 60;
           const lessonObj = {
             id: flatLessons.length + 1,
             chapterId: modId,
@@ -2042,10 +2168,10 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
             moduleId: modId,
             moduleTitle: modTitle,
             title: lessonTitle,
-            sourceSlides: [slideNum],
+            sourceSlides: itemPages,
             visuals: slideVisuals,
             slideData,
-            duration: `0${Math.floor(7 + ((flatLessons.length) % 5))}:${((flatLessons.length) * 15) % 60 < 10 ? '0' : ''}${((flatLessons.length) * 15) % 60}`,
+            duration: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
             status: flatLessons.length === 0 ? 'active' : 'locked'
           };
           modLessons.push(lessonObj);

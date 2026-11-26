@@ -114,17 +114,55 @@ export function isUsefulTeachingText(value) {
   return /[\u0980-\u09FF\u0B80-\u0BFF\u4E00-\u9FFF]/.test(t) && t.length >= 16;
 }
 
+const GENERIC_SUBHEADING_RE = /^(?:definition|definitions|advantage|advantages|disadvantage|disadvantages|benefit|benefits|limitation|limitations|drawback|drawbacks|example|examples|examples?\s+in\s+ai|syntax|properties|characteristics|features|applications|summary|summary\s+table|conclusion|note|notes|output|input|algorithm|pseudocode|working|architecture|components|types|key\s+features|in\s+simple\s+words|it\s+is\s+mainly\s+used\s+for|visual\s+example|step\s+\d+.*|process\s+of\s+using.*|real[\s-]+life\s+examples.*|(?:advantages|disadvantages|features|types|components|applications|process|workflow)\s+(?:of|in)\s+.+|hardware\s+types\s+features.*|sequential\s+computing|parallel\s+processing|running\s+ml\s+scripts|fast\s+ai\s+training|gpUs?\s+and\s+ai\s+computing)$/i;
+
+export function extractTopicHeading(rawLine) {
+  let line = String(rawLine || '').trim();
+  if (!line) return '';
+  // Reject bullet/sub-list items, formulas, arrows, and comparisons
+  if (/^(?:[•\-*▪▸►→➢]|o\s+|[a-z]\)\s+)/i.test(line)) return '';
+  if (/[→←↔>=<]/.test(line)) return '';
+  // Reject lowercase continuations or pronoun/sentence starts
+  if (/^[a-z]/.test(line)) return '';
+  if (/^(?:They|It|This|These|Those|Here|There|Step\s+\d+)\b/i.test(line)) return '';
+  // Strip optional markdown heading prefix
+  line = line.replace(/^#{1,6}\s+/, '').trim();
+  const hadTrailingColon = /:\s*$/.test(line);
+  const cleaned = line.replace(/:\s*$/, '').trim();
+  if (!cleaned) return '';
+  if (GENERIC_SUBHEADING_RE.test(cleaned)) return '';
+  if (hadTrailingColon && cleaned.split(/\s+/).length > 4) return '';
+  if (/[.!?;,]$/.test(cleaned) && !/^(?:unit|chapter|module|section)\s+\d+/i.test(cleaned)) return '';
+  const isShortAcronym = /^[A-Z]{2,6}(?:\s*\([^)]+\))?$/.test(cleaned);
+  if (!isShortAcronym && (cleaned.length < 4 || cleaned.length > 90)) return '';
+  if ((cleaned.match(/\|/g) || []).length >= 2) return '';
+  if (isGarbageTitle(cleaned) || isPlaceholderTitle(cleaned) || (!isShortAcronym && isBinaryNoiseText(cleaned))) return '';
+
+  const isUnit = /^(?:unit|chapter|module|section)\s+\d+/i.test(cleaned);
+  // Only treat numbered lines as section headers if short Title-Case (e.g. "1. Processors", "2. Memory", "3. Storage")
+  const isNumberedSection = /^\d+\.\s+(?:Processors|Memory|Storage|Platforms|Edge\s+AI|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})$/.test(cleaned);
+  const isAcronymWithExpansion = /^[A-Z]{2,6}\s*\([A-Za-z\s\-]+\)$/.test(cleaned);
+  if (isUnit || isNumberedSection || isAcronymWithExpansion || isShortAcronym) return cleaned;
+  // Reject any other numbered list item (e.g. "5. Results", "1. Free version...")
+  if (/^\d+\.\s+/.test(cleaned)) return '';
+
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (!hadTrailingColon && words.length < 2) return '';
+  if (words.length > 7) return '';
+  // Require majority Title-Case words for non-colon standalone headings (rejects lowercase phrase fragments like "Predicting customer churn...")
+  if (!hadTrailingColon) {
+    const titleCaseWords = words.filter(w => /^[A-Z0-9]/.test(w) || /^(?:of|in|for|and|or|to|on|the|a|an|using|with)$/i.test(w));
+    if (titleCaseWords.length < words.length) return '';
+  }
+  if (/\b(?:is|are|was|were|allows|enables|uses|provides|means|supports|offers|plays|can|will|should|very|less|more|free|good|simple|large|limited|usually)\b/i.test(cleaned)) return '';
+  return cleaned;
+}
+
 export function firstUsefulTitleLine(text) {
   const lines = String(text || '').split(/\n+/);
   for (const raw of lines) {
-    const line = raw.replace(/^(?:[#\-*•]+|\d+[.)\s-]+)\s*/, '').trim();
-    const isShortAcronym = /^[A-Z]{2,6}(?:\s*[:\-]\s*.*)?$/.test(line);
-    if (!isShortAcronym && (line.length < 5 || line.length > 85)) continue;
-    if ((line.match(/\|/g) || []).length >= 2) continue;
-    if (isGarbageTitle(line) || isPlaceholderTitle(line) || (!isShortAcronym && isBinaryNoiseText(line))) continue;
-    const words = line.split(/\s+/).filter(Boolean);
-    if (!isShortAcronym && words.length < 2) continue;
-    return line;
+    const heading = extractTopicHeading(raw);
+    if (heading) return heading;
   }
   return '';
 }
