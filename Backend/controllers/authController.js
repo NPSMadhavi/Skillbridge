@@ -98,28 +98,63 @@ export const faceLogin = async (req, res) => {
     let targetPrisma = req.prisma || prisma;
     let effectiveTenantCode = req.tenantCode || 'default';
 
-    // 1. Fetch candidates STRICTLY from the authorized tenant database (Zero cross-tenant pooling)
-    const candidates = await targetPrisma.user.findMany({
-      where: {
-        status: 'ACTIVE',
-        OR: [
-          { faceEmbedding: { not: null } },
-          { faceImage: { not: null } },
-        ],
-      },
-      select: {
-        id: true,
-        faceEmbedding: true,
-        faceImage: true,
-      },
-    }).catch(() => []);
+    // 1. Fetch candidates from the current tenant database
+    const fetchCandidates = async (client) => {
+      return await client.user.findMany({
+        where: {
+          status: 'ACTIVE',
+          OR: [
+            { faceEmbedding: { not: null } },
+            { faceImage: { not: null } },
+          ],
+        },
+        select: {
+          id: true,
+          faceEmbedding: true,
+          faceImage: true,
+        },
+      }).catch(() => []);
+    };
 
-    if (candidates.length === 0) {
-      return res.status(400).json({ error: 'No enrolled Face ID profiles found in your organization. Please log in with password or contact your administrator.' });
+    let candidates = await fetchCandidates(targetPrisma);
+    let result = candidates.length > 0
+      ? await pythonService.verifyFace(faceIdData, candidates)
+      : { matched: false, id: null, user_id: null, confidence: 0 };
+
+    // Multi-tenant resolution (matching passwordLogin): if logging in from root /login (tenantCode === 'default')
+    // and not matched in default DB, check active companies to resolve the user's organization
+    if ((!result.matched || !(result.user_id || result.id)) && effectiveTenantCode === 'default' && !result.isAuthError && !result.serviceUnavailable && !result.noFaceDetected) {
+      try {
+        const companies = await masterPrisma.company.findMany({
+          where: { status: 'ACTIVE' },
+          select: { code: true }
+        }).catch(() => []);
+
+        for (const comp of companies) {
+          if (!comp.code || comp.code === effectiveTenantCode) continue;
+          try {
+            const compClient = await tenantService.getTenantClient(comp.code);
+            const compCandidates = await fetchCandidates(compClient);
+            if (compCandidates.length === 0) continue;
+            const compResult = await pythonService.verifyFace(faceIdData, compCandidates);
+            if (compResult.matched && (compResult.user_id || compResult.id)) {
+              result = compResult;
+              targetPrisma = compClient;
+              effectiveTenantCode = comp.code;
+              candidates = compCandidates;
+              break;
+            }
+            if (compResult.confidence > (result.confidence || 0)) {
+              result = compResult;
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
     }
 
-    // Format and verify with authentic Python AI service
-    const result = await pythonService.verifyFace(faceIdData, candidates);
+    if (candidates.length === 0 && !result.matched) {
+      return res.status(400).json({ error: 'No enrolled Face ID profiles found in your organization. Please log in with password or contact your administrator.' });
+    }
 
     const matchedUserId = result.user_id || result.id;
     if (!result.matched || !matchedUserId) {
