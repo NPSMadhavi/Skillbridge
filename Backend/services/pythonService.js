@@ -247,33 +247,75 @@ class PythonService {
       };
     }
 
-    // 1. Extract live query embedding from camera burst via Central AI Gateway (try each frame if one is blurry)
-    let queryEmbedding = null;
+    // 1. Score all captured burst frames against enrolled candidates (stop early on confident match)
+    // Official OpenCV SFace cosine similarity threshold is 0.363 (different people score ~0.0-0.25).
+    const MATCH_THRESHOLD = 0.363;
+    let bestCandidate = null;
+    let highestSimilarity = -1;
+    let anyEmbeddingExtracted = false;
     let lastExtractError = null;
+
     for (const frame of frames) {
+      let queryEmbedding = null;
       try {
         queryEmbedding = await extractFaceEmbedding(frame);
-        if (Array.isArray(queryEmbedding) && queryEmbedding.length > 0) break;
       } catch (error) {
         lastExtractError = error;
-        if (error.isAuthError || error.status === 401) break;
+        if (error.isAuthError || error.status === 401) {
+          return {
+            matched: false,
+            id: null,
+            user_id: null,
+            confidence: 0,
+            serviceUnavailable: true,
+            isAuthError: true,
+            error: 'Gateway authentication failed: API key invalid.'
+          };
+        }
+        continue;
+      }
+
+      if (!Array.isArray(queryEmbedding) || queryEmbedding.length === 0) continue;
+      anyEmbeddingExtracted = true;
+
+      for (const cand of formattedCandidates) {
+        try {
+          let candidateVec = null;
+          let parsed = null;
+          try {
+            parsed = JSON.parse(cand.encrypted_embedding);
+          } catch (_) {}
+
+          if (Array.isArray(parsed)) {
+            candidateVec = parsed;
+          } else if (parsed && Array.isArray(parsed.embedding)) {
+            candidateVec = parsed.embedding;
+          }
+
+          if (candidateVec && candidateVec.length === queryEmbedding.length) {
+            const sim = cosineSimilarity(queryEmbedding, candidateVec);
+            if (sim > highestSimilarity) {
+              highestSimilarity = sim;
+              bestCandidate = cand;
+            }
+          }
+        } catch (_) {}
+      }
+
+      if (bestCandidate && highestSimilarity >= MATCH_THRESHOLD) {
+        console.log(`[FaceID] Match confirmed for user: ${bestCandidate.id} (confidence: ${highestSimilarity.toFixed(4)})`);
+        return {
+          matched: true,
+          id: bestCandidate.id,
+          user_id: bestCandidate.id,
+          confidence: highestSimilarity
+        };
       }
     }
 
-    if (!queryEmbedding) {
+    if (!anyEmbeddingExtracted) {
       const error = lastExtractError || new Error('No face detected in camera capture.');
       console.warn('[FaceID] Query embedding extraction error:', error.message);
-      if (error.isAuthError || error.status === 401) {
-        return {
-          matched: false,
-          id: null,
-          user_id: null,
-          confidence: 0,
-          serviceUnavailable: true,
-          isAuthError: true,
-          error: 'Gateway authentication failed: API key invalid.'
-        };
-      }
       if (error.noFaceDetected || error.status === 422) {
         return {
           matched: false,
@@ -291,48 +333,6 @@ class PythonService {
         confidence: 0,
         serviceUnavailable: true,
         error: 'Face recognition service is currently unavailable. Please sign in with email and password.'
-      };
-    }
-
-    // 2. Score query embedding against all enrolled candidates in tenant
-    // OpenCV SFace cosine similarity threshold for 128-d vectors:
-    // Official SFace threshold is 0.363; different people typically score ~0.0-0.25,
-    // while live captures of the same person score ~0.45-0.90.
-    const MATCH_THRESHOLD = 0.42;
-    let bestCandidate = null;
-    let highestSimilarity = -1;
-
-    for (const cand of formattedCandidates) {
-      try {
-        let candidateVec = null;
-        let parsed = null;
-        try {
-          parsed = JSON.parse(cand.encrypted_embedding);
-        } catch (_) {}
-
-        if (Array.isArray(parsed)) {
-          candidateVec = parsed;
-        } else if (parsed && Array.isArray(parsed.embedding)) {
-          candidateVec = parsed.embedding;
-        }
-
-        if (candidateVec && candidateVec.length === queryEmbedding.length) {
-          const sim = cosineSimilarity(queryEmbedding, candidateVec);
-          if (sim > highestSimilarity) {
-            highestSimilarity = sim;
-            bestCandidate = cand;
-          }
-        }
-      } catch (_) {}
-    }
-
-    if (bestCandidate && highestSimilarity >= MATCH_THRESHOLD) {
-      console.log(`[FaceID] Match confirmed for user: ${bestCandidate.id} (confidence: ${highestSimilarity.toFixed(4)})`);
-      return {
-        matched: true,
-        id: bestCandidate.id,
-        user_id: bestCandidate.id,
-        confidence: highestSimilarity
       };
     }
 
