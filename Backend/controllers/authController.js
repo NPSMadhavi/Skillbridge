@@ -138,8 +138,12 @@ export const faceLogin = async (req, res) => {
           error: 'No face detected in camera capture. Please face the camera directly in a well-lit room and try again.'
         });
       }
-      console.warn(`[FaceLogin] Verification rejected. Confidence: ${result.confidence || 0}`);
-      return res.status(401).json({ error: 'Face verification failed. Face not recognized. Look directly into camera with good lighting and try again.' });
+      console.warn(`[FaceLogin] Verification rejected. Confidence: ${result.confidence || 0} (tenant: ${effectiveTenantCode})`);
+      return res.status(401).json({
+        error: result.error || 'Face verification failed. Face not recognized. Look directly into camera with good lighting and try again.',
+        confidence: result.confidence ?? 0,
+        tenantCode: effectiveTenantCode
+      });
     }
 
     // Locate the matched user strictly within this tenant
