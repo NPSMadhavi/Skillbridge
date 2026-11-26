@@ -233,7 +233,7 @@ async function processCourseDocumentInBackground({
       slides: normalizedSlides,
       pages: normalizedPages,
     };
-    synchronizeCurriculumStructure(finalCurriculum, title);
+    validateAndRepairCurriculum(finalCurriculum, title);
 
     await targetPrisma.course.update({
       where: { id: courseId },
@@ -342,7 +342,7 @@ async function processCourseDocumentInBackground({
       fallbackCurriculum.isAiGenerating = false;
       fallbackCurriculum.slides = slides.map(s => ({ ...s, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
       fallbackCurriculum.pages = pages.map(p => ({ ...p, images: (p.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
-      synchronizeCurriculumStructure(fallbackCurriculum, title);
+      validateAndRepairCurriculum(fallbackCurriculum, title);
 
       await targetPrisma.course.update({
         where: { id: courseId },
@@ -1095,6 +1095,59 @@ export function synchronizeCurriculumStructure(curriculum, courseTitle = 'Course
   return curriculum;
 }
 
+/**
+ * Validates curriculum completeness, module-to-lesson integrity, and duplicate modules
+ * before marking a course COMPLETED.
+ */
+export function validateAndRepairCurriculum(curriculum, courseTitle = 'Course') {
+  const synced = synchronizeCurriculumStructure(curriculum, courseTitle);
+  const warnings = [];
+
+  // Deduplicate modules with identical titles by merging their lessons
+  const modByTitle = new Map();
+  const dedupedModules = [];
+  for (const mod of (synced.curriculum || [])) {
+    const key = String(mod.title || '').trim().toLowerCase();
+    const modLessons = Array.isArray(mod.lessons) ? mod.lessons : [];
+    if (modLessons.length === 0) {
+      warnings.push(`Removed empty module "${mod.title}".`);
+      continue;
+    }
+    if (modByTitle.has(key)) {
+      warnings.push(`Merged duplicate module "${mod.title}".`);
+      const existing = modByTitle.get(key);
+      existing.lessons.push(...modLessons);
+    } else {
+      const cloned = { ...mod, lessons: [...modLessons] };
+      modByTitle.set(key, cloned);
+      dedupedModules.push(cloned);
+    }
+  }
+
+  synced.curriculum = dedupedModules;
+  synced.modulesCount = dedupedModules.length;
+  synced.lessonsCount = Array.isArray(synced.lessons) ? synced.lessons.length : 0;
+
+  const totalMapped = dedupedModules.reduce((acc, m) => acc + (m.lessons?.length || 0), 0);
+  if (synced.lessonsCount === 0) {
+    warnings.push('No lessons were generated from the document.');
+  }
+  if (dedupedModules.length === 0) {
+    warnings.push('No modules were generated from the document.');
+  }
+  if (totalMapped !== synced.lessonsCount) {
+    warnings.push(`Module lesson count (${totalMapped}) differs from flat lessons count (${synced.lessonsCount}).`);
+  }
+
+  synced.validationReport = {
+    passed: warnings.length === 0 && synced.lessonsCount > 0 && dedupedModules.length > 0,
+    warnings,
+    modulesCount: synced.modulesCount,
+    lessonsCount: synced.lessonsCount,
+  };
+  return synced;
+}
+
 // Helper to generate fast lightweight modules summary
 export function generateModulesSummary(curriculum) {
   if (!curriculum) return {};
@@ -1781,6 +1834,7 @@ router.get('/:id', optionalAuthenticateToken, async (req, res) => {
         chapterTitle: cleanUnsupportedWords(l.chapterTitle || l.moduleTitle, course.title)
       }));
     }
+    synchronizeCurriculumStructure(curriculumData, course.title);
 
     res.json({
       ...course,

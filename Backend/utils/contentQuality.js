@@ -114,7 +114,7 @@ export function isUsefulTeachingText(value) {
   return /[\u0980-\u09FF\u0B80-\u0BFF\u4E00-\u9FFF]/.test(t) && t.length >= 16;
 }
 
-const GENERIC_SUBHEADING_RE = /^(?:definition|definitions|advantage|advantages|disadvantage|disadvantages|benefit|benefits|limitation|limitations|drawback|drawbacks|example|examples|examples?\s+in\s+ai|syntax|properties|characteristics|features|applications|summary|summary\s+table|conclusion|note|notes|output|input|algorithm|pseudocode|working|architecture|components|types|key\s+features|in\s+simple\s+words|it\s+is\s+mainly\s+used\s+for|visual\s+example|step\s+\d+.*|process\s+of\s+using.*|real[\s-]+life\s+examples.*|(?:advantages|disadvantages|features|types|components|applications|process|workflow)\s+(?:of|in)\s+.+|hardware\s+types\s+features.*|sequential\s+computing|parallel\s+processing|running\s+ml\s+scripts|fast\s+ai\s+training|gpUs?\s+and\s+ai\s+computing)$/i;
+const GENERIC_SUBHEADING_RE = /^(?:definition|definitions|advantage|advantages|disadvantage|disadvantages|benefit|benefits|limitation|limitations|drawback|drawbacks|example|examples|examples?\s+in\s+ai|syntax|properties|characteristics|features|applications|summary|conclusion|note|notes|output|input|algorithm|pseudocode|working|architecture|components|types|key\s+features|in\s+simple\s+words|it\s+is\s+mainly\s+used\s+for|visual\s+example|industry\s+use\s+case|continuous\s+improvement|step\s+\d+.*|process\s+of\s+using.*|real[\s-]+life\s+examples.*|(?:advantages|disadvantages|features|types|components|applications|process|workflow|interfaces)\s+(?:of|in)\s+.+|hardware\s+types\s+features.*|sequential\s+computing|parallel\s+processing|running\s+ml\s+scripts|fast\s+ai\s+training|gpUs?\s+and\s+ai\s+computing)$/i;
 
 export function extractTopicHeading(rawLine) {
   let line = String(rawLine || '').trim();
@@ -125,6 +125,16 @@ export function extractTopicHeading(rawLine) {
   // Reject lowercase continuations or pronoun/sentence starts
   if (/^[a-z]/.test(line)) return '';
   if (/^(?:They|It|This|These|Those|Here|There|Step\s+\d+)\b/i.test(line)) return '';
+
+  // Detect implicit platform/concept intro sentences: e.g. "H2O.ai is an open-source...", "Teachable Machine is a free..."
+  const introMatch = line.match(/^([A-Z][A-Za-z0-9.\-]+(?:\s+[A-Z][A-Za-z0-9.\-]+){0,2})\s+(?:is\s+(?:a|an)\s+(?:free|open\s*-?\s*source|cloud\s*-?\s*based|web\s*-?\s*based|powerful|popular|modern|specialized|general\s*-?\s*purpose)|supports\s+(?:various|multiple|all\s+major)\b)/i);
+  if (introMatch && introMatch[1]) {
+    const subj = introMatch[1].trim();
+    if (!GENERIC_SUBHEADING_RE.test(subj) && !isGarbageTitle(subj)) {
+      return subj;
+    }
+  }
+
   // Strip optional markdown heading prefix
   line = line.replace(/^#{1,6}\s+/, '').trim();
   const hadTrailingColon = /:\s*$/.test(line);
@@ -133,23 +143,21 @@ export function extractTopicHeading(rawLine) {
   if (GENERIC_SUBHEADING_RE.test(cleaned)) return '';
   if (hadTrailingColon && cleaned.split(/\s+/).length > 4) return '';
   if (/[.!?;,]$/.test(cleaned) && !/^(?:unit|chapter|module|section)\s+\d+/i.test(cleaned)) return '';
-  const isShortAcronym = /^[A-Z]{2,6}(?:\s*\([^)]+\))?$/.test(cleaned);
-  if (!isShortAcronym && (cleaned.length < 4 || cleaned.length > 90)) return '';
+  const isAcronymWithExpansion = /^[A-Z]{2,6}\s*\([A-Za-z\s\-]+\)$/.test(cleaned);
+  if (!isAcronymWithExpansion && (cleaned.length < 4 || cleaned.length > 90)) return '';
   if ((cleaned.match(/\|/g) || []).length >= 2) return '';
-  if (isGarbageTitle(cleaned) || isPlaceholderTitle(cleaned) || (!isShortAcronym && isBinaryNoiseText(cleaned))) return '';
+  if (isGarbageTitle(cleaned) || isPlaceholderTitle(cleaned) || isBinaryNoiseText(cleaned)) return '';
 
   const isUnit = /^(?:unit|chapter|module|section)\s+\d+/i.test(cleaned);
-  // Only treat numbered lines as section headers if short Title-Case (e.g. "1. Processors", "2. Memory", "3. Storage")
-  const isNumberedSection = /^\d+\.\s+(?:Processors|Memory|Storage|Platforms|Edge\s+AI|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})$/.test(cleaned);
-  const isAcronymWithExpansion = /^[A-Z]{2,6}\s*\([A-Za-z\s\-]+\)$/.test(cleaned);
-  if (isUnit || isNumberedSection || isAcronymWithExpansion || isShortAcronym) return cleaned;
-  // Reject any other numbered list item (e.g. "5. Results", "1. Free version...")
+  // Only treat numbered lines as section headers for top-level structural categories (not workflow steps like "1. Data Set" or "5. Results")
+  const isNumberedSection = /^\d+\.\s+(?:Processors|Memory|Storage|Online\s+AI\s+Platforms|Desktop\s+AI\s+Platforms|Edge\s+AI)\b/i.test(cleaned);
+  if (isUnit || isNumberedSection || isAcronymWithExpansion) return cleaned;
+  // Reject any other numbered list item (e.g. "1. Data Set", "3. Processing", "5. Results")
   if (/^\d+\.\s+/.test(cleaned)) return '';
 
   const words = cleaned.split(/\s+/).filter(Boolean);
   if (!hadTrailingColon && words.length < 2) return '';
   if (words.length > 7) return '';
-  // Require majority Title-Case words for non-colon standalone headings (rejects lowercase phrase fragments like "Predicting customer churn...")
   if (!hadTrailingColon) {
     const titleCaseWords = words.filter(w => /^[A-Z0-9]/.test(w) || /^(?:of|in|for|and|or|to|on|the|a|an|using|with)$/i.test(w));
     if (titleCaseWords.length < words.length) return '';

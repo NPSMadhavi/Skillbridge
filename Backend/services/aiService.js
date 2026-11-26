@@ -2098,100 +2098,93 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
       }
     }
 
-    // Cluster topics naturally into modules
+    // Group topics into deduplicated modules preserving exact document order
     const modules = [];
+    const moduleMap = new Map();
     const flatLessons = [];
-    let currentCluster = [];
-    let currentClusterTitle = '';
 
     for (let i = 0; i < rawTopics.length; i++) {
       const topicItem = rawTopics[i];
-      const t = typeof topicItem === 'string' ? topicItem : topicItem.title;
-      const itemModule = (typeof topicItem === 'object' && topicItem.moduleTitle) ? topicItem.moduleTitle : t;
-      if (currentCluster.length === 0) {
-        currentClusterTitle = itemModule;
+      const lessonTitle = typeof topicItem === 'string' ? topicItem : topicItem.title;
+      const rawModTitle = (typeof topicItem === 'object' && topicItem.moduleTitle) ? topicItem.moduleTitle : lessonTitle;
+      const modKey = rawModTitle.toLowerCase().trim();
+
+      if (!moduleMap.has(modKey)) {
+        const modObj = {
+          id: `mod_${modules.length + 1}`,
+          numId: modules.length + 1,
+          title: rawModTitle,
+          description: '',
+          lessons: [],
+          totalSecs: 0,
+          locked: modules.length > 0
+        };
+        moduleMap.set(modKey, modObj);
+        modules.push(modObj);
       }
-      currentCluster.push(topicItem);
+      const modObj = moduleMap.get(modKey);
+      const modId = modObj.numId;
+      const modTitle = modObj.title;
 
-      const nextItem = rawTopics[i + 1];
-      const nextModule = nextItem ? ((typeof nextItem === 'object' && nextItem.moduleTitle) ? nextItem.moduleTitle : (typeof nextItem === 'string' ? nextItem : nextItem.title)) : '';
-      const moduleChanged = nextItem && nextModule.toLowerCase() !== currentClusterTitle.toLowerCase() && currentCluster.length >= 2;
+      const itemPages = (typeof topicItem === 'object' && Array.isArray(topicItem.pages) && topicItem.pages.length > 0)
+        ? topicItem.pages
+        : [Math.min(slides.length || 1, flatLessons.length + 1)];
+      const slideNum = itemPages[0];
+      const slideObj = slides.find(s => s.slideNumber === slideNum || s.title === lessonTitle);
+      const slideVisuals = (slideObj?.images || []).map(img => ({
+        id: img.id,
+        dataUrl: img.dataUrl,
+        fileName: img.fileName,
+        mimetype: img.mimetype,
+        sourceSlide: img.slideNumber,
+        name: img.name,
+        descr: img.descr,
+        purpose: img.descr || img.name || `Visual illustration for ${lessonTitle}`,
+        triggerKeywords: [
+          ...lessonTitle.toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3),
+          ...(img.descr || img.name || '').toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3)
+        ],
+        displayWhen: `while explaining ${lessonTitle}`
+      }));
 
-      // Start new module when parent module changes (with >= 2 lessons), at 4 lessons, or at the end
-      if (moduleChanged || currentCluster.length >= 4 || i === rawTopics.length - 1) {
-        const modId = modules.length + 1;
-        const modTitle = currentClusterTitle || `Module ${modId}: Training Unit`;
-        const modLessons = [];
+      const slideData = slideObj ? {
+        slideNumber: slideObj.slideNumber,
+        title: slideObj.title || lessonTitle,
+        headings: slideObj.headings || [],
+        bulletPoints: slideObj.bulletPoints || [],
+        paragraphs: slideObj.paragraphs || [],
+        tables: slideObj.tables || [],
+        speakerNotes: slideObj.speakerNotes || '',
+        fullText: slideObj.fullText || '',
+        images: slideVisuals
+      } : null;
 
-        for (const item of currentCluster) {
-          const lessonTitle = typeof item === 'string' ? item : item.title;
-          const itemPages = (typeof item === 'object' && Array.isArray(item.pages) && item.pages.length > 0)
-            ? item.pages
-            : [Math.min(slides.length || 1, flatLessons.length + 1)];
-          const lessonIdx = flatLessons.length;
-          const slideNum = itemPages[0];
-          const slideObj = slides.find(s => s.slideNumber === slideNum || s.title === lessonTitle);
-          const slideVisuals = (slideObj?.images || []).map(img => ({
-            id: img.id,
-            dataUrl: img.dataUrl,
-            fileName: img.fileName,
-            mimetype: img.mimetype,
-            sourceSlide: img.slideNumber,
-            name: img.name,
-            descr: img.descr,
-            purpose: img.descr || img.name || `Visual illustration for ${lessonTitle}`,
-            triggerKeywords: [
-              ...lessonTitle.toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3),
-              ...(img.descr || img.name || '').toLowerCase().split(/[\s\-:,]+/).filter(w => w.length > 3)
-            ],
-            displayWhen: `while explaining ${lessonTitle}`
-          }));
+      const mins = 7 + (flatLessons.length % 5);
+      const secs = (flatLessons.length * 15) % 60;
+      const duration = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+      const lessonObj = {
+        id: flatLessons.length + 1,
+        chapterId: modId,
+        chapterTitle: modTitle,
+        moduleId: modId,
+        moduleTitle: modTitle,
+        title: lessonTitle,
+        sourceSlides: itemPages,
+        visuals: slideVisuals,
+        slideData,
+        duration,
+        status: flatLessons.length === 0 ? 'active' : 'locked'
+      };
+      flatLessons.push(lessonObj);
+      modObj.lessons.push({ id: lessonObj.id, title: lessonObj.title, duration: lessonObj.duration });
+      modObj.totalSecs += mins * 60 + secs;
+    }
 
-          const slideData = slideObj ? {
-            slideNumber: slideObj.slideNumber,
-            title: slideObj.title || lessonTitle,
-            headings: slideObj.headings || [],
-            bulletPoints: slideObj.bulletPoints || [],
-            paragraphs: slideObj.paragraphs || [],
-            tables: slideObj.tables || [],
-            speakerNotes: slideObj.speakerNotes || '',
-            fullText: slideObj.fullText || '',
-            images: slideVisuals
-          } : null;
-
-          const mins = 7 + (flatLessons.length % 5);
-          const secs = (flatLessons.length * 15) % 60;
-          const lessonObj = {
-            id: flatLessons.length + 1,
-            chapterId: modId,
-            chapterTitle: modTitle,
-            moduleId: modId,
-            moduleTitle: modTitle,
-            title: lessonTitle,
-            sourceSlides: itemPages,
-            visuals: slideVisuals,
-            slideData,
-            duration: `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`,
-            status: flatLessons.length === 0 ? 'active' : 'locked'
-          };
-          modLessons.push(lessonObj);
-          flatLessons.push(lessonObj);
-        }
-
-        const modSecs = modLessons.reduce((acc, l) => {
-          const parts = String(l.duration || '').split(':').map(p => parseInt(p, 10) || 0);
-          return acc + (parts.length === 2 ? parts[0] * 60 + parts[1] : 120);
-        }, 0);
-        modules.push({
-          id: `mod_${modId}`,
-          title: modTitle,
-          description: `Covers ${modLessons.map(l => l.title).slice(0, 3).join(', ')}`,
-          lessons: modLessons.map(l => ({ id: l.id, title: l.title, duration: l.duration })),
-          duration: `${Math.max(1, Math.round(modSecs / 60))}m`,
-          locked: modId > 1
-        });
-        currentCluster = [];
-      }
+    for (const m of modules) {
+      m.description = `Covers ${m.lessons.map(l => l.title).slice(0, 3).join(', ')}`;
+      m.duration = `${Math.max(1, Math.round(m.totalSecs / 60))}m`;
+      delete m.totalSecs;
+      delete m.numId;
     }
 
     if (flatLessons.length === 0) {
