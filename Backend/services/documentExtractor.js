@@ -1029,17 +1029,42 @@ async function renderPdfPageText(pageData) {
     normalizeWhitespace: false,
     disableCombineTextItems: false
   });
-  let lastY;
-  let text = '';
+  const rawLines = [];
+  let lastY = null;
+  let currentLine = '';
+
   for (const item of textContent.items || []) {
-    if (lastY == item.transform[5] || !lastY) {
-      text += item.str;
+    const y = item.transform?.[5];
+    const str = item.str || '';
+    if (lastY === null || Math.abs(y - lastY) <= 2.5) {
+      if (currentLine && str && !currentLine.endsWith(' ') && !str.startsWith(' ')) {
+        currentLine += ' ';
+      }
+      currentLine += str;
     } else {
-      text += '\n' + item.str;
+      if (currentLine.trim()) rawLines.push(currentLine.trim());
+      currentLine = str;
     }
-    lastY = item.transform[5];
+    if (typeof y === 'number') lastY = y;
   }
-  return text;
+  if (currentLine.trim()) rawLines.push(currentLine.trim());
+
+  // Heal wrapped PDF lines (lowercase continuations or dangling prepositions/conjunctions)
+  const danglingEndRe = /(?:,|\b(?:for|and|or|of|to|in|on|with|from|by|as|the|a|an|that|which|is|are|was|were|into|using))$/i;
+  const healed = [];
+  for (const line of rawLines) {
+    const isBullet = /^[-*•▪▸►→\d.)]+\s+/.test(line);
+    const isUnitHeading = /^(?:unit|chapter|module|section|topic)\s+\d+/i.test(line);
+    if (healed.length > 0 && !isBullet && !isUnitHeading) {
+      const prev = healed[healed.length - 1];
+      if (prev && !/[.!?:;]$/.test(prev) && (/^[a-z]/.test(line) || danglingEndRe.test(prev))) {
+        healed[healed.length - 1] = `${prev} ${line}`;
+        continue;
+      }
+    }
+    healed.push(line);
+  }
+  return healed.join('\n');
 }
 
 function splitTextIntoPages(text, startPage = 1) {

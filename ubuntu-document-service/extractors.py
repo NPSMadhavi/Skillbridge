@@ -12,7 +12,14 @@ import httpx
 from bs4 import BeautifulSoup
 
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL
-from quality import clean_text, heal_bullets_and_sentences, is_garbage_title
+from quality import (
+    DANGLING_END_RE,
+    clean_text,
+    heal_bullets_and_sentences,
+    is_garbage_title,
+    is_incomplete_heading,
+    is_standalone_subheading,
+)
 
 
 async def _vision_ocr_via_ollama(image_bytes: bytes, prompt_hint: str = "") -> str:
@@ -107,13 +114,24 @@ async def extract_pdf(file_bytes: bytes, filename: str) -> Dict[str, Any]:
     for page_idx in range(len(doc)):
         page = doc[page_idx]
         p_num = page_idx + 1
-        blocks = page.get_text("dict").get("blocks", [])
+        blocks = [b for b in page.get_text("dict").get("blocks", []) if b.get("type") == 0]
+        blocks.sort(key=lambda b: (round(b.get("bbox", [0, 0, 0, 0])[1], 1), round(b.get("bbox", [0, 0, 0, 0])[0], 1)))
+
+        # Estimate dominant body font size on this page to distinguish real headings from wrapped body lines
+        span_sizes: List[float] = []
+        for blk in blocks:
+            for line in blk.get("lines", []):
+                for s in line.get("spans", []):
+                    if (s.get("text") or "").strip():
+                        span_sizes.append(float(s.get("size", 11.0)))
+        body_font = sorted(span_sizes)[len(span_sizes) // 2] if span_sizes else 11.0
+        heading_threshold = max(13.5, body_font + 1.5)
+
         headings: List[str] = []
         paragraphs: List[str] = []
+        last_heading_y1: Optional[float] = None
 
         for blk in blocks:
-            if blk.get("type") != 0:
-                continue
             blk_lines = []
             max_font = 0.0
             for line in blk.get("lines", []):
@@ -125,32 +143,74 @@ async def extract_pdf(file_bytes: bytes, filename: str) -> Dict[str, Any]:
             joined = clean_text(" ".join(blk_lines))
             if not joined:
                 continue
-            if max_font >= 14.0 and len(joined) <= 120 and not is_garbage_title(joined):
-                headings.append(joined)
+
+            bbox = blk.get("bbox", [0, 0, 0, 0])
+            y0, y1 = float(bbox[1]), float(bbox[3])
+            is_heading_candidate = (
+                max_font >= heading_threshold
+                and len(joined) <= 140
+                and not is_garbage_title(joined)
+                and not is_standalone_subheading(joined)
+                and not joined[0].islower()
+            )
+
+            if is_heading_candidate:
+                # Merge multi-block wrapped headings (e.g. "Unit 1. Infrastructure and Platforms for" + "Modern Smartphones")
+                if (
+                    headings
+                    and last_heading_y1 is not None
+                    and (y0 - last_heading_y1) <= max(24.0, max_font * 1.8)
+                    and (DANGLING_END_RE.search(headings[-1]) or len(headings[-1]) < 45)
+                ):
+                    headings[-1] = clean_text(f"{headings[-1]} {joined}")
+                else:
+                    headings.append(joined)
+                last_heading_y1 = y1
             else:
-                paragraphs.append(joined)
+                # If a wrapped continuation immediately follows an incomplete heading, merge it into the heading
+                if (
+                    headings
+                    and last_heading_y1 is not None
+                    and (y0 - last_heading_y1) <= max(20.0, body_font * 1.8)
+                    and DANGLING_END_RE.search(headings[-1])
+                    and len(joined) <= 90
+                    and not is_standalone_subheading(joined)
+                ):
+                    headings[-1] = clean_text(f"{headings[-1]} {joined}")
+                    last_heading_y1 = y1
+                else:
+                    paragraphs.append(joined)
+                    last_heading_y1 = None
 
-        page_text = clean_text("\n".join(headings + paragraphs))
+        healed_paragraphs = heal_bullets_and_sentences(paragraphs)
+        # Ensure headings that still look incomplete don't pollute top-level titles
+        clean_headings = [h for h in headings if not is_incomplete_heading(h)]
+        page_text = clean_text("\n".join(clean_headings + healed_paragraphs))
         tables = plumber_tables.get(p_num, [])
+        embedded_images = page.get_images(full=True) or []
 
-        # OCR fallback for scanned PDF pages
-        if len(page_text) < 30 and not tables:
+        # OCR fallback for scanned PDF pages or diagram-heavy pages with sparse text
+        if (len(page_text) < 30 and not tables) or (len(embedded_images) > 0 and len(page_text) < 220):
             pix = page.get_pixmap(dpi=180)
             ocr_txt = await _ocr_image_bytes(pix.tobytes("png"), f"{filename} page {p_num}")
-            if ocr_txt:
-                page_text = ocr_txt
-                paragraphs.append(ocr_txt)
+            if ocr_txt and ocr_txt not in page_text:
+                page_text = (page_text + "\n\n" + ocr_txt).strip() if page_text else ocr_txt
+                healed_paragraphs.append(ocr_txt)
 
         if tables:
             page_text = (page_text + "\n\n" + "\n\n".join(tables)).strip()
 
-        title = headings[0] if headings else (page_text.split("\n")[0][:80] if page_text else f"Page {p_num}")
+        title = clean_headings[0] if clean_headings else (
+            next((p[:90] for p in healed_paragraphs if not is_garbage_title(p[:90]) and not is_incomplete_heading(p[:90])), "")
+            or f"Page {p_num}"
+        )
         pages.append({
             "page_number": p_num,
             "title": title,
-            "headings": headings,
-            "paragraphs": heal_bullets_and_sentences(paragraphs),
+            "headings": clean_headings,
+            "paragraphs": healed_paragraphs,
             "tables": tables,
+            "images_count": len(embedded_images),
             "text": page_text,
         })
 

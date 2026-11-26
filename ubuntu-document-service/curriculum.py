@@ -5,7 +5,12 @@ from typing import Any, Dict, List
 import httpx
 
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL
-from quality import clean_text, is_garbage_title, validate_title_against_content
+from quality import (
+    clean_text,
+    is_garbage_title,
+    is_incomplete_heading,
+    validate_title_against_content,
+)
 
 
 def _estimate_duration(text: str) -> str:
@@ -22,7 +27,9 @@ async def _refine_titles_with_qwen(chunks: List[Dict[str, Any]], doc_title: str)
     needs_title = [
         (idx, c.get("chunkText", "")[:500])
         for idx, c in enumerate(chunks)
-        if is_garbage_title(c.get("concept", "")) or c.get("concept", "").startswith(("Module ", "Section ", "Slide ", "Page "))
+        if is_garbage_title(c.get("concept", ""))
+        or is_incomplete_heading(c.get("concept", ""))
+        or c.get("concept", "").startswith(("Module ", "Section ", "Slide ", "Page "))
     ]
     titles = [c.get("concept", f"Lesson {i + 1}") for i, c in enumerate(chunks)]
     if not needs_title:
@@ -71,6 +78,10 @@ async def build_grounded_curriculum(
     refined_titles = await _refine_titles_with_qwen(chunks, resolved_title)
 
     lessons: List[Dict[str, Any]] = []
+    modules: List[Dict[str, Any]] = []
+    current_mod_lessons: List[Dict[str, Any]] = []
+    current_mod_topic = ""
+
     for idx, chunk in enumerate(chunks):
         title = validate_title_against_content(
             refined_titles[idx] if idx < len(refined_titles) else chunk.get("concept", ""),
@@ -78,30 +89,55 @@ async def build_grounded_curriculum(
             f"Lesson {idx + 1}",
         )
         chunk["concept"] = title
-        mod_num = (idx // 4) + 1
-        lessons.append({
+        topic = clean_text(chunk.get("topic") or "") or title
+
+        # Start a new module when the parent topic changes (after >= 2 lessons) or every 4 lessons
+        should_split_mod = (
+            current_mod_lessons
+            and (
+                (topic.lower() != current_mod_topic.lower() and len(current_mod_lessons) >= 2)
+                or len(current_mod_lessons) >= 4
+            )
+        )
+        if should_split_mod:
+            mod_num = len(modules) + 1
+            mod_title = current_mod_topic or current_mod_lessons[0]["title"]
+            modules.append({
+                "id": f"mod_{mod_num}",
+                "title": mod_title,
+                "description": f"Covers {', '.join(l['title'] for l in current_mod_lessons[:3])}",
+                "lessons": [{"id": l["id"], "title": l["title"], "duration": l["duration"]} for l in current_mod_lessons],
+            })
+            current_mod_lessons = []
+            current_mod_topic = ""
+
+        if not current_mod_topic:
+            current_mod_topic = topic
+
+        mod_num = len(modules) + 1
+        lesson_obj = {
             "id": idx + 1,
             "title": title,
             "duration": _estimate_duration(chunk.get("chunkText", "")),
             "moduleId": f"mod_{mod_num}",
-            "moduleTitle": f"Module {mod_num}: {chunk.get('topic') or resolved_title}",
+            "moduleTitle": current_mod_topic or f"Module {mod_num}: {resolved_title}",
             "chapterTitle": chunk.get("sourceSection") or title,
             "sourcePage": chunk.get("sourcePage"),
             "sourceSlides": chunk.get("sourceSlides") or [],
             "explanation": chunk.get("chunkText", ""),
             "explanations": {"en": chunk.get("chunkText", "")},
-        })
+        }
+        lessons.append(lesson_obj)
+        current_mod_lessons.append(lesson_obj)
 
-    modules: List[Dict[str, Any]] = []
-    num_modules = max(1, math.ceil(len(lessons) / 4)) if lessons else 0
-    for m_idx in range(num_modules):
-        mod_lessons = lessons[m_idx * 4 : (m_idx + 1) * 4]
-        mod_title = mod_lessons[0]["title"] if mod_lessons else f"Module {m_idx + 1}"
+    if current_mod_lessons:
+        mod_num = len(modules) + 1
+        mod_title = current_mod_topic or current_mod_lessons[0]["title"]
         modules.append({
-            "id": f"mod_{m_idx + 1}",
+            "id": f"mod_{mod_num}",
             "title": mod_title,
-            "description": f"Covers {', '.join(l['title'] for l in mod_lessons[:3])}",
-            "lessons": [{"id": l["id"], "title": l["title"], "duration": l["duration"]} for l in mod_lessons],
+            "description": f"Covers {', '.join(l['title'] for l in current_mod_lessons[:3])}",
+            "lessons": [{"id": l["id"], "title": l["title"], "duration": l["duration"]} for l in current_mod_lessons],
         })
 
     return {

@@ -1508,7 +1508,7 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
           subtopic: null,
           chunkType: /define|definition|refers to/i.test(chunkContent) ? 'definition' : 'concept',
           sourcePage,
-          sourceSlides: null,
+          sourceSlides: clusterPages.length > 0 ? [...clusterPages] : null,
           sourceSection: `Pages ${clusterPages.join(', ')}`,
           prerequisites: null,
           keyPoints: [],
@@ -1919,28 +1919,46 @@ PROFESSIONAL CLASSROOM TEACHING PRINCIPLES:
    * NEVER uses hardcoded default generic topics or forced 5 modules.
    */
   _getMockCourse(fileName, text, docMetadata = {}) {
-    const { slides = [] } = docMetadata;
+    const { slides = [], pages = [] } = docMetadata;
     if (slides && slides.length > 0) {
       return this._groupSlidesIntoLessons(slides, fileName);
     }
     const cleanName = fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
     const formattedTitle = cleanName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
+    const standaloneSubheadingRe = /^(?:definition|definitions|advantage|advantages|disadvantage|disadvantages|benefit|benefits|limitation|limitations|drawback|drawbacks|example|examples|syntax|properties|characteristics|features|applications|summary|conclusion|note|notes|output|input|algorithm|pseudocode|working|architecture|components|types)[:\s]*$/i;
+    const danglingEndRe = /(?:,|\b(?:for|and|or|of|to|in|on|with|from|by|as|the|a|an|that|which|is|are|was|were|into|using))$/i;
+    const isValidLessonHeading = (cand) => {
+      if (!cand || cand.length < 4 || cand.length > 85) return false;
+      if (/^[a-z]/.test(cand)) return false;
+      if (standaloneSubheadingRe.test(cand) || danglingEndRe.test(cand)) return false;
+      if (isGarbageTitle(cand)) return false;
+      const lower = cand.toLowerCase();
+      if (lower.includes('table of contents') || lower.includes('agenda') || lower.includes('overview')) return false;
+      return true;
+    };
+
     const rawTopics = [];
-    if (false) {
-    } else if (text) {
+    if (Array.isArray(pages) && pages.length > 0) {
+      for (const p of pages) {
+        const cand = (p.headings?.[0] || p.title || firstUsefulTitleLine(p.text || '') || '')
+          .replace(/^[\d\.\-\s#\*]+/g, '').trim();
+        if (isValidLessonHeading(cand) && !rawTopics.includes(cand)) {
+          rawTopics.push(cand);
+        }
+      }
+    }
+
+    if (rawTopics.length === 0 && text) {
       const paras = text.split(/\n+/);
       for (let p of paras) {
         p = p.trim();
-        if (!p || p.length < 3 || p.length > 70) continue;
+        if (!p || p.length < 4 || p.length > 85) continue;
         if (p.endsWith('.') || p.endsWith(',') || p.endsWith('?') || p.endsWith(';')) continue;
         const clean = p.replace(/^[\d\.\-\s#\*]+/g, '').trim();
-        if (clean.length < 4 || clean.length > 60) continue;
-        if (isGarbageTitle(clean)) continue;
-        if (!/^[A-Za-z0-9]/.test(clean)) continue;
-        if (rawTopics.length >= 18) break;
-        const lower = clean.toLowerCase();
-        if (lower.includes('table of contents') || lower.includes('agenda') || lower.includes('overview')) continue;
+        if (!isValidLessonHeading(clean)) continue;
+        if (!/^[A-Z0-9]/.test(clean)) continue;
+        if (rawTopics.length >= 24) break;
         if (!rawTopics.includes(clean)) {
           rawTopics.push(clean);
         }
