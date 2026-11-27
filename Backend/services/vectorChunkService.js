@@ -5,7 +5,7 @@
  */
 import aiService from './aiService.js';
 import { detectDominantScript } from '../utils/language.js';
-import { isGarbageTitle, isPlaceholderTitle, stripSlidePlaceholders, cleanUnsupportedWords, isBinaryNoiseText, firstUsefulTitleLine } from '../utils/contentQuality.js';
+import { isGarbageTitle, isPlaceholderTitle, stripSlidePlaceholders, cleanUnsupportedWords, isBinaryNoiseText, firstUsefulTitleLine, healBrokenBullets } from '../utils/contentQuality.js';
 
 export class VectorChunkService {
   constructor() {
@@ -156,7 +156,7 @@ export class VectorChunkService {
 
     for (const c of chunks) {
       const rawText = (c.chunkText || c.text || '').trim();
-      const text = stripSlidePlaceholders(cleanUnsupportedWords(rawText));
+      const text = cleanUnsupportedWords(stripSlidePlaceholders(healBrokenBullets(rawText) || rawText));
       const concept = cleanUnsupportedWords((c.concept || c.title || '').trim());
 
       // Filter out trivial noise, broken headers, binary noise, or fragments under 35 chars

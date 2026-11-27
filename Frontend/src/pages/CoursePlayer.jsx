@@ -2064,9 +2064,9 @@ const CoursePlayer = ({
           if (!isMountedRef.current || explanationRequest.current !== request) return;
           const script = res.explanation || res.spoken_explanation || '';
           if (requestLang !== 'en' && !textMatchesLanguage(script, requestLang)) {
-            console.warn('[CoursePlayer] Script may not strictly match language code, but displaying to learner:', requestLang);
-          }
-          if (script) {
+            console.warn('[CoursePlayer] Refusing untranslated script for non-English language:', requestLang);
+            setExplanationError(true);
+          } else if (script) {
             lessonExplanationClientCache.set(cacheKey, script);
             setExplanation(script);
             applyLogicalPosition(script);
@@ -2084,18 +2084,16 @@ const CoursePlayer = ({
           setPipelineState('READY');
         })
         .catch((err) => {
-          if (!isMountedRef.current || explanationRequest.current !== request) return;
+          const isAborted = err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED' || err?.name === 'AbortError';
+          if (!isMountedRef.current || explanationRequest.current !== request || (isAborted && controller.signal.aborted)) return;
           console.warn('[CoursePlayer] Could not fetch lesson explanation:', err?.message);
           setExplanationError(true);
           setLoadingExplanation(false);
 
-          // Resilient Pedagogical Fallback: If localized backend fetch failed,
-          // recover using the available lesson explanation so the student is never blocked
-          const fallbackText = activeLesson?.explanations?.[requestLang] ||
-            activeLesson?.explanation ||
-            activeLesson?.title ||
-            '';
-          if (fallbackText && fallbackText.length > 20) {
+          const fallbackText = requestLang === 'en'
+            ? (activeLesson?.explanations?.en || activeLesson?.explanation || '')
+            : (activeLesson?.explanations?.[requestLang] || '');
+          if (fallbackText && fallbackText.length > 20 && (requestLang === 'en' || textMatchesLanguage(fallbackText, requestLang))) {
             setExplanation(fallbackText);
             setPipelineState('READY');
           }
@@ -2759,6 +2757,16 @@ const CoursePlayer = ({
           // Primary: Studio Neural TTS (Microsoft Edge Neural TTS: Jenny for Female, Christopher for Male)
           // Studio neural TTS produces broadcast-grade human waveforms. Single-source audio eliminates dual-voice overlap.
           try {
+            // Enforce Translate-Before-TTS: never feed untranslated English text into a non-English TTS voice
+            if (selectedLanguageCode !== 'en' && !textMatchesLanguage(spokenText, selectedLanguageCode)) {
+              console.warn('[CoursePlayer] Blocked untranslated English text from non-English TTS:', selectedLanguageCode);
+              setExplanationError(true);
+              playingRef.current = false;
+              setPlaying(false);
+              setIsAriaSpeaking(false);
+              isAriaSpeakingRef.current = false;
+              return;
+            }
             const isMale = (aiVoiceConfig?.gender || '').toLowerCase() === 'male';
             const effectiveGender = isMale ? 'MALE' : 'FEMALE';
 
@@ -2813,8 +2821,10 @@ const CoursePlayer = ({
             if (!audio || audio.error) {
               audio = new Audio(audioUrl);
               audio.preload = 'auto';
+              preloadedAudioMap.current.set(idx, audio);
+            } else {
+              try { audio.currentTime = 0; } catch (_) {}
             }
-            preloadedAudioMap.current.delete(idx);
             window._skillbridgeCurrentAudio = audio;
 
             let hasStarted = false;
@@ -3800,8 +3810,8 @@ const CoursePlayer = ({
               {showCC && (
                 <div className="shrink-0 bg-[#040814]/90 backdrop-blur-md rounded-lg py-1.5 sm:py-2 px-3 sm:px-4 border border-white/10 mt-1.5 sm:mt-2 text-center">
                   <p className="text-xs sm:text-sm text-white font-medium leading-relaxed italic truncate">
-                    {loadingExplanation
-                      ? `${aiTutorName}: "Preparing lesson explanation..."`
+                    {loadingExplanation && !explanation
+                      ? `${aiTutorName}: "${cleanForBoard(activeLesson?.title || 'Loading lesson...')}"`
                       : (playing ? `${aiTutorName}: "${cleanForBoard(sentences[currentSentenceIdx]) || `Focusing on ${cleanForBoard(activeLesson?.title || 'the current topic')}`}"` : 'Lecture paused.')}
                   </p>
                 </div>

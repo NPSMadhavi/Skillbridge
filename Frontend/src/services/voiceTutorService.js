@@ -1756,6 +1756,7 @@ export class VoiceTutorManager {
               const backoffMs = Math.min(15000, 1000 * Math.pow(2, this.consecutiveRecognitionErrors - 1));
               if (event.error === 'network' && this.consecutiveRecognitionErrors >= 3) {
                 this.onStatusChange?.('Speech recognition network unavailable — use text chat or retry voice.');
+                return;
               }
               this.scheduleRestart(backoffMs);
             }

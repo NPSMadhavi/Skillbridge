@@ -313,9 +313,13 @@ class AIService {
     }
 
     const started = Date.now();
-    // Default interactive timeouts: 35s for JSON structured output, 25s for natural voice/text.
-    // Explicit higher timeouts can still be passed via options.timeoutMs (e.g. background document jobs).
     const timeout = options.timeoutMs || (jsonMode ? 35000 : 25000);
+    if (options.signal?.aborted) {
+      const preAborted = new Error('Client request already closed before gateway call.');
+      preAborted.code = 'ERR_CANCELED';
+      preAborted.name = 'CanceledError';
+      throw preAborted;
+    }
     try {
       const axiosConfig = {
         headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),

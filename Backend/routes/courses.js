@@ -264,6 +264,7 @@ async function processCourseDocumentInBackground({
 
       await vectorChunkService.storeChunks(targetPrisma, courseId, result.chunks, embeddings);
       console.log(`[pgvector] Stored ${result.chunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${courseId}.`);
+      translationService.pretranslateCourseParallel(targetPrisma, courseId);
     } else if (doc.text && doc.text.trim().length > 40) {
       console.log(`[Ubuntu Doc Pipeline] Indexing extracted text (${doc.text.length} chars) with semantic chunking & 768-d embeddings for course ${courseId}...`);
       const storedChunks = await vectorChunkService.indexCourse(
@@ -282,6 +283,7 @@ async function processCourseDocumentInBackground({
         throw new Error('Semantic chunking produced 0 chunks from extracted document text.');
       }
       console.log(`[pgvector] Stored ${storedChunks.length} semantic chunks with 768-d embeddings for course ${courseId}.`);
+      translationService.pretranslateCourseParallel(targetPrisma, courseId);
     } else {
       throw new Error('Ubuntu document engine returned no readable text or semantic chunks.');
     }
@@ -356,6 +358,7 @@ async function processCourseDocumentInBackground({
 
       const storedChunks = await vectorChunkService.indexCourse(targetPrisma, courseId, docResult, fallbackCurriculum);
       console.log(`[pgvector] Stored ${storedChunks?.length || 0} locally-indexed semantic chunks for course ${courseId}.`);
+      translationService.pretranslateCourseParallel(targetPrisma, courseId);
 
       try {
         const updatedRecord = await targetPrisma.course.findUnique({
@@ -1938,6 +1941,25 @@ function synthesizeLessonFromDbChunks(lessonTitle, chunks, courseTitle = '', mat
   return sections.join('\n\n');
 }
 
+// Trigger parallel multilingual chunk pre-translation for an existing course
+router.post('/:id/pretranslate', authenticateToken, async (req, res) => {
+  try {
+    const { course, targetPrisma } = await findCourseAcrossTenants(req.params.id, req.prisma || prisma, null);
+    if (!course) return res.status(404).json({ error: 'Course not found.' });
+    const langs = Array.isArray(req.body?.languages) && req.body.languages.length > 0
+      ? req.body.languages
+      : ['te', 'hi', 'ta', 'zh', 'ms', 'bn'];
+    translationService.pretranslateCourseParallel(targetPrisma, course.id, langs);
+    res.status(202).json({
+      message: 'Parallel multilingual chunk translation started in background.',
+      courseId: course.id,
+      languages: langs,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Available languages and cached translation coverage for a course
 router.get('/:id/languages', optionalAuthenticateToken, async (req, res) => {
   try {
@@ -2159,6 +2181,13 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     if (translatedLesson && translatedLesson.combinedText && textMatchesLanguage(translatedLesson.combinedText, targetLangInfo.code)) {
       const cleanTranslated = cleanUnsupportedWords(stripSlidePlaceholders(translatedLesson.combinedText));
       const totalDuration = Date.now() - fetchStartTime;
+      // Warm remaining chunks of this course in the background for instant chapter switching
+      translationService.pretranslateCourseChunksInBackground(
+        targetPrisma,
+        course.id,
+        targetLangInfo.code,
+        translatedLesson.chunks.map(c => c.sourceChunkId)
+      );
       return res.json({
         explanation: cleanTranslated,
         spoken_explanation: cleanTranslated,
@@ -2227,17 +2256,21 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
     } catch (lectureErr) {
       console.warn(`[PERF:LLM_END] AI teacher engine fallback triggered for ${targetLanguage}:`, lectureErr.message);
       usedMockFallback = targetLangInfo.code !== 'en' || sourceScript.length <= 50;
-      explanation = targetLangInfo.code === 'en' && sourceScript.length > 50
+      explanation = sourceScript.length > 50
         ? sourceScript
         : aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
     } finally {
       if (lectureTimer) clearTimeout(lectureTimer);
     }
 
-    if (explanation && !textMatchesLanguage(explanation, targetLangInfo.code)) {
-      console.warn(`[Language Lock] Output was not in ${targetLanguage} (${targetLangInfo.code}). Using native verified translation.`);
-      usedMockFallback = true;
-      explanation = aiService._getMockExplanation(effectiveLessonTitle, targetLanguage);
+    if (targetLangInfo.code !== 'en') {
+      // Never serve untranslated English text as a non-English explanation for TTS
+      return res.status(503).json({
+        error: `Translation to ${targetLanguage} is temporarily unavailable while the AI gateway is busy. Please retry.`,
+        translationUnavailable: true,
+        language: targetLangInfo,
+        title: stripSlidePlaceholders(effectiveLessonTitle) || effectiveLessonTitle,
+      });
     }
 
     if (!explanation || explanation.length < 50) {
@@ -3169,11 +3202,21 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
       if (l === 'ta' || l.startsWith('ta-') || l.includes('tamil') || l.includes('தமிழ்')) return 'ta';
       if (l === 'bn' || l.startsWith('bn-') || l.includes('bangla') || l.includes('bengali') || l.includes('বাংলা')) return 'bn';
       if (l === 'te' || l.startsWith('te-') || l.includes('telugu') || l.includes('తెలుగు')) return 'te';
+      if (l === 'hi' || l.startsWith('hi-') || l.includes('hindi') || l.includes('हिन्दी') || l.includes('हिंदी')) return 'hi';
       if (l === 'en' || l.startsWith('en-') || l.includes('english')) return 'en';
       return null;
     };
 
     const targetLangCode = resolveLanguageCode(requestedLang);
+
+    // Reject empty/ultra-short WebM silence buffers before calling Whisper
+    if (!req.file?.buffer || req.file.size < 1200) {
+      return res.json({
+        text: '',
+        detectedLanguage: targetLangCode || 'en',
+        filteredSilence: true
+      });
+    }
 
     const gatewayUrl = getPythonServiceUrl();
     const gatewayApiKey = getGatewayApiKey();
@@ -3187,7 +3230,8 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
         filename: req.file.originalname || 'voice.webm',
         contentType: req.file.mimetype || 'audio/webm'
       });
-      if (targetLangCode) {
+      // Only pass language hint if not explicitly 'auto'; let Whisper auto-detect on short clips (< 4KB)
+      if (targetLangCode && req.file.size >= 4000) {
         form.append('language', targetLangCode);
       }
 
@@ -3237,10 +3281,10 @@ router.post('/transcribe', authenticateToken, upload.single('file'), async (req,
         contentType: req.file.mimetype || 'audio/webm'
       });
 
-      const langQuery = targetLangCode ? `&language=${targetLangCode}` : '';
+      const langQuery = targetLangCode && req.file.size >= 4000 ? `&language=${targetLangCode}` : '';
       const dockerResponse = await axios.post(`${WHISPER_SERVER_URL}/asr?output=json${langQuery}`, form, {
         headers: form.getHeaders(),
-        timeout: 2000
+        timeout: 12000
       });
 
       let transcriptionText = '';

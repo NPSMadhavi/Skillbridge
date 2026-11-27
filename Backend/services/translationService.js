@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import aiService from './aiService.js';
 import vectorChunkService from './vectorChunkService.js';
 import { resolveLanguageInfo, textMatchesLanguage } from '../utils/language.js';
-import { stripSlidePlaceholders, cleanUnsupportedWords } from '../utils/contentQuality.js';
+import { stripSlidePlaceholders, cleanUnsupportedWords, healBrokenBullets } from '../utils/contentQuality.js';
 
 const inFlightChunkTranslations = new Map();
 
@@ -28,6 +28,40 @@ export function jaccardSimilarity(a, b) {
   return union > 0 ? intersection / union : 0;
 }
 
+function deduplicateSourceLines(text) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) {
+      if (out.length > 0 && out[out.length - 1] !== '') out.push('');
+      continue;
+    }
+    const key = line.toLowerCase().replace(/\s+/g, ' ');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out.join('\n').trim();
+}
+
+function splitIntoTranslationBlocks(text, maxChars = 1000) {
+  const paras = String(text || '').split(/\n{2,}/);
+  const blocks = [];
+  let curr = '';
+  for (const p of paras) {
+    if (!p.trim()) continue;
+    if (curr && curr.length + p.length + 2 > maxChars) {
+      blocks.push(curr.trim());
+      curr = p;
+    } else {
+      curr = curr ? `${curr}\n\n${p}` : p;
+    }
+  }
+  if (curr.trim()) blocks.push(curr.trim());
+  return blocks.length > 0 ? blocks : [String(text || '').slice(0, maxChars)];
+}
+
 class TranslationService {
   /**
    * Strict source-grounded translation of a single canonical chunk.
@@ -35,7 +69,9 @@ class TranslationService {
    */
   async translateChunkText(sourceText, targetLangCode, context = {}) {
     const langInfo = resolveLanguageInfo(targetLangCode);
-    const cleanSource = cleanUnsupportedWords(stripSlidePlaceholders(String(sourceText || ''))).trim();
+    const rawStr = String(sourceText || '');
+    const cleaned = cleanUnsupportedWords(stripSlidePlaceholders(healBrokenBullets(rawStr) || rawStr)).trim();
+    const cleanSource = deduplicateSourceLines(cleaned);
     if (!cleanSource) return '';
     if (langInfo.code === 'en') return cleanSource;
 
@@ -53,14 +89,20 @@ STRICT SOURCE-GROUNDING RULES:
 6. Retain standard technical acronyms and terms (such as CPU, GPU, TPU, NPU, RAM, VRAM, HDD, SSD, AI, API, PPE, 5S) in English alongside natural ${langInfo.name} grammar.
 7. Output ONLY the clean ${langInfo.name} translation in Markdown — no preamble or meta-commentary.`;
 
-    const userPrompt = `${topic ? `Module/Topic: ${topic}\n` : ''}${concept ? `Section: ${concept}\n` : ''}
+    const blocks = splitIntoTranslationBlocks(cleanSource, 1000);
+    const translatedParts = [];
+    for (const block of blocks) {
+      const userPrompt = `${topic ? `Module/Topic: ${topic}\n` : ''}${concept ? `Section: ${concept}\n` : ''}
 Source Content to Translate:
-${cleanSource.slice(0, 3200)}`;
+${block}`;
+      const raw = await aiService._callLLM(systemPrompt, userPrompt, false, [], {
+        timeoutMs: 60000,
+      });
+      const part = cleanUnsupportedWords(stripSlidePlaceholders(String(raw || ''))).trim();
+      if (part) translatedParts.push(part);
+    }
 
-    const raw = await aiService._callLLM(systemPrompt, userPrompt, false, [], {
-      timeoutMs: 35000,
-    });
-    const translated = cleanUnsupportedWords(stripSlidePlaceholders(String(raw || ''))).trim();
+    const translated = translatedParts.join('\n\n').trim();
     if (!translated || !textMatchesLanguage(translated, langInfo.code)) {
       throw new Error(`Translation output did not match ${langInfo.name} (${langInfo.code}).`);
     }
@@ -285,6 +327,78 @@ ${cleanSource.slice(0, 3200)}`;
       combinedText,
       cached: !anyUncached,
     };
+  }
+
+  /**
+   * Warms remaining chunks of a course in the background so switching lessons is instant.
+   */
+  pretranslateCourseChunksInBackground(prisma, courseId, targetLanguage, excludeChunkIds = []) {
+    const langInfo = resolveLanguageInfo(targetLanguage);
+    if (langInfo.code === 'en') return;
+    const excludeSet = new Set(excludeChunkIds.map(String));
+    setImmediate(async () => {
+      try {
+        const allChunks = await prisma.$queryRawUnsafe(
+          `SELECT id, "courseId", "chunkIndex", "chunkText", "topic", "concept"
+           FROM "CourseChunk" WHERE "courseId" = $1 ORDER BY "chunkIndex" ASC`,
+          courseId
+        );
+        for (const chunk of (allChunks || [])) {
+          if (excludeSet.has(String(chunk.id))) continue;
+          await this.getOrTranslateChunk(prisma, chunk, {
+            courseId,
+            targetLanguage: langInfo.code,
+            translationVersion: 1,
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    });
+  }
+
+  /**
+   * Parallel multilingual chunk pre-translation worker.
+   * Translates all chunks of a course into supported target languages using a bounded worker pool
+   * and stores them in PostgreSQL ChunkTranslation so lesson switching is instant.
+   */
+  pretranslateCourseParallel(prisma, courseId, languages = ['te', 'hi', 'ta', 'zh', 'ms', 'bn'], concurrency = 3) {
+    setImmediate(async () => {
+      try {
+        await vectorChunkService.ensureColumnsExist(prisma);
+        const chunks = await prisma.$queryRawUnsafe(
+          `SELECT id, "courseId", "chunkIndex", "chunkText", "topic", "concept"
+           FROM "CourseChunk" WHERE "courseId" = $1 ORDER BY "chunkIndex" ASC`,
+          courseId
+        );
+        if (!Array.isArray(chunks) || chunks.length === 0) return;
+
+        const jobs = [];
+        for (const lang of languages) {
+          const code = resolveLanguageInfo(lang).code;
+          if (code === 'en') continue;
+          for (const chunk of chunks) {
+            jobs.push({ chunk, code });
+          }
+        }
+
+        let cursor = 0;
+        const workerCount = Math.max(1, Math.min(concurrency, jobs.length));
+        const workers = Array.from({ length: workerCount }, async () => {
+          while (cursor < jobs.length) {
+            const job = jobs[cursor++];
+            if (!job) break;
+            await this.getOrTranslateChunk(prisma, job.chunk, {
+              courseId,
+              targetLanguage: job.code,
+              translationVersion: 1,
+            }).catch(() => {});
+          }
+        });
+        await Promise.all(workers);
+        console.log(`[ChunkTranslation] Parallel pre-translation complete for course ${courseId} (${chunks.length} chunks x ${languages.length} languages).`);
+      } catch (err) {
+        console.warn(`[ChunkTranslation] Parallel pre-translation notice for ${courseId}:`, err.message);
+      }
+    });
   }
 }
 

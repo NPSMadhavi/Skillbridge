@@ -5,6 +5,7 @@ export const LANGUAGE_INFO = {
   ta: { code: 'ta', name: 'Tamil (தமிழ்)', speechCode: 'ta-IN' },
   bn: { code: 'bn', name: 'Bangla (বাংলা)', speechCode: 'bn-BD' },
   te: { code: 'te', name: 'Telugu (తెలుగు)', speechCode: 'te-IN' },
+  hi: { code: 'hi', name: 'Hindi (हिन्दी)', speechCode: 'hi-IN' },
 };
 
 export function resolveLanguageInfo(lang) {
@@ -26,6 +27,9 @@ export function resolveLanguageInfo(lang) {
   if (l === 'te' || l === 'te-in' || l.includes('telugu') || l.includes('తెలుగు')) {
     return LANGUAGE_INFO.te;
   }
+  if (l === 'hi' || l === 'hi-in' || l.includes('hindi') || l.includes('हिन्दी') || l.includes('हिंदी')) {
+    return LANGUAGE_INFO.hi;
+  }
 
   return LANGUAGE_INFO.en;
 }
@@ -33,12 +37,14 @@ export function resolveLanguageInfo(lang) {
 export function detectDominantScript(text) {
   if (!text) return 'en';
   const sample = String(text);
+  const hi = (sample.match(/[\u0900-\u097F]/g) || []).length;
   const bn = (sample.match(/[\u0980-\u09FF]/g) || []).length;
   const ta = (sample.match(/[\u0B80-\u0BFF]/g) || []).length;
   const te = (sample.match(/[\u0C00-\u0C7F]/g) || []).length;
   const zh = (sample.match(/[\u4E00-\u9FFF]/g) || []).length;
   const latin = (sample.match(/[A-Za-z]/g) || []).length;
   const scored = [
+    ['hi', hi],
     ['bn', bn],
     ['ta', ta],
     ['te', te],
@@ -60,10 +66,11 @@ export function textMatchesLanguage(text, languageCode) {
   const detected = detectDominantScript(sample);
 
   // For non-Latin scripts, accept if >= 20 target-script characters are present even if English technical acronyms (e.g. PPE, 5S) appear
+  if (requested === 'hi') return detected === 'hi' || (sample.match(/[\u0900-\u097F]/g) || []).length >= 20;
   if (requested === 'bn') return detected === 'bn' || (sample.match(/[\u0980-\u09FF]/g) || []).length >= 20;
   if (requested === 'ta') return detected === 'ta' || (sample.match(/[\u0B80-\u0BFF]/g) || []).length >= 20;
   if (requested === 'te') return detected === 'te' || (sample.match(/[\u0C00-\u0C7F]/g) || []).length >= 20;
   if (requested === 'zh') return detected === 'zh' || (sample.match(/[\u4E00-\u9FFF]/g) || []).length >= 20;
-  // English / Malay are Latin; reject if Bangla, Tamil, Telugu, or Chinese dominate the script
+  // English / Malay are Latin; reject if Hindi, Bangla, Tamil, Telugu, or Chinese dominate the script
   return detected === 'en' || detected === 'ms';
 }

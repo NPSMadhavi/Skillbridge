@@ -506,8 +506,9 @@ ${ssmlBody}    </prosody>
    * Generate cache key
    */
   _getCacheKey(voice, text, rate, pitch, sourceChunkId = null, version = 1) {
+    const TTS_ENGINE_VERSION = 'v2';
     const prefix = sourceChunkId ? `chunk:${sourceChunkId}:v${version}|` : '';
-    return crypto.createHash('sha256').update(`${prefix}${voice}|${text.trim()}|${rate}|${pitch}`).digest('hex');
+    return crypto.createHash('sha256').update(`${TTS_ENGINE_VERSION}|${prefix}${voice}|${text.trim()}|${rate}|${pitch}`).digest('hex');
   }
 
   hasCachedAudio(text, options = {}) {
@@ -547,7 +548,7 @@ ${ssmlBody}    </prosody>
     console.log(`[TTS Synthesis] Original Text Preview: "${text.slice(0, 100).replace(/\s+/g, ' ')}${text.length > 100 ? '...' : ''}"`);
     console.log(`[TTS Synthesis] Cleaned Narration Preview: "${cleanSpoken.slice(0, 100).replace(/\s+/g, ' ')}${cleanSpoken.length > 100 ? '...' : ''}"`);
 
-    // 2. Check LRU memory cache
+    // 2. Check LRU memory cache & in-flight request deduplication
     const cacheKey = this._getCacheKey(targetVoice, cleanSpoken, prosody.rate, prosody.pitch, sourceChunkId, version);
     if (audioCache.has(cacheKey)) {
       const cached = audioCache.get(cacheKey);
@@ -561,91 +562,110 @@ ${ssmlBody}    </prosody>
       };
     }
 
+    if (this._inFlight?.has(cacheKey)) {
+      console.log(`[TTS Synthesis Coalesced] Waiting on in-flight synthesis for ${cacheKey.slice(0, 12)}`);
+      const shared = await this._inFlight.get(cacheKey);
+      return { ...shared, fromCache: true };
+    }
+
+    if (!this._inFlight) this._inFlight = new Map();
+
     // 3. Synthesize via Microsoft Edge Neural TTS with intelligent chunking
-    try {
-      let finalBuffer;
-
-      // For long speech text (> 400 characters), segment at sentence boundaries and concatenate
-      if (cleanSpoken.length > 400) {
-        const sentences = this.segmentSentences(cleanSpoken);
-        const chunkGroups = [];
-        let currentChunk = '';
-
-        for (const s of sentences) {
-          if ((currentChunk + ' ' + s).length > 350) {
-            if (currentChunk) chunkGroups.push(currentChunk.trim());
-            currentChunk = s;
-          } else {
-            currentChunk = currentChunk ? `${currentChunk} ${s}` : s;
-          }
-        }
-        if (currentChunk) chunkGroups.push(currentChunk.trim());
-
-        const audioBuffers = [];
-        for (const group of chunkGroups) {
-          const buf = await this._synthesizeChunk(group, targetVoice, prosody);
-          audioBuffers.push(buf);
-        }
-        finalBuffer = Buffer.concat(audioBuffers);
-      } else {
-        finalBuffer = await this._synthesizeChunk(cleanSpoken, targetVoice, prosody);
-      }
-
-      // Store in LRU cache
-      if (audioCache.size >= MAX_CACHE_ENTRIES) {
-        const oldestKey = audioCache.keys().next().value;
-        audioCache.delete(oldestKey);
-      }
-      audioCache.set(cacheKey, {
-        buffer: finalBuffer,
-        contentType: 'audio/mpeg'
-      });
-
-      console.log(`[TTS Synthesis Success] Voice: ${targetVoice} | Buffer: ${finalBuffer.length} bytes | Cached: false`);
-
-      return {
-        buffer: finalBuffer,
-        contentType: 'audio/mpeg',
-        voice: targetVoice,
-        fromCache: false
-      };
-    } catch (primaryErr) {
-      console.warn(`[Microsoft Neural TTS] Primary synthesis notice (${targetVoice}):`, primaryErr.message);
-
-      // Graceful fallback to Central AI Gateway if available
+    const synthPromise = (async () => {
       try {
-        const gatewayUrl = getPythonServiceUrl();
-        const gatewayKey = getGatewayApiKey();
+        let finalBuffer;
 
-        const fallbackRes = await axios.post(`${gatewayUrl}/api/v1/tts/synthesize`, {
-          text: cleanSpoken,
-          voice: targetVoice,
-          gender: gender === 'MALE' ? 'MALE' : 'FEMALE',
-          rate: 0.95,
-          pitch: 0.95
-        }, {
-          headers: {
-            ...(gatewayKey ? { 'X-API-Key': gatewayKey } : {})
-          },
-          responseType: 'arraybuffer',
-          timeout: 8000
+        // For long speech text (> 400 characters), segment at sentence boundaries and concatenate
+        if (cleanSpoken.length > 400) {
+          const sentences = this.segmentSentences(cleanSpoken);
+          const chunkGroups = [];
+          let currentChunk = '';
+
+          for (const s of sentences) {
+            if ((currentChunk + ' ' + s).length > 350) {
+              if (currentChunk) chunkGroups.push(currentChunk.trim());
+              currentChunk = s;
+            } else {
+              currentChunk = currentChunk ? `${currentChunk} ${s}` : s;
+            }
+          }
+          if (currentChunk) chunkGroups.push(currentChunk.trim());
+
+          const audioBuffers = [];
+          for (const group of chunkGroups) {
+            const buf = await this._synthesizeChunk(group, targetVoice, prosody);
+            audioBuffers.push(buf);
+          }
+          finalBuffer = Buffer.concat(audioBuffers);
+        } else {
+          finalBuffer = await this._synthesizeChunk(cleanSpoken, targetVoice, prosody);
+        }
+
+        // Store in LRU cache
+        if (audioCache.size >= MAX_CACHE_ENTRIES) {
+          const oldestKey = audioCache.keys().next().value;
+          audioCache.delete(oldestKey);
+        }
+        audioCache.set(cacheKey, {
+          buffer: finalBuffer,
+          contentType: 'audio/mpeg'
         });
 
-        if (fallbackRes.status === 200 && fallbackRes.data) {
-          const fbBuffer = Buffer.from(fallbackRes.data);
-          return {
-            buffer: fbBuffer,
-            contentType: fallbackRes.headers['content-type'] || 'audio/mpeg',
-            voice: targetVoice,
-            fromCache: false
-          };
-        }
-      } catch (fbErr) {
-        const mapped = formatGatewayError(fbErr);
-        console.warn('[Microsoft Neural TTS] Central AI Gateway fallback notice:', mapped);
-      }
+        console.log(`[TTS Synthesis Success] Voice: ${targetVoice} | Buffer: ${finalBuffer.length} bytes | Cached: false`);
 
-      throw primaryErr;
+        return {
+          buffer: finalBuffer,
+          contentType: 'audio/mpeg',
+          voice: targetVoice,
+          cacheKey,
+          fromCache: false
+        };
+      } catch (primaryErr) {
+        console.warn(`[Microsoft Neural TTS] Primary synthesis notice (${targetVoice}):`, primaryErr.message);
+
+        // Graceful fallback to Central AI Gateway if available
+        try {
+          const gatewayUrl = getPythonServiceUrl();
+          const gatewayKey = getGatewayApiKey();
+
+          const fallbackRes = await axios.post(`${gatewayUrl}/api/v1/tts/synthesize`, {
+            text: cleanSpoken,
+            voice: targetVoice,
+            gender: gender === 'MALE' ? 'MALE' : 'FEMALE',
+            rate: 0.95,
+            pitch: 0.95
+          }, {
+            headers: {
+              ...(gatewayKey ? { 'X-API-Key': gatewayKey } : {})
+            },
+            responseType: 'arraybuffer',
+            timeout: 8000
+          });
+
+          if (fallbackRes.status === 200 && fallbackRes.data) {
+            const fbBuffer = Buffer.from(fallbackRes.data);
+            return {
+              buffer: fbBuffer,
+              contentType: fallbackRes.headers['content-type'] || 'audio/mpeg',
+              voice: targetVoice,
+              cacheKey,
+              fromCache: false
+            };
+          }
+        } catch (fbErr) {
+          const mapped = formatGatewayError(fbErr);
+          console.warn('[Microsoft Neural TTS] Central AI Gateway fallback notice:', mapped);
+        }
+
+        throw primaryErr;
+      }
+    })();
+
+    this._inFlight.set(cacheKey, synthPromise);
+    try {
+      return await synthPromise;
+    } finally {
+      this._inFlight.delete(cacheKey);
     }
   }
 }
