@@ -856,23 +856,44 @@ Deliver your instructional lecture for this slide.`;
     const target = Math.min(18, Math.max(1, Math.ceil(Math.max(source.length, 1) / 5)));
     const groupSize = Math.max(1, Math.ceil(source.length / target));
     const lessons = [];
+    const usedTitles = new Set();
+
+    const pickDistinctTitle = (group, teaching) => {
+      const candidates = [];
+      const firstLine = firstUsefulTitleLine(teaching);
+      if (firstLine) candidates.push(firstLine);
+      for (const s of group) {
+        if (s.title && !isGarbageTitle(s.title) && !isPlaceholderTitle(s.title)) {
+          candidates.push(stripSlidePlaceholders(s.title));
+        }
+        for (const h of (s.headings || [])) {
+          if (h && !isGarbageTitle(h) && !isPlaceholderTitle(h)) candidates.push(stripSlidePlaceholders(h));
+        }
+      }
+      for (const raw of String(teaching || '').split(/\n+/)) {
+        const line = raw.replace(/^(?:[#\-*•➔▪▫►→]+|\d+[.)\s-]+)\s*/, '').trim();
+        if (line.length >= 5 && line.length <= 80 && !isGarbageTitle(line) && !isPlaceholderTitle(line) && !isBinaryNoiseText(line)) {
+          candidates.push(line);
+        }
+      }
+      for (const cand of candidates) {
+        const key = String(cand || '').trim().toLowerCase();
+        if (key && !usedTitles.has(key)) {
+          usedTitles.add(key);
+          return cand.trim();
+        }
+      }
+      const base = candidates[0] || cleanName;
+      const slideNums = group.map(s => s.slideNumber).filter(Boolean);
+      return slideNums.length > 0
+        ? `${base} (Slides ${slideNums[0]}–${slideNums[slideNums.length - 1]})`
+        : `${base} — Section ${lessons.length + 1}`;
+    };
 
     for (let i = 0; i < source.length; i += groupSize) {
       const group = source.slice(i, i + groupSize);
       const teaching = group.map(s => this._slideTeachingText(s)).join('\n');
-      let title = firstUsefulTitleLine(teaching);
-      if (!title && group[0] && !isGarbageTitle(group[0].title) && !isPlaceholderTitle(group[0].title)) {
-        title = stripSlidePlaceholders(group[0].title);
-      }
-      if (!title) {
-        for (const s of group) {
-          if (s.title && !isGarbageTitle(s.title) && !isPlaceholderTitle(s.title)) {
-            title = stripSlidePlaceholders(s.title);
-            break;
-          }
-        }
-      }
-      if (!title || isGarbageTitle(title)) title = `${cleanName} — Section ${lessons.length + 1}`;
+      const title = pickDistinctTitle(group, teaching) || `${cleanName} — Section ${lessons.length + 1}`;
       const moduleIdx = Math.floor(lessons.length / 3);
       lessons.push({
         title,
@@ -1506,13 +1527,19 @@ CRITICAL ARCHITECTURE RULES (MEANING-BASED CHUNKING):
       }
 
       const groupSize = Math.max(1, Math.min(2, Math.ceil(slides.length / 16)));
+      const usedConcepts = new Set();
       for (let i = 0; i < slides.length; i += groupSize) {
         const group = slides.slice(i, i + groupSize);
         const teaching = group.map(s => this._slideTeachingText(s) || s.fullText || '').join('\n\n');
         const body = teaching.trim() || group.map(s => s.title).join('\n');
-        let concept = firstUsefulTitleLine(teaching);
-        if (!concept && group[0] && !isGarbageTitle(group[0].title)) concept = group[0].title;
+        const candidates = [
+          firstUsefulTitleLine(teaching),
+          ...(group.map(s => s.title).filter(t => t && !isGarbageTitle(t))),
+          ...String(teaching || '').split(/\n+/).map(l => l.replace(/^(?:[#\-*•➔▪▫►→]+|\d+[.)\s-]+)\s*/, '').trim()).filter(l => l.length >= 5 && l.length <= 80 && !isGarbageTitle(l) && !isBinaryNoiseText(l)),
+        ].filter(Boolean);
+        let concept = candidates.find(c => !usedConcepts.has(c.toLowerCase())) || candidates[0];
         if (!concept) concept = `${cleanFileName} — Part ${generatedChunks.length + 1}`;
+        usedConcepts.add(concept.toLowerCase());
         const slideNums = group.map(s => s.slideNumber || s.page || s.page_number).filter(Boolean);
         const pageNum = slideNums[0] || (generatedChunks.length + 1);
         generatedChunks.push({
