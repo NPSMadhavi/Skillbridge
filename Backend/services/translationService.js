@@ -90,19 +90,27 @@ STRICT SOURCE-GROUNDING RULES:
 7. Output ONLY the clean ${langInfo.name} translation in Markdown — no preamble or meta-commentary.`;
 
     const blocks = splitIntoTranslationBlocks(cleanSource, 1000);
-    const translatedParts = [];
-    for (const block of blocks) {
-      const userPrompt = `${topic ? `Module/Topic: ${topic}\n` : ''}${concept ? `Section: ${concept}\n` : ''}
+    const translatedParts = new Array(blocks.length);
+    let blockIdx = 0;
+    const workerCount = Math.min(2, blocks.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (blockIdx < blocks.length) {
+          const i = blockIdx++;
+          const block = blocks[i];
+          const userPrompt = `${topic ? `Module/Topic: ${topic}\n` : ''}${concept ? `Section: ${concept}\n` : ''}
 Source Content to Translate:
 ${block}`;
-      const raw = await aiService._callLLM(systemPrompt, userPrompt, false, [], {
-        timeoutMs: 60000,
-      });
-      const part = cleanUnsupportedWords(stripSlidePlaceholders(String(raw || ''))).trim();
-      if (part) translatedParts.push(part);
-    }
+          const raw = await aiService._callLLM(systemPrompt, userPrompt, false, [], {
+            timeoutMs: 60000,
+          });
+          const part = cleanUnsupportedWords(stripSlidePlaceholders(String(raw || ''))).trim();
+          if (part) translatedParts[i] = part;
+        }
+      })
+    );
 
-    const translated = translatedParts.join('\n\n').trim();
+    const translated = translatedParts.filter(Boolean).join('\n\n').trim();
     if (!translated || !textMatchesLanguage(translated, langInfo.code)) {
       throw new Error(`Translation output did not match ${langInfo.name} (${langInfo.code}).`);
     }

@@ -246,24 +246,37 @@ async function processCourseDocumentInBackground({
     });
 
     if (Array.isArray(result.chunks) && result.chunks.length > 0) {
-      let embeddings = Array.isArray(result.embeddings) && result.embeddings.length === result.chunks.length
+      const normalizedChunks = result.chunks.map((c, idx) => ({
+        ...c,
+        chunkIndex: c.chunkIndex ?? c.chunk_index ?? idx,
+        chunkText: c.chunkText || c.text || c.content || '',
+        sourcePage: c.sourcePage ?? c.page ?? 1,
+        sourceSlides: c.sourceSlides || (c.page ? [c.page] : null),
+        metadata: {
+          ...(c.metadata || {}),
+          ...(c.page_chunk_index !== undefined ? { pageChunkIndex: c.page_chunk_index } : {}),
+          ...(c.start_char !== undefined ? { startChar: c.start_char, endChar: c.end_char } : {}),
+        },
+      }));
+
+      let embeddings = Array.isArray(result.embeddings) && result.embeddings.length === normalizedChunks.length
         ? result.embeddings
         : null;
 
       if (!embeddings || embeddings.some(v => !Array.isArray(v) || v.length === 0)) {
-        const textsToEmbed = result.chunks.map(c => {
+        const textsToEmbed = normalizedChunks.map(c => {
           const topicPrefix = c.topic ? `[Topic: ${c.topic}] ` : '';
           const conceptPrefix = c.concept ? `[Concept: ${c.concept}] ` : '';
-          return `${topicPrefix}${conceptPrefix}${c.chunkText || c.text || ''}`;
+          return `${topicPrefix}${conceptPrefix}${c.chunkText}`;
         });
         embeddings = await aiService.getEmbeddings(textsToEmbed, 768);
-        if (!Array.isArray(embeddings) || embeddings.length !== result.chunks.length) {
-          throw new Error(`Embedding generation returned ${embeddings?.length || 0} vectors for ${result.chunks.length} Ubuntu chunks.`);
+        if (!Array.isArray(embeddings) || embeddings.length !== normalizedChunks.length) {
+          throw new Error(`Embedding generation returned ${embeddings?.length || 0} vectors for ${normalizedChunks.length} Ubuntu chunks.`);
         }
       }
 
-      await vectorChunkService.storeChunks(targetPrisma, courseId, result.chunks, embeddings);
-      console.log(`[pgvector] Stored ${result.chunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${courseId}.`);
+      await vectorChunkService.storeChunks(targetPrisma, courseId, normalizedChunks, embeddings);
+      console.log(`[pgvector] Stored ${normalizedChunks.length} Ubuntu-processed chunks (dim=${result.embedding_dimensions || 768}) for course ${courseId}.`);
       translationService.pretranslateCourseParallel(targetPrisma, courseId);
     } else if (doc.text && doc.text.trim().length > 40) {
       console.log(`[Ubuntu Doc Pipeline] Indexing extracted text (${doc.text.length} chars) with semantic chunking & 768-d embeddings for course ${courseId}...`);
@@ -2174,6 +2187,15 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
           translationVersion: 1,
         });
       } catch (trErr) {
+        if (trErr.status === 429 || trErr.response?.status === 429) {
+          const retryAfter = trErr.retryAfter || Number(trErr.response?.headers?.['retry-after'] || 5);
+          res.setHeader('Retry-After', String(retryAfter));
+          return res.status(429).json({
+            error: `AI translation rate limit reached. Please retry in ${retryAfter}s.`,
+            retryAfter,
+            language: targetLangInfo,
+          });
+        }
         console.warn(`[ChunkTranslation] Fallback notice for ${targetLanguage}:`, trErr.message);
       }
     }
@@ -2263,7 +2285,10 @@ router.post('/:id/lessons/:lessonId/explain', optionalAuthenticateToken, async (
       if (lectureTimer) clearTimeout(lectureTimer);
     }
 
-    if (targetLangInfo.code !== 'en') {
+    if (
+      targetLangInfo.code !== 'en' &&
+      (usedMockFallback || !textMatchesLanguage(explanation, targetLangInfo.code))
+    ) {
       // Never serve untranslated English text as a non-English explanation for TTS
       return res.status(503).json({
         error: `Translation to ${targetLanguage} is temporarily unavailable while the AI gateway is busy. Please retry.`,

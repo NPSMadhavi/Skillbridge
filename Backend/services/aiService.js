@@ -299,7 +299,9 @@ class AIService {
     const defaultModel = process.env.SKILLBRIDGE_MODEL || 'qwen3.5:9b';
     const payload = {
       model: defaultModel,
-      message
+      message,
+      think: false,
+      temperature: options.temperature ?? (jsonMode ? 0.1 : 0.2)
     };
     const systemPromptText = systemParts.join('\n\n').trim();
     if (systemPromptText) payload.system_prompt = systemPromptText;
@@ -320,7 +322,8 @@ class AIService {
       preAborted.name = 'CanceledError';
       throw preAborted;
     }
-    try {
+
+    const executeRequest = async () => {
       const axiosConfig = {
         headers: this.getGatewayHeaders({ 'Content-Type': 'application/json' }),
         timeout
@@ -328,7 +331,30 @@ class AIService {
       if (options.signal) {
         axiosConfig.signal = options.signal;
       }
-      const response = await axios.post(endpoint, payload, axiosConfig);
+      return await axios.post(endpoint, payload, axiosConfig);
+    };
+
+    try {
+      let response;
+      try {
+        response = await executeRequest();
+      } catch (firstErr) {
+        if (firstErr.response?.status === 429 && !options.signal?.aborted) {
+          const retryHeader = Number(firstErr.response.headers?.['retry-after'] || 2);
+          const waitMs = Math.min(5000, Math.max(500, (Number.isFinite(retryHeader) ? retryHeader : 2) * 1000));
+          if (retryHeader <= 5) {
+            await new Promise(r => setTimeout(r, waitMs));
+            response = await executeRequest();
+          } else {
+            const rlErr = new Error(`AI Gateway rate limit exceeded. Please retry after ${retryHeader}s.`);
+            rlErr.status = 429;
+            rlErr.retryAfter = retryHeader;
+            throw rlErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
 
       const text = response.data?.response;
       if (typeof text !== 'string' || !text.trim()) {
