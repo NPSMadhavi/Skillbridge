@@ -198,7 +198,16 @@ async function processCourseDocumentInBackground({
 
     let baseCurriculum = result.curriculum && typeof result.curriculum === 'object' ? { ...result.curriculum } : {};
     if (!Array.isArray(baseCurriculum.lessons) || baseCurriculum.lessons.length === 0) {
-      if (normalizedSlides.length > 0) {
+      const qwenOutline = await aiService.generateOutlineFromExtracted({
+        title,
+        fileName: fileObj.originalname,
+        slides: normalizedSlides,
+        pages: normalizedPages,
+        text: doc.text || '',
+      });
+      if (qwenOutline && Array.isArray(qwenOutline.lessons) && qwenOutline.lessons.length > 0) {
+        baseCurriculum = qwenOutline;
+      } else if (normalizedSlides.length > 0) {
         baseCurriculum = aiService._groupSlidesIntoLessons(normalizedSlides, fileObj.originalname);
       } else if (doc.text && doc.text.trim().length > 0) {
         baseCurriculum = aiService._getMockCourse(fileObj.originalname, doc.text, {

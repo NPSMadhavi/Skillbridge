@@ -747,13 +747,93 @@ Deliver your instructional lecture for this slide.`;
     ];
   }
 
+  async generateOutlineFromExtracted({ title = '', fileName = 'Course', slides = [], pages = [], text = '' } = {}) {
+    const hasSlides = Array.isArray(slides) && slides.length > 0;
+    const hasPages = Array.isArray(pages) && pages.length > 0;
+
+    let summaryItems = [];
+    if (hasSlides) {
+      summaryItems = slides.map(s => {
+        const txt = this._slideTeachingText(s) || s.fullText || s.title || '';
+        return `[Slide ${s.slideNumber}]: ${stripSlidePlaceholders(txt).replace(/\s+/g, ' ').slice(0, 220)}`;
+      });
+    } else if (hasPages) {
+      summaryItems = pages.map(p => {
+        const pNum = p.page_number || p.pageNumber || 1;
+        const txt = p.text || p.title || '';
+        return `[Page ${pNum}]: ${stripSlidePlaceholders(txt).replace(/\s+/g, ' ').slice(0, 220)}`;
+      });
+    } else if (text && text.trim()) {
+      const clean = stripSlidePlaceholders(text).replace(/\s+/g, ' ').trim();
+      for (let i = 0; i < clean.length && summaryItems.length < 25; i += 400) {
+        summaryItems.push(`[Section ${summaryItems.length + 1}]: ${clean.slice(i, i + 300)}`);
+      }
+    }
+
+    const context = summaryItems.join('\n').slice(0, 5800);
+    if (!context.trim()) return null;
+
+    const systemPrompt = `/no_think
+You are an expert curriculum designer for SkillBridge.
+Group the provided document slides/pages into logical topic-based modules and lessons (e.g., PPE, Driver Wellness, Vehicle Checks, Trailer Operations, Load Securing — NEVER repeat generic slide banners like "Safe Work Procedures" as multiple lesson titles).
+Every lesson title MUST be unique and describe the specific topic taught in those pages.
+Cover all slides/pages in document order.
+Return ONLY valid JSON matching this exact schema:
+{"modules":[{"title":"Module Title","lessons":[{"title":"Unique Lesson Title","pages":[1,2]}]}]}`;
+
+    const userPrompt = `Document: ${title || cleanFileStem(fileName)}\n\nExtracted Content:\n${context}`;
+
+    try {
+      const raw = await this._callGateway(systemPrompt, userPrompt, true, [], { timeoutMs: 25000 });
+      const parsed = this._parseJsonObject(raw);
+      if (!parsed || !Array.isArray(parsed.modules) || parsed.modules.length === 0) return null;
+
+      const flatLessons = [];
+      for (const mod of parsed.modules) {
+        const modTitle = stripSlidePlaceholders(mod?.title || '') || 'Core Module';
+        for (const l of (mod?.lessons || [])) {
+          const lTitle = stripSlidePlaceholders(l?.title || '');
+          if (!lTitle || isGarbageTitle(lTitle)) continue;
+          const pgList = Array.isArray(l?.pages)
+            ? l.pages.map(Number).filter(n => Number.isFinite(n) && n > 0)
+            : [];
+          flatLessons.push({
+            title: lTitle,
+            moduleTitle: modTitle,
+            sourceSlides: pgList.length > 0 ? pgList : [flatLessons.length + 1],
+          });
+        }
+      }
+      if (flatLessons.length === 0) return null;
+
+      if (hasSlides) {
+        return this._sanitizeGeneratedCourse({ lessons: flatLessons }, slides, fileName);
+      }
+      return this._buildCourseFromLessons(fileName, flatLessons);
+    } catch (err) {
+      console.warn('[AIService] Qwen outline generation fallback notice:', err.message);
+      return null;
+    }
+  }
+
   _buildCourseFromLessons(fileName, lessons, quiz = null) {
     const cleanName = cleanFileStem(fileName);
     const formattedTitle = cleanName.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
     const modulesMap = [];
     const moduleKey = new Map();
+    const usedLessonTitles = new Set();
 
     const normalized = (lessons || []).map((l, idx) => {
+      let lessonTitle = stripSlidePlaceholders(l.title || '') || `Lesson ${idx + 1}`;
+      const titleKey = lessonTitle.toLowerCase();
+      if (usedLessonTitles.has(titleKey)) {
+        const sns = Array.isArray(l.sourceSlides) && l.sourceSlides.length > 0 ? l.sourceSlides : [];
+        lessonTitle = sns.length > 0
+          ? `${lessonTitle} (Slides ${sns[0]}${sns.length > 1 ? `–${sns[sns.length - 1]}` : ''})`
+          : `${lessonTitle} (Part ${idx + 1})`;
+      }
+      usedLessonTitles.add(lessonTitle.toLowerCase());
+
       const moduleTitle = (!isGarbageTitle(l.moduleTitle) && l.moduleTitle)
         || (!isGarbageTitle(l.chapterTitle) && l.chapterTitle)
         || formattedTitle;
@@ -798,7 +878,7 @@ Deliver your instructional lecture for this slide.`;
         chapterTitle: moduleTitle,
         moduleId: modId,
         moduleTitle,
-        title: l.title,
+        title: lessonTitle,
         sourceSlides,
         duration,
         status: idx === 0 ? 'active' : 'locked'
@@ -915,20 +995,43 @@ Deliver your instructional lecture for this slide.`;
       return this._groupSlidesIntoLessons(slides, fileName);
     }
 
-    // 1. Deduplicate lessons covering the exact same slides or identical title
+    // 1. Deduplicate lessons covering the exact same slides; merge or differentiate duplicate titles
     const seenSlideKeys = new Set();
-    const seenTitles = new Set();
+    const seenTitleIdx = new Map();
     const deduped = [];
     for (const l of lessons) {
-      const sns = Array.isArray(l.sourceSlides) ? [...l.sourceSlides].sort((a, b) => a - b).join(',') : '';
-      const cleanT = String(l.title || '').trim().toLowerCase();
+      const snsArr = Array.isArray(l.sourceSlides) ? l.sourceSlides.map(Number).filter(Number.isFinite) : [];
+      const sns = [...snsArr].sort((a, b) => a - b).join(',');
       if (sns && seenSlideKeys.has(sns)) continue;
-      if (cleanT && seenTitles.has(cleanT)) continue;
       if (sns) seenSlideKeys.add(sns);
-      if (cleanT) seenTitles.add(cleanT);
+
+      let cleanTitle = stripSlidePlaceholders(l.title) || l.title;
+      const key = String(cleanTitle || '').trim().toLowerCase();
+      if (key && seenTitleIdx.has(key)) {
+        const prevIdx = seenTitleIdx.get(key);
+        const prev = deduped[prevIdx];
+        const prevSlides = Array.isArray(prev.sourceSlides) ? prev.sourceSlides : [];
+        const isAdjacent = prevSlides.length > 0 && snsArr.length > 0 && Math.abs(Math.min(...snsArr) - Math.max(...prevSlides)) <= 2;
+        if (isAdjacent && prevSlides.length + snsArr.length <= 8) {
+          prev.sourceSlides = [...new Set([...prevSlides, ...snsArr])];
+          continue;
+        }
+        // Otherwise differentiate using slide subheading or page range
+        const firstSlideObj = snsArr.length > 0 ? slides.find(s => s.slideNumber === snsArr[0]) : null;
+        const sub = firstSlideObj ? firstUsefulTitleLine(this._slideTeachingText(firstSlideObj)) : '';
+        if (sub && sub.toLowerCase() !== key && !seenTitleIdx.has(sub.toLowerCase())) {
+          cleanTitle = sub;
+        } else if (snsArr.length > 0) {
+          cleanTitle = `${cleanTitle} (Slides ${snsArr[0]}${snsArr.length > 1 ? `–${snsArr[snsArr.length - 1]}` : ''})`;
+        } else {
+          cleanTitle = `${cleanTitle} (Part ${deduped.length + 1})`;
+        }
+      }
+      if (cleanTitle) seenTitleIdx.set(cleanTitle.toLowerCase(), deduped.length);
       deduped.push({
         ...l,
-        title: stripSlidePlaceholders(l.title) || l.title
+        title: cleanTitle,
+        sourceSlides: snsArr.length > 0 ? snsArr : l.sourceSlides
       });
     }
     lessons = deduped.length ? deduped : lessons;
