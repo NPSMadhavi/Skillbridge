@@ -232,6 +232,42 @@ async function processCourseDocumentInBackground({
     const isGenericUserDesc = !description || description.trim().length < 40 || userDescLower === fileStem || !hasTopicOverlap;
     const resolvedDescription = (isGenericUserDesc && baseCurriculum.description) ? baseCurriculum.description : description;
 
+    // Persist exact full-slide images to disk for PPT/PPTX courses so CoursePlayer shows the exact uploaded slides
+    if ((doc.fileType || fileType) === 'pptx' || (doc.fileType || fileType) === 'ppt') {
+      try {
+        const slidesDirUb = path.join(process.cwd(), 'uploads', 'courses', String(courseId), 'slides');
+        fs.mkdirSync(slidesDirUb, { recursive: true });
+        for (const s of normalizedSlides) {
+          const rawUrl = s.fullSlideImage?.dataUrl || s.images?.[0]?.dataUrl || (s.image_base64 ? `data:image/png;base64,${s.image_base64}` : null);
+          if (rawUrl && rawUrl.startsWith('data:image')) {
+            const b64 = rawUrl.split(',')[1];
+            const sNum = s.slideNumber || s.pageNumber;
+            if (b64 && sNum) {
+              fs.writeFileSync(path.join(slidesDirUb, `Slide${sNum}.png`), Buffer.from(b64, 'base64'));
+            }
+          }
+        }
+        const firstSlidePng = path.join(slidesDirUb, 'Slide1.png');
+        if (!fs.existsSync(firstSlidePng) && fileObj.path && fs.existsSync(fileObj.path)) {
+          const buf = await fs.promises.readFile(fileObj.path);
+          const rendered = await documentExtractor.renderPptSlidesToImages(buf, fileObj.originalname);
+          if (Array.isArray(rendered) && rendered.length > 0) {
+            for (const r of rendered) {
+              if (r.dataUrl && r.dataUrl.startsWith('data:image')) {
+                const b64 = r.dataUrl.split(',')[1];
+                if (b64 && r.sourceSlide) {
+                  fs.writeFileSync(path.join(slidesDirUb, `Slide${r.sourceSlide}.png`), Buffer.from(b64, 'base64'));
+                }
+              }
+            }
+            console.log(`[Slide Render] Pre-rendered ${rendered.length} exact slide PNGs for course ${courseId}.`);
+          }
+        }
+      } catch (renderErr) {
+        console.warn(`[Slide Render] Pre-render notice for course ${courseId}:`, renderErr.message);
+      }
+    }
+
     const finalCurriculum = {
       ...baseCurriculum,
       title,
@@ -241,7 +277,7 @@ async function processCourseDocumentInBackground({
       ubuntuJobId: ubuntuJob?.job_id || null,
       processingStatus: 'COMPLETED',
       isAiGenerating: false,
-      slides: normalizedSlides,
+      slides: normalizedSlides.map(s => ({ ...s, fullSlideImage: undefined, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) })),
       pages: normalizedPages,
     };
     validateAndRepairCurriculum(finalCurriculum, title);
