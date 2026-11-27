@@ -4,6 +4,7 @@ import axios from 'axios';
 import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
+import AdmZip from 'adm-zip';
 import prisma, { defaultPrisma } from '../config/prisma.js';
 import masterPrisma from '../config/masterPrisma.js';
 import aiService from '../services/aiService.js';
@@ -365,7 +366,22 @@ async function processCourseDocumentInBackground({
       fallbackCurriculum.processingSource = 'local_fallback';
       fallbackCurriculum.ubuntuError = ubuntuErr.message;
       fallbackCurriculum.isAiGenerating = false;
-      fallbackCurriculum.slides = slides.map(s => ({ ...s, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
+      // Persist any rendered/embedded slide images to disk before stripping dataUrl from JSONB
+      try {
+        const slidesDirFb = path.join(process.cwd(), 'uploads', 'courses', String(courseId), 'slides');
+        fs.mkdirSync(slidesDirFb, { recursive: true });
+        for (const s of slides) {
+          const rawUrl = s.fullSlideImage?.dataUrl || s.images?.[0]?.dataUrl;
+          if (rawUrl && rawUrl.startsWith('data:image')) {
+            const b64 = rawUrl.split(',')[1];
+            const sNum = s.slideNumber || s.pageNumber;
+            if (b64 && sNum) {
+              fs.writeFileSync(path.join(slidesDirFb, `Slide${sNum}.png`), Buffer.from(b64, 'base64'));
+            }
+          }
+        }
+      } catch (_) {}
+      fallbackCurriculum.slides = slides.map(s => ({ ...s, fullSlideImage: undefined, images: (s.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
       fallbackCurriculum.pages = pages.map(p => ({ ...p, images: (p.images || []).map(im => ({ ...im, dataUrl: undefined })) }));
       validateAndRepairCurriculum(fallbackCurriculum, title);
 
@@ -612,6 +628,38 @@ router.get('/:id/file', authenticateToken, async (req, res) => {
   }
 });
 
+// In-flight slide render coalescing per courseId
+const inFlightSlideRenders = new Map();
+
+function extractEmbeddedPptxSlideImage(pptxPath, slideNum) {
+  try {
+    const zip = new AdmZip(pptxPath);
+    const entries = zip.getEntries();
+    const entryMap = new Map(entries.map(e => [e.entryName.toLowerCase(), e]));
+    const relsEntry = entryMap.get(`ppt/slides/_rels/slide${slideNum}.xml.rels`);
+    if (!relsEntry) return null;
+    const relsXml = relsEntry.getData().toString('utf-8');
+    const targets = [...relsXml.matchAll(/Target=["']([^"']*media\/[^"']+\.(?:png|jpe?g|webp))["']/gi)].map(m =>
+      ('ppt/' + m[1].replace(/^\.\.\//, '').replace(/^\//, '')).toLowerCase()
+    );
+    let bestBuf = null;
+    let bestExt = 'png';
+    for (const t of targets) {
+      const mediaEntry = entryMap.get(t);
+      if (!mediaEntry) continue;
+      const buf = mediaEntry.getData();
+      // Pick the largest content image (>= 4KB, skipping tiny theme/bullet icons)
+      if (buf && buf.length >= 4096 && (!bestBuf || buf.length > bestBuf.length)) {
+        bestBuf = buf;
+        bestExt = t.endsWith('.jpg') || t.endsWith('.jpeg') ? 'jpg' : 'png';
+      }
+    }
+    return bestBuf ? { buffer: bestBuf, ext: bestExt } : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // Serve slide image (PNG or SVG) for course (PowerPoint slides)
 router.get('/:id/slides/:slideNum/image', async (req, res) => {
   try {
@@ -624,56 +672,76 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
     const courseUploadDir = path.join(process.cwd(), 'uploads', 'courses', String(courseId));
     const slidesDir = path.join(courseUploadDir, 'slides');
     const slidePngFile = path.join(slidesDir, `Slide${slideNum}.png`);
+    const slideJpgFile = path.join(slidesDir, `Slide${slideNum}.jpg`);
     const slideSvgFile = path.join(slidesDir, `Slide${slideNum}.svg`);
 
-    // 1. Direct raster PNG file exists
+    // 1. Direct raster PNG/JPG file exists
     if (fs.existsSync(slidePngFile)) {
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'public, max-age=86400');
       return fs.createReadStream(slidePngFile).pipe(res);
     }
-
-    // 2. Direct SVG presentation file exists
-    if (fs.existsSync(slideSvgFile)) {
-      res.setHeader('Content-Type', 'image/svg+xml');
+    if (fs.existsSync(slideJpgFile)) {
+      res.setHeader('Content-Type', 'image/jpeg');
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      return fs.createReadStream(slideSvgFile).pipe(res);
+      return fs.createReadStream(slideJpgFile).pipe(res);
     }
 
-    // 3. Try on-demand extraction from original presentation file on Ubuntu/Linux
+    // 2. Try on-demand extraction from original presentation file (LibreOffice first, then embedded PPTX media)
     if (fs.existsSync(courseUploadDir)) {
       const files = fs.readdirSync(courseUploadDir);
       const presFile = files.find(f => /\.(pptx|ppt)$/i.test(f));
       if (presFile) {
-        try {
-          const presPath = path.join(courseUploadDir, presFile);
-          const buf = fs.readFileSync(presPath);
-          const rendered = await documentExtractor.renderPptSlidesToImages(buf, presFile);
-          if (Array.isArray(rendered) && rendered.length > 0) {
-            fs.mkdirSync(slidesDir, { recursive: true });
-            for (const r of rendered) {
-              const targetPath = path.join(slidesDir, `Slide${r.sourceSlide}.png`);
-              if (r.dataUrl && r.dataUrl.startsWith('data:image')) {
-                const b64 = r.dataUrl.split(',')[1];
-                if (b64 && !fs.existsSync(targetPath)) {
-                  fs.writeFileSync(targetPath, Buffer.from(b64, 'base64'));
+        const presPath = path.join(courseUploadDir, presFile);
+        if (!inFlightSlideRenders.has(courseId)) {
+          const renderPromise = (async () => {
+            try {
+              const buf = fs.readFileSync(presPath);
+              const rendered = await documentExtractor.renderPptSlidesToImages(buf, presFile);
+              if (Array.isArray(rendered) && rendered.length > 0) {
+                fs.mkdirSync(slidesDir, { recursive: true });
+                for (const r of rendered) {
+                  const targetPath = path.join(slidesDir, `Slide${r.sourceSlide}.png`);
+                  if (r.dataUrl && r.dataUrl.startsWith('data:image')) {
+                    const b64 = r.dataUrl.split(',')[1];
+                    if (b64 && !fs.existsSync(targetPath)) {
+                      fs.writeFileSync(targetPath, Buffer.from(b64, 'base64'));
+                    }
+                  }
                 }
               }
+            } catch (e) {
+              console.warn('[Courses] On-demand slide rendering notice:', e.message);
             }
+          })();
+          inFlightSlideRenders.set(courseId, renderPromise);
+          try { await renderPromise; } finally { inFlightSlideRenders.delete(courseId); }
+        } else {
+          await inFlightSlideRenders.get(courseId).catch(() => {});
+        }
+
+        if (fs.existsSync(slidePngFile)) {
+          res.setHeader('Content-Type', 'image/png');
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+          return fs.createReadStream(slidePngFile).pipe(res);
+        }
+
+        // Embedded PPTX media fallback (works on shared hosting without LibreOffice)
+        if (/\.pptx$/i.test(presFile)) {
+          const embedded = extractEmbeddedPptxSlideImage(presPath, slideNum);
+          if (embedded) {
+            fs.mkdirSync(slidesDir, { recursive: true });
+            const outFile = embedded.ext === 'jpg' ? slideJpgFile : slidePngFile;
+            fs.writeFileSync(outFile, embedded.buffer);
+            res.setHeader('Content-Type', embedded.ext === 'jpg' ? 'image/jpeg' : 'image/png');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.end(embedded.buffer);
           }
-        } catch (e) {
-          console.warn('[Courses] On-demand slide rendering notice:', e.message);
         }
       }
     }
 
-    if (fs.existsSync(slidePngFile)) {
-      res.setHeader('Content-Type', 'image/png');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      return fs.createReadStream(slidePngFile).pipe(res);
-    }
-
-    // 4. Fallback: Check if slide image is stored in DB curriculum
+    // 3. Fallback: Check if slide image is stored in DB curriculum
     const { course } = await findCourseAcrossTenants(courseId, req.prisma || prisma, null);
     if (!course) return res.status(404).json({ error: 'Course not found.' });
 
@@ -691,6 +759,13 @@ router.get('/:id/slides/:slideNum/image', async (req, res) => {
         res.setHeader('Cache-Control', 'public, max-age=86400');
         return res.end(buf);
       }
+    }
+
+    // 4. Cached SVG fallback if previously generated
+    if (fs.existsSync(slideSvgFile)) {
+      res.setHeader('Content-Type', 'image/svg+xml');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      return fs.createReadStream(slideSvgFile).pipe(res);
     }
 
     // 5. Ultimate Guarantee: Dynamically generate crisp presentation SVG card on-the-fly

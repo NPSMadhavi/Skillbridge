@@ -2059,48 +2059,71 @@ const CoursePlayer = ({
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 90000);
       const requestLang = langCode;
-      api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, requestLang, controller.signal)
-        .then(res => {
-          if (!isMountedRef.current || explanationRequest.current !== request) return;
-          const script = res.explanation || res.spoken_explanation || '';
-          if (requestLang !== 'en' && !textMatchesLanguage(script, requestLang)) {
-            console.warn('[CoursePlayer] Refusing untranslated script for non-English language:', requestLang);
-            setExplanationError(true);
-          } else if (script) {
-            lessonExplanationClientCache.set(cacheKey, script);
-            setExplanation(script);
-            applyLogicalPosition(script);
-          }
-          if (res.page_or_slide_number && res.page_or_slide_number !== currentPageNum) {
-            setCurrentPageNum(res.page_or_slide_number);
-          }
-          setTutorGuidance({
-            keyPoints: res.key_points || [],
-            safetyWarnings: res.safety_warnings || [],
-            transition: res.suggested_next_transition || ''
-          });
-          setLessonVisuals(res.visuals || activeLesson.visuals || []);
-          setLoadingExplanation(false);
-          setPipelineState('READY');
-        })
-        .catch((err) => {
-          const isAborted = err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED' || err?.name === 'AbortError';
-          if (!isMountedRef.current || explanationRequest.current !== request || (isAborted && controller.signal.aborted)) return;
-          console.warn('[CoursePlayer] Could not fetch lesson explanation:', err?.message);
-          setExplanationError(true);
-          setLoadingExplanation(false);
+      let autoRetryTimer = null;
 
-          const fallbackText = requestLang === 'en'
-            ? (activeLesson?.explanations?.en || activeLesson?.explanation || '')
-            : (activeLesson?.explanations?.[requestLang] || '');
-          if (fallbackText && fallbackText.length > 20 && (requestLang === 'en' || textMatchesLanguage(fallbackText, requestLang))) {
-            setExplanation(fallbackText);
+      const fetchWithAutoRetry = (attempt = 0) => {
+        api.getLessonExplanation(course.id, activeLesson.id, activeLesson.title, requestLang, controller.signal)
+          .then(res => {
+            if (!isMountedRef.current || explanationRequest.current !== request) return;
+            const script = res.explanation || res.spoken_explanation || '';
+            if (requestLang !== 'en' && !textMatchesLanguage(script, requestLang)) {
+              if (attempt < 2) {
+                autoRetryTimer = setTimeout(() => fetchWithAutoRetry(attempt + 1), 1500);
+                return;
+              }
+              console.warn('[CoursePlayer] Refusing untranslated script for non-English language:', requestLang);
+              setExplanationError(true);
+            } else if (script) {
+              setExplanationError(false);
+              lessonExplanationClientCache.set(cacheKey, script);
+              setExplanation(script);
+              applyLogicalPosition(script);
+            }
+            if (res.page_or_slide_number && res.page_or_slide_number !== currentPageNum) {
+              setCurrentPageNum(res.page_or_slide_number);
+            }
+            setTutorGuidance({
+              keyPoints: res.key_points || [],
+              safetyWarnings: res.safety_warnings || [],
+              transition: res.suggested_next_transition || ''
+            });
+            setLessonVisuals(res.visuals || activeLesson.visuals || []);
+            setLoadingExplanation(false);
             setPipelineState('READY');
-          }
-        })
-        .finally(() => clearTimeout(timeout));
+          })
+          .catch((err) => {
+            const isAborted = err?.name === 'CanceledError' || err?.code === 'ERR_CANCELED' || err?.name === 'AbortError';
+            if (!isMountedRef.current || explanationRequest.current !== request || (isAborted && controller.signal.aborted)) return;
+
+            // Automatically retry transient 429/503/network errors silently without forcing user to click Retry
+            if (attempt < 3 && (!err?.status || err.status === 429 || err.status === 503 || err.status >= 500)) {
+              const delayMs = err?.retryAfter ? Math.min(6000, err.retryAfter * 1000) : (1500 * (attempt + 1));
+              autoRetryTimer = setTimeout(() => {
+                if (isMountedRef.current && explanationRequest.current === request && !controller.signal.aborted) {
+                  fetchWithAutoRetry(attempt + 1);
+                }
+              }, delayMs);
+              return;
+            }
+
+            console.warn('[CoursePlayer] Could not fetch lesson explanation:', err?.message);
+            setExplanationError(true);
+            setLoadingExplanation(false);
+
+            const fallbackText = requestLang === 'en'
+              ? (activeLesson?.explanations?.en || activeLesson?.explanation || '')
+              : (activeLesson?.explanations?.[requestLang] || '');
+            if (fallbackText && fallbackText.length > 20 && (requestLang === 'en' || textMatchesLanguage(fallbackText, requestLang))) {
+              setExplanation(fallbackText);
+              setPipelineState('READY');
+            }
+          });
+      };
+
+      fetchWithAutoRetry(0);
       return () => {
         clearTimeout(timeout);
+        if (autoRetryTimer) clearTimeout(autoRetryTimer);
         if (explanationRequest.current === request) explanationRequest.current++;
         controller.abort();
       };

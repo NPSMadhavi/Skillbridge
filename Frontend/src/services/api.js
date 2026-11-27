@@ -964,8 +964,11 @@ export const api = {
       body: JSON.stringify({ lessonTitle, language }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to fetch lesson explanation.');
+      const err = await res.json().catch(() => ({}));
+      const errorObj = new Error(err.error || 'Failed to fetch lesson explanation.');
+      errorObj.status = res.status;
+      errorObj.retryAfter = err.retryAfter || Number(res.headers.get('Retry-After')) || 0;
+      throw errorObj;
     }
     return res.json();
   },

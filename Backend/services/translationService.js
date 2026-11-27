@@ -368,7 +368,7 @@ ${block}`;
    * Translates all chunks of a course into supported target languages using a bounded worker pool
    * and stores them in PostgreSQL ChunkTranslation so lesson switching is instant.
    */
-  pretranslateCourseParallel(prisma, courseId, languages = ['te', 'hi', 'ta', 'zh', 'ms', 'bn'], concurrency = 3) {
+  pretranslateCourseParallel(prisma, courseId, languages = ['te', 'hi', 'ta', 'zh', 'ms', 'bn'], concurrency = 1) {
     setImmediate(async () => {
       try {
         await vectorChunkService.ensureColumnsExist(prisma);
@@ -399,6 +399,8 @@ ${block}`;
               targetLanguage: job.code,
               translationVersion: 1,
             }).catch(() => {});
+            // Gentle pacing so background warming never starves or rate-limits live user language switches
+            await new Promise(r => setTimeout(r, 350));
           }
         });
         await Promise.all(workers);
